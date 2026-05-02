@@ -107,39 +107,262 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
 }
 
 PROMPT_FAMILY_GUIDANCE: dict[str, str] = {
-    "emergency-survival-routing": "water, shelter, lower exposure, safe movement, evacuation back to safety",
-    "medical-and-rescue": "casualty evacuation, litter routes, ambulance access, trailheads, LZs, rescue pickup",
-    "communication-and-signaling": "ridgelines, high points, clearings, line-of-sight, cell or satellite signal opportunity",
-    "navigation-back-to-safety": "trailheads, roads, settlements, descent corridors, natural handrails, low-risk return movement",
-    "terrain-aware-routing": "slope, elevation gain, brush, wetlands, talus, avalanche, floodplain, roads and trails",
-    "weather-and-environmental-risk": "flash flood, wildfire, lightning, wind, heat, freezing, daylight, unstable slopes",
-    "food-fire-and-sustenance": "water, fuel, fishing access, edible terrain, sheltered campsites with supplies",
-    "search-and-rescue-planning": "travel corridors, search sectors, hasty search, dog teams, drone teams, likely subject movement",
-    "hiking-and-outdoor-navigation": "beginner routes, bailout options, public land, scenic but safe movement, landmarks",
-    "marine-river-coastal": "landing points, river crossings, portages, shoreline egress, floodplain escape",
-    "desert-survival": "shade, wells, troughs, powerlines, dry washes, heat exposure, energy conservation",
-    "winter-and-alpine": "below treeline routes, low-angle slopes, hut access, avalanche avoidance, alpine descent",
-    "disaster-logistics": "aid delivery, civilian evacuation, convoy routing, responder staging, remote resupply",
-    "multi-objective-routing": "sequence water, shelter, signal, or compare fastest, safest, easiest alternatives",
-    "situational-awareness": "stay or move, safest direction, terrain traps, fallback routes, landmarks, hazards between points",
+    "emergency-survival-routing": (
+        "water, shelter, lower exposure, safe movement, evacuation back to safety"
+    ),
+    "medical-and-rescue": (
+        "casualty evacuation, litter routes, ambulance access, trailheads, LZs, rescue pickup"
+    ),
+    "communication-and-signaling": (
+        "ridgelines, high points, clearings, line-of-sight, cell or satellite signal opportunity"
+    ),
+    "navigation-back-to-safety": (
+        "trailheads, roads, settlements, descent corridors, natural handrails, low-risk return"
+    ),
+    "terrain-aware-routing": (
+        "slope, elevation gain, brush, wetlands, talus, avalanche, floodplain, roads and trails"
+    ),
+    "weather-and-environmental-risk": (
+        "flash flood, wildfire, lightning, wind, heat, freezing, daylight, unstable slopes"
+    ),
+    "food-fire-and-sustenance": (
+        "water, fuel, fishing access, edible terrain, sheltered campsites with supplies"
+    ),
+    "search-and-rescue-planning": (
+        "travel corridors, search sectors, hasty search, dog teams, likely subject movement"
+    ),
+    "hiking-and-outdoor-navigation": (
+        "beginner routes, bailout options, public land, scenic but safe movement, landmarks"
+    ),
+    "marine-river-coastal": (
+        "landing points, river crossings, portages, shoreline egress, floodplain escape"
+    ),
+    "desert-survival": (
+        "shade, wells, troughs, powerlines, dry washes, heat exposure, energy conservation"
+    ),
+    "winter-and-alpine": (
+        "below treeline routes, low-angle slopes, hut access, avalanche avoidance, alpine descent"
+    ),
+    "disaster-logistics": (
+        "aid delivery, civilian evacuation, convoy routing, responder staging, remote resupply"
+    ),
+    "multi-objective-routing": (
+        "sequence water, shelter, signal, or compare fastest, safest, easiest alternatives"
+    ),
+    "situational-awareness": (
+        "stay or move, safest direction, terrain traps, fallback routes, landmarks, hazards"
+    ),
 }
 
 FAMILY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("medical-and-rescue", ("hospital", "clinic", "aid station", "ambulance", "evac", "evacuation", "litter", "stretcher", "sar", "rescu", "trailhead", "helicopter", "landing zone", "lz", "pickup")),
-    ("communication-and-signaling", ("cell", "signal", "satellite", "ridgeline", "line-of-sight", "radio tower", "communications", "lookout", "visible from the air", "clear sky")),
-    ("weather-and-environmental-risk", ("flood", "wildfire", "smoke", "lightning", "avalanche", "wind chill", "freezing", "before sunset", "daylight", "storm", "heat", "rainfall")),
-    ("food-fire-and-sustenance", ("edible", "berries", "fishing", "firewood", "fuel", "supplies", "forage")),
-    ("search-and-rescue-planning", ("last known", "search", "clue", "dog teams", "drone teams", "search sectors", "probable", "likely travel corridors", "hasty search", "grid search")),
-    ("marine-river-coastal", ("coast", "shoreline", "beach", "tidal", "rapids", "waterfalls", "portage", "river crossing", "floodplain", "downstream")),
-    ("desert-survival", ("desert", "shade", "sun exposure", "powerline", "well", "trough", "dry wash", "sand travel")),
-    ("winter-and-alpine", ("winter", "alpine", "treeline", "cornice", "crevasse", "snowfield", "warming shelter", "low-angle slopes")),
-    ("disaster-logistics", ("medical supplies", "field clinic", "civilians", "convoy", "base camp", "staging area", "responders", "isolated community", "hazardous industrial")),
-    ("multi-objective-routing", ("then", "balances", "three route options", "fastest, safest, and easiest", "bailout options", "survival priorities", "sequence")),
-    ("situational-awareness", ("stay put", "safest direction", "what landmarks", "what hazards", "what route should i avoid", "fallback route", "which nearby")),
-    ("hiking-and-outdoor-navigation", ("day hike", "loop route", "beginners", "children", "older hikers", "public land", "private property", "scenic route", "map and compass")),
-    ("terrain-aware-routing", ("slope", "elevation gain", "dense forest", "brush", "wetlands", "bogs", "talus", "scree", "roads and trails", "night movement")),
-    ("navigation-back-to-safety", ("starting point", "back to", "trailhead", "maintained trail", "nearest road", "closest inhabited structure", "civilization", "handrails")),
-    ("emergency-survival-routing", ("fresh water", "potable water", "stream", "river", "lake", "spring", "snowmelt", "camp", "bivy", "tree cover", "shelter")),
+    (
+        "medical-and-rescue",
+        (
+            "hospital",
+            "clinic",
+            "aid station",
+            "ambulance",
+            "evac",
+            "evacuation",
+            "litter",
+            "stretcher",
+            "sar",
+            "rescu",
+            "trailhead",
+            "helicopter",
+            "landing zone",
+            "lz",
+            "pickup",
+        ),
+    ),
+    (
+        "communication-and-signaling",
+        (
+            "cell",
+            "signal",
+            "satellite",
+            "ridgeline",
+            "line-of-sight",
+            "radio tower",
+            "communications",
+            "lookout",
+            "visible from the air",
+            "clear sky",
+        ),
+    ),
+    (
+        "weather-and-environmental-risk",
+        (
+            "flood",
+            "wildfire",
+            "smoke",
+            "lightning",
+            "avalanche",
+            "wind chill",
+            "freezing",
+            "before sunset",
+            "daylight",
+            "storm",
+            "heat",
+            "rainfall",
+        ),
+    ),
+    (
+        "food-fire-and-sustenance",
+        ("edible", "berries", "fishing", "firewood", "fuel", "supplies", "forage"),
+    ),
+    (
+        "search-and-rescue-planning",
+        (
+            "last known",
+            "search",
+            "clue",
+            "dog teams",
+            "drone teams",
+            "search sectors",
+            "probable",
+            "likely travel corridors",
+            "hasty search",
+            "grid search",
+        ),
+    ),
+    (
+        "marine-river-coastal",
+        (
+            "coast",
+            "shoreline",
+            "beach",
+            "tidal",
+            "rapids",
+            "waterfalls",
+            "portage",
+            "river crossing",
+            "floodplain",
+            "downstream",
+        ),
+    ),
+    (
+        "desert-survival",
+        (
+            "desert",
+            "shade",
+            "sun exposure",
+            "powerline",
+            "well",
+            "trough",
+            "dry wash",
+            "sand travel",
+        ),
+    ),
+    (
+        "winter-and-alpine",
+        (
+            "winter",
+            "alpine",
+            "treeline",
+            "cornice",
+            "crevasse",
+            "snowfield",
+            "warming shelter",
+            "low-angle slopes",
+        ),
+    ),
+    (
+        "disaster-logistics",
+        (
+            "medical supplies",
+            "field clinic",
+            "civilians",
+            "convoy",
+            "base camp",
+            "staging area",
+            "responders",
+            "isolated community",
+            "hazardous industrial",
+        ),
+    ),
+    (
+        "multi-objective-routing",
+        (
+            "then",
+            "balances",
+            "three route options",
+            "fastest, safest, and easiest",
+            "bailout options",
+            "survival priorities",
+            "sequence",
+        ),
+    ),
+    (
+        "situational-awareness",
+        (
+            "stay put",
+            "safest direction",
+            "what landmarks",
+            "what hazards",
+            "what route should i avoid",
+            "fallback route",
+            "which nearby",
+        ),
+    ),
+    (
+        "hiking-and-outdoor-navigation",
+        (
+            "day hike",
+            "loop route",
+            "beginners",
+            "children",
+            "older hikers",
+            "public land",
+            "private property",
+            "scenic route",
+            "map and compass",
+        ),
+    ),
+    (
+        "terrain-aware-routing",
+        (
+            "slope",
+            "elevation gain",
+            "dense forest",
+            "brush",
+            "wetlands",
+            "bogs",
+            "talus",
+            "scree",
+            "roads and trails",
+            "night movement",
+        ),
+    ),
+    (
+        "navigation-back-to-safety",
+        (
+            "starting point",
+            "back to",
+            "trailhead",
+            "maintained trail",
+            "nearest road",
+            "closest inhabited structure",
+            "civilization",
+            "handrails",
+        ),
+    ),
+    (
+        "emergency-survival-routing",
+        (
+            "fresh water",
+            "potable water",
+            "stream",
+            "river",
+            "lake",
+            "spring",
+            "snowmelt",
+            "camp",
+            "bivy",
+            "tree cover",
+            "shelter",
+        ),
+    ),
 )
 
 OBJECTIVE_KEYWORDS: tuple[tuple[str, str], ...] = (
@@ -260,9 +483,14 @@ def _extract_constraints(prompt_text: str) -> list[str]:
     slope_match = re.search(r"slopes? (?:steeper than|over) (\d+) degrees?", prompt_text)
     if slope_match:
         constraints.append(f"avoid slopes over {slope_match.group(1)} degrees")
-    distance_match = re.search(r"within (\d+(?:\.\d+)?) (mile|miles|km|kilometer|kilometers)", prompt_text)
+    distance_match = re.search(
+        r"within (\d+(?:\.\d+)?) (mile|miles|km|kilometer|kilometers)",
+        prompt_text,
+    )
     if distance_match:
-        constraints.append(f"distance bound: within {distance_match.group(1)} {distance_match.group(2)}")
+        constraints.append(
+            f"distance bound: within {distance_match.group(1)} {distance_match.group(2)}"
+        )
     return constraints or ["no explicit extra constraints detected"]
 
 
@@ -275,8 +503,14 @@ def _infer_prompt_schema(prompt: str) -> dict[str, object]:
         "mode": _detect_mode(prompt_text),
         "target_type": _detect_target_type(prompt_text),
         "constraints": _extract_constraints(prompt_text),
-        "supports_alternates": any(term in prompt_text for term in ("three routes", "alternate", "alternates", "fastest, safest, and easiest")),
-        "action_ready": any(term in prompt_text for term in ("find route", "route me", "evacuation route", "plan", "generate")),
+        "supports_alternates": any(
+            term in prompt_text
+            for term in ("three routes", "alternate", "alternates", "fastest, safest, and easiest")
+        ),
+        "action_ready": any(
+            term in prompt_text
+            for term in ("find route", "route me", "evacuation route", "plan", "generate")
+        ),
     }
 
 
@@ -295,7 +529,8 @@ def _format_view_bounds(bounds: ViewBounds | None) -> str:
         center = f"; center lat {bounds.center_lat:.6f}, lon {bounds.center_lon:.6f}"
     return (
         "- Visible map bounds: "
-        f"west {bounds.west:.6f}, south {bounds.south:.6f}, east {bounds.east:.6f}, north {bounds.north:.6f}{center}"
+        f"west {bounds.west:.6f}, south {bounds.south:.6f}, east {bounds.east:.6f}, "
+        f"north {bounds.north:.6f}{center}"
     )
 
 
@@ -304,6 +539,10 @@ def _build_system_prompt(request: PromptRequest) -> str:
     profile_prompt = AGENT_PROFILE_PROMPTS.get(profile, AGENT_PROFILE_PROMPTS["terrain-route"])
     map_context = request.map_context
     prompt_schema = _infer_prompt_schema(request.prompt)
+    prompt_family = str(prompt_schema["family"])
+    prompt_family_guidance = PROMPT_FAMILY_GUIDANCE.get(
+        prompt_family, PROMPT_FAMILY_GUIDANCE["terrain-aware-routing"]
+    )
     map_lines = [
         _format_point("Selected point", map_context.selected_point if map_context else None),
         _format_point("Camera position", map_context.camera if map_context else None),
@@ -311,12 +550,9 @@ def _build_system_prompt(request: PromptRequest) -> str:
         f"- Imagery source: {(map_context.imagery_source if map_context else None) or 'unknown'}",
         f"- Terrain source: {(map_context.terrain_source if map_context else None) or 'unknown'}",
     ]
-    prompt_family_lines = [
-        f"- {family}: {description}"
-        for family, description in PROMPT_FAMILY_GUIDANCE.items()
-    ]
     normalized_request_lines = [
         f"- Prompt family: {prompt_schema['family']}",
+        f"- Family focus: {prompt_family_guidance}",
         f"- Objective: {prompt_schema['objective']}",
         f"- Mode: {prompt_schema['mode']}",
         f"- Target type: {prompt_schema['target_type']}",
@@ -325,50 +561,32 @@ def _build_system_prompt(request: PromptRequest) -> str:
         f"- Future deterministic action likely: {'yes' if prompt_schema['action_ready'] else 'no'}",
     ]
 
-    base_prompt = dedent(
-        f"""
-        {profile_prompt}
-
-        You must understand prompts across TERA's navigation, survival, SAR, and routing catalog.
-        Treat the following prompt families as explicitly supported patterns:
-        {chr(10).join(prompt_family_lines)}
-
-        Use the live map context the way RFSim's local model workflow does: ground your answer in
-        what is visible in the current map view and the surrounding area, prefer local context over
-        generic advice, and state uncertainty when the map does not prove a claim.
-
-        Normalize each user request internally into a deterministic routing/query shape with:
-        - origin or last-known position
-        - target type
-        - movement mode
-        - objective
-        - constraints and hazards
-        - time or weather context
-        - output form: route, alternates, reachable area, or directional advice
-
-        TERA routing guidance:
-        - Be terrain-aware with respect to slope, elevation, ridgelines, drainages, cover, open exposure, roads, trails, and likely water access.
-        - For survival, SAR, hiking, field logistics, and terrain-aware navigation, prioritize safety, access, and realistic movement over vague prose.
-        - Do not invent exact trails, streams, or obstacles that are not supported by the visible context.
-        - If the request is route-like, discuss the best corridor, likely constraints, and what additional deterministic tools would normally be used.
-        - If the request is analysis-like, summarize terrain implications for movement, access, exposure, and nearby opportunities or risks.
-        - If the request asks for alternates, compare at least fastest, safest, and easiest options when feasible.
-        - If the request is situational awareness or stay-versus-move, provide a directional recommendation, key hazards, and what would change the decision.
-        - If deterministic tooling is not yet available, still produce an operator-useful answer and state what future tool calls would resolve the uncertainty.
-
-        Inferred request normalization:
-        {chr(10).join(normalized_request_lines)}
-
-        Current map context:
-        {chr(10).join(map_lines)}
-
-        Response style:
-        - Keep the answer concise and operational.
-        - Prefer 2 to 4 short paragraphs or a short flat list when needed.
-        - Mention specific terrain relationships from the map context before giving recommendations.
-        - When helpful, structure the reply as: assessment, recommended action, future deterministic actions.
-        """
-    ).strip()
+    base_prompt = "\n\n".join(
+        [
+            profile_prompt,
+            (
+                "Support TERA navigation, survival, SAR, field logistics, and terrain-aware "
+                "routing prompts. Ground the answer in the live map context. Prefer local context "
+                "over generic advice, and state uncertainty when the map does not prove a claim."
+            ),
+            f"Inferred request normalization:\n{chr(10).join(normalized_request_lines)}",
+            f"Current map context:\n{chr(10).join(map_lines)}",
+            "\n".join(
+                [
+                    "Rules:",
+                    "- Keep the answer concise and operational.",
+                    "- Mention visible terrain relationships before recommendations.",
+                    "- Do not invent exact trails, water, roads, hazards, or route geometry.",
+                    (
+                        "- For route-like requests, give assessment, recommended action, "
+                        "and future deterministic actions."
+                    ),
+                    "- For alternates, compare fastest, safest, and easiest when feasible.",
+                    "- If map context or deterministic tools are missing, say what is needed next.",
+                ]
+            ),
+        ]
+    )
 
     if request.system:
         return f"{base_prompt}\n\nAdditional operator instruction:\n{request.system.strip()}"
@@ -382,6 +600,11 @@ def _build_ollama_payload(request: PromptRequest, *, stream: bool) -> tuple[str,
         "stream": stream,
         "prompt": request.prompt,
         "system": _build_system_prompt(request),
+        "keep_alive": "10m",
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 512,
+        },
     }
     return model, payload
 
@@ -488,8 +711,6 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
         raise HTTPException(status_code=502, detail="Ollama returned an empty response.")
 
     return PromptResponse(model=model, response=text)
-
-
 @app.post("/api/prompt/stream")
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
     model, payload = _build_ollama_payload(request, stream=True)
@@ -497,10 +718,31 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
 
     async def event_stream():
         yield _sse_event({"type": "start", "model": model})
+        yield _sse_event(
+            {"type": "status", "detail": "Waiting for local model tokens", "model": model}
+        )
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", f"{OLLAMA_BASE_URL}/api/generate", json=payload) as response:
-                    response.raise_for_status()
+                async with client.stream(
+                    "POST", f"{OLLAMA_BASE_URL}/api/generate", json=payload
+                ) as response:
+                    if response.status_code >= 400:
+                        body = (await response.aread()).decode("utf-8", errors="replace")[:500]
+                        log.error(
+                            "ollama_stream_http_error",
+                            status_code=response.status_code,
+                            body=body,
+                            ollama_base_url=OLLAMA_BASE_URL,
+                        )
+                        yield _sse_event(
+                            {
+                                "type": "error",
+                                "detail": f"Ollama returned {response.status_code}: {body}",
+                                "model": model,
+                            }
+                        )
+                        return
+
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -516,23 +758,12 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                         if chunk.get("done"):
                             yield _sse_event({"type": "done", "model": model})
                             return
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
+        except httpx.HTTPError as exc:
             log.error(
-                "ollama_stream_http_error",
-                status_code=exc.response.status_code,
-                body=body,
+                "ollama_stream_connection_error",
+                error=str(exc),
                 ollama_base_url=OLLAMA_BASE_URL,
             )
-            yield _sse_event(
-                {
-                    "type": "error",
-                    "detail": f"Ollama returned {exc.response.status_code}: {body}",
-                    "model": model,
-                }
-            )
-        except httpx.HTTPError as exc:
-            log.error("ollama_stream_connection_error", error=str(exc), ollama_base_url=OLLAMA_BASE_URL)
             yield _sse_event(
                 {
                     "type": "error",
