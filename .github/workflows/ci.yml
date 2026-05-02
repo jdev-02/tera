@@ -23,15 +23,11 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install liboqs (system)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libssl-dev
-          git clone --depth=1 --branch 0.10.0 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
-          cmake -S /tmp/liboqs -B /tmp/liboqs/build -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local
-          cmake --build /tmp/liboqs/build --parallel
-          sudo cmake --install /tmp/liboqs/build
-          sudo ldconfig
+      # Note: liboqs (system C library) is no longer installed in CI -- liboqs-python
+      # is now an optional [crypto] extra, only needed for Satriyo's signer work.
+      # When tests for crypto/ land, the workflow that runs them will install liboqs
+      # explicitly via `bash infra/install_liboqs.sh`. Keeping it out of the default
+      # CI saves ~3 min per run.
 
       - name: Install gitleaks
         uses: gitleaks/gitleaks-action@v2
