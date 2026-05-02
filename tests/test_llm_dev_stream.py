@@ -91,3 +91,36 @@ async def test_prompt_stream_reports_ollama_http_errors(monkeypatch: pytest.Monk
 
     assert '"type": "error"' in body
     assert "model missing" in body
+
+
+def test_imagery_sourcing_prompt_uses_socratic_dialogue() -> None:
+    request = kmh_app.PromptRequest(
+        prompt="Build a water access package for a foot patrol.",
+        source_context=kmh_app.SourceContext(
+            mission_focus="terrain-routing",
+            clarifying_questions=[
+                (
+                    "Is the operator asking for mapped water features only, "
+                    "or confidence in current and potable water availability?"
+                )
+            ],
+        ),
+    )
+
+    system_prompt = kmh_app._build_system_prompt(request)
+
+    assert "Socratic sourcing dialogue" in system_prompt
+    assert "reflect the mission read" in system_prompt
+    assert "Socratic questions to ask next" in system_prompt
+
+
+def test_source_recommendation_questions_prioritize_source_scope() -> None:
+    recommendation = kmh_app._infer_source_recommendation(
+        "Build an offline package for a patrol to find reliable water while avoiding steep exposed terrain.",
+        None,
+    )
+    questions = " ".join(recommendation.clarifying_questions).lower()
+
+    assert "movement" in questions
+    assert "water" in questions
+    assert "bounding box" not in questions

@@ -162,14 +162,14 @@ textarea {
   z-index: 5;
 }
 
-.top-left {
-  top: 12px;
-  left: 12px;
-}
-
 .bottom-right {
   right: 12px;
   bottom: 12px;
+}
+
+.top-right {
+  top: 12px;
+  right: 12px;
 }
 
 .overlay-card {
@@ -187,6 +187,140 @@ textarea {
 .overlay-card {
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.map-instruments {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.map-reset-button {
+  border: 1px solid rgba(240, 201, 130, 0.68);
+  border-radius: 6px;
+  padding: 8px 11px;
+  color: #111820;
+  background: rgba(214, 176, 109, 0.92);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.instrument-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(15, 21, 27, 0.82);
+  box-shadow: var(--shadow);
+}
+
+.compass-instrument,
+.tilt-instrument {
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+}
+
+.compass-rose {
+  position: relative;
+  width: 64px;
+  aspect-ratio: 1;
+  border: 1px solid rgba(240, 201, 130, 0.5);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent 48%, rgba(240, 201, 130, 0.35) 49%, rgba(240, 201, 130, 0.35) 51%, transparent 52%),
+    linear-gradient(0deg, transparent 48%, rgba(240, 201, 130, 0.35) 49%, rgba(240, 201, 130, 0.35) 51%, transparent 52%),
+    rgba(11, 15, 18, 0.64);
+}
+
+.compass-label {
+  position: absolute;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.64rem;
+  line-height: 1;
+}
+
+.compass-n {
+  top: 5px;
+  left: 50%;
+  color: var(--accent-strong);
+  transform: translateX(-50%);
+}
+
+.compass-e {
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+}
+
+.compass-s {
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.compass-w {
+  top: 50%;
+  left: 5px;
+  transform: translateY(-50%);
+}
+
+.compass-needle {
+  position: absolute;
+  left: calc(50% - 2px);
+  top: 11px;
+  width: 4px;
+  height: 23px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  transform-origin: 50% 21px;
+  transition: transform 90ms linear;
+}
+
+.tilt-scale {
+  position: relative;
+  width: 18px;
+  height: 64px;
+  border: 1px solid rgba(240, 201, 130, 0.5);
+  border-radius: 999px;
+  background: rgba(11, 15, 18, 0.64);
+}
+
+.tilt-mark,
+.tilt-needle {
+  position: absolute;
+  left: 50%;
+  width: 10px;
+  height: 1px;
+  background: rgba(240, 201, 130, 0.45);
+  transform: translateX(-50%);
+}
+
+.tilt-mark.top {
+  top: 10px;
+}
+
+.tilt-mark.bottom {
+  bottom: 10px;
+}
+
+.tilt-needle {
+  top: calc(100% - 8px);
+  width: 14px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--teal);
+  transition: top 90ms linear;
+}
+
+.instrument-value {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
 }
 
 .agent-panel {
@@ -211,6 +345,14 @@ textarea {
 
 .source-panel-shell {
   flex: 0 0 auto;
+}
+
+.workflow-panel.is-empty {
+  padding-bottom: 10px;
+}
+
+.workflow-panel.is-empty #packageStatus {
+  display: none;
 }
 
 .panel-chat-shell {
@@ -282,6 +424,11 @@ textarea {
   font-weight: 700;
 }
 
+.primary-button.confirmed {
+  background: var(--good);
+  border-color: var(--good);
+}
+
 .ghost-button {
   color: var(--text);
   background: var(--surface-2);
@@ -303,11 +450,99 @@ textarea {
   font-size: 0.86rem;
 }
 
+.workflow-empty {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.workflow-carousel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.workflow-nav {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  gap: 8px;
+  align-items: center;
+}
+
+.workflow-nav-center {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  text-align: center;
+}
+
+.carousel-arrow {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border-color: rgba(214, 176, 109, 0.32);
+  background: rgba(22, 32, 41, 0.72);
+  color: var(--accent-strong);
+}
+
+.workflow-dots {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.workflow-dot[data-active="true"] {
+  width: 16px;
+  background: var(--accent);
+}
+
+.workflow-slides {
+  min-width: 0;
+}
+
+.workflow-slide {
+  display: none;
+}
+
+.workflow-slide.active {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0f151b;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.question-list {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+
 .package-controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-top: 12px;
 }
 
 .package-controls label,
@@ -316,6 +551,45 @@ textarea {
   gap: 6px;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.mission-summary {
+  display: grid;
+  gap: 5px;
+  min-height: 58px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0f151b;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.35;
+}
+
+.area-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0f151b;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.area-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.map-stage.is-drawing-area .cesium-widget canvas {
+  cursor: crosshair;
 }
 
 .source-list {

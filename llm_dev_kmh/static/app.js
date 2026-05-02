@@ -1,91 +1,18 @@
-const MISSION_DEFAULT_SOURCE_IDS = {
-  "terrain-routing": [
-    "esri_world_imagery",
-    "cesium_world_terrain",
-    "osm_basemap",
-    "osm_extract",
-    "usgs_3dep",
-    "nlcd",
-    "pad_us",
-  ],
-  "water-access": [
-    "esri_world_imagery",
-    "osm_basemap",
-    "osm_extract",
-    "usgs_3dep",
-    "usgs_3dhp",
-    "nhdplus_hr",
-    "nwis",
-    "sentinel_2",
-  ],
-  "sar-planning": [
-    "esri_world_imagery",
-    "cesium_world_terrain",
-    "osm_basemap",
-    "osm_extract",
-    "usgs_3dep",
-    "nlcd",
-    "usgs_3dhp",
-    "naip",
-    "noaa_alerts",
-    "pad_us",
-    "blm_usfs_nps",
-  ],
-  evacuation: [
-    "esri_world_imagery",
-    "osm_basemap",
-    "osm_extract",
-    "usgs_3dep",
-    "nlcd",
-    "noaa_alerts",
-    "fema_flood",
-    "pad_us",
-    "blm_usfs_nps",
-  ],
-  "signal-planning": [
-    "esri_world_imagery",
-    "cesium_world_terrain",
-    "osm_basemap",
-    "osm_extract",
-    "usgs_3dep",
-    "fcc_towers",
-    "osm_towers",
-    "viewshed_surfaces",
-  ],
-  "hazard-routing": [
-    "esri_world_imagery",
-    "osm_basemap",
-    "osm_extract",
-    "usgs_3dep",
-    "noaa_alerts",
-    "nasa_firms",
-    "fema_flood",
-    "sentinel_1_sar",
-  ],
-  "access-control": [
-    "esri_world_imagery",
-    "osm_basemap",
-    "osm_extract",
-    "pad_us",
-    "blm_usfs_nps",
-    "parcels_boundaries",
-  ],
-  "imagery-preview": [
-    "esri_world_imagery",
-    "cesium_world_terrain",
-    "osm_basemap",
-    "sentinel_2",
-    "landsat_collection_2",
-    "naip",
-  ],
-};
-
 const state = {
   config: null,
   viewer: null,
   clickHandler: null,
   resizeObserver: null,
   selectedPoint: null,
+  selectedArea: null,
+  areaEntity: null,
+  areaHandleEntities: [],
+  areaSelectActive: false,
+  areaDrawing: false,
+  areaResizeHandle: null,
+  areaResizeAnchorPoint: null,
+  areaStartPoint: null,
+  suppressNextClick: false,
   markerEntity: null,
   cameraText: "",
   chatCount: 0,
@@ -99,6 +26,10 @@ const state = {
   primarySourceIds: [],
   selectedSourceIds: new Set(),
   packagePlan: null,
+  sourceInference: null,
+  sourceConfirmed: false,
+  workflowStageIndex: 0,
+  lastMissionText: "",
 };
 
 const els = {
@@ -114,8 +45,13 @@ const els = {
   panelResizer: document.getElementById("panelResizer"),
   workspaceShell: document.querySelector(".workspace-shell"),
   agentPanel: document.getElementById("agentPanel"),
+  sourcePanel: document.getElementById("sourcePanel"),
   mapStage: document.querySelector(".map-stage"),
-  previewStatus: document.getElementById("previewStatus"),
+  mapResetViewBtn: document.getElementById("mapResetViewBtn"),
+  compassRose: document.getElementById("compassRose"),
+  compassHeading: document.getElementById("compassHeading"),
+  tiltNeedle: document.getElementById("tiltNeedle"),
+  tiltValue: document.getElementById("tiltValue"),
   promptForm: document.getElementById("promptForm"),
   promptInput: document.getElementById("promptInput"),
   modelSelect: document.getElementById("modelSelect"),
@@ -127,6 +63,7 @@ const els = {
   modelsStatus: document.getElementById("modelsStatus"),
   modelsList: document.getElementById("modelsList"),
   selectedPoint: document.getElementById("selectedPoint"),
+  selectedArea: document.getElementById("selectedArea"),
   cameraPosition: document.getElementById("cameraPosition"),
   imageryStatus: document.getElementById("imageryStatus"),
   terrainStatus: document.getElementById("terrainStatus"),
@@ -134,10 +71,24 @@ const els = {
   chatMeta: document.getElementById("chatMeta"),
   mapHint: document.getElementById("mapHint"),
   sourceCount: document.getElementById("sourceCount"),
+  workflowEmpty: document.getElementById("workflowEmpty"),
+  workflowCarousel: document.getElementById("workflowCarousel"),
+  workflowPrevBtn: document.getElementById("workflowPrevBtn"),
+  workflowNextBtn: document.getElementById("workflowNextBtn"),
+  workflowStageLabel: document.getElementById("workflowStageLabel"),
+  workflowStageMeta: document.getElementById("workflowStageMeta"),
+  workflowDots: document.getElementById("workflowDots"),
+  workflowSlides: Array.from(document.querySelectorAll("[data-workflow-slide]")),
+  clarifyingQuestions: document.getElementById("clarifyingQuestions"),
   sourceList: document.getElementById("sourceList"),
-  missionFocusSelect: document.getElementById("missionFocusSelect"),
+  packageModeChip: document.getElementById("packageModeChip"),
+  inferredMission: document.getElementById("inferredMission"),
   packageNameInput: document.getElementById("packageNameInput"),
-  selectRecommendedBtn: document.getElementById("selectRecommendedBtn"),
+  confirmSourcesBtn: document.getElementById("confirmSourcesBtn"),
+  aoLockedNotice: document.getElementById("aoLockedNotice"),
+  areaControlSurface: document.getElementById("areaControlSurface"),
+  drawAreaBtn: document.getElementById("drawAreaBtn"),
+  clearAreaBtn: document.getElementById("clearAreaBtn"),
   streamSelectedBtn: document.getElementById("streamSelectedBtn"),
   buildPackageBtn: document.getElementById("buildPackageBtn"),
   packageStatus: document.getElementById("packageStatus"),
@@ -147,6 +98,29 @@ const els = {
 
 window.__TERA_SOURCE_STATE = state;
 window.__LLM_DEV_STATE = state;
+
+const WORKFLOW_STAGES = [
+  {
+    key: "mission",
+    label: "Mission",
+    meta: "Review extracted mission",
+  },
+  {
+    key: "questions",
+    label: "Questions",
+    meta: "Broaden or limit scope",
+  },
+  {
+    key: "sources",
+    label: "Sources",
+    meta: "Confirm database inputs",
+  },
+  {
+    key: "area",
+    label: "AO",
+    meta: "Set package coverage",
+  },
+];
 
 const IMAGERY_FALLBACKS = {
   esri: {
@@ -456,6 +430,83 @@ function setSettingsMenuOpen(open) {
   els.settingsToggleBtn.setAttribute("aria-expanded", String(open));
 }
 
+function hasMissionInference() {
+  return Boolean(state.sourceInference);
+}
+
+function renderWorkflowDots() {
+  els.workflowDots.replaceChildren();
+  WORKFLOW_STAGES.forEach((stage, index) => {
+    const dot = document.createElement("span");
+    dot.className = "workflow-dot";
+    dot.dataset.active = String(index === state.workflowStageIndex);
+    dot.title = stage.label;
+    els.workflowDots.appendChild(dot);
+  });
+}
+
+function renderClarifyingQuestions() {
+  els.clarifyingQuestions.replaceChildren();
+  const questions = state.sourceInference?.clarifying_questions || [];
+
+  if (!questions.length) {
+    const item = document.createElement("li");
+    item.textContent = state.sourceInference
+      ? "No additional Socratic question was inferred. Review the working sources or describe a constraint in chat."
+      : "Socratic source questions will appear after the first mission description.";
+    els.clarifyingQuestions.appendChild(item);
+    return;
+  }
+
+  for (const question of questions) {
+    const item = document.createElement("li");
+    item.textContent = question;
+    els.clarifyingQuestions.appendChild(item);
+  }
+}
+
+function setWorkflowStage(index) {
+  state.workflowStageIndex = clampNumber(index, 0, WORKFLOW_STAGES.length - 1);
+  updateWorkflowPanel();
+}
+
+function updateWorkflowPanel() {
+  const hasMission = hasMissionInference();
+  const selectedCount = state.selectedSourceIds.size;
+  state.workflowStageIndex = clampNumber(state.workflowStageIndex, 0, WORKFLOW_STAGES.length - 1);
+
+  els.sourcePanel.classList.toggle("is-empty", !hasMission);
+  els.workflowEmpty.classList.toggle("hidden", hasMission);
+  els.workflowCarousel.classList.toggle("hidden", !hasMission);
+
+  if (hasMission) {
+    const stage = WORKFLOW_STAGES[state.workflowStageIndex];
+    const stageMeta = stage.key === "area" && !state.sourceConfirmed
+      ? "Locked until sources are confirmed"
+      : stage.meta;
+    els.workflowStageLabel.textContent = `${state.workflowStageIndex + 1}/${WORKFLOW_STAGES.length} ${stage.label}`;
+    els.workflowStageMeta.textContent = stageMeta;
+    for (const slide of els.workflowSlides) {
+      slide.classList.toggle("active", slide.dataset.workflowSlide === stage.key);
+    }
+  }
+
+  els.workflowPrevBtn.disabled = !hasMission || state.workflowStageIndex === 0;
+  els.workflowNextBtn.disabled = !hasMission || state.workflowStageIndex === WORKFLOW_STAGES.length - 1;
+  els.confirmSourcesBtn.disabled = selectedCount === 0;
+  els.confirmSourcesBtn.textContent = state.sourceConfirmed ? "Sources Confirmed" : "Confirm Sources";
+  els.confirmSourcesBtn.classList.toggle("confirmed", state.sourceConfirmed);
+  els.aoLockedNotice.classList.toggle("hidden", state.sourceConfirmed);
+  els.areaControlSurface.classList.toggle("hidden", !state.sourceConfirmed);
+  els.drawAreaBtn.disabled = !state.sourceConfirmed;
+  els.clearAreaBtn.disabled = !state.sourceConfirmed || !state.selectedArea;
+  els.buildPackageBtn.disabled = selectedCount === 0 || !state.sourceConfirmed;
+  els.streamSelectedBtn.disabled = selectedCount === 0;
+
+  renderClarifyingQuestions();
+  renderWorkflowDots();
+}
+
 function getSelectedSources() {
   return state.dataSources.filter((source) => state.selectedSourceIds.has(source.id));
 }
@@ -469,9 +520,16 @@ function formatSourceStatus(source) {
 function updateSourceCount() {
   const selectedCount = state.selectedSourceIds.size;
   const total = state.dataSources.length;
-  els.sourceCount.textContent = `${selectedCount} selected of ${total} sources`;
-  els.buildPackageBtn.disabled = selectedCount === 0;
-  els.streamSelectedBtn.disabled = selectedCount === 0;
+  if (!hasMissionInference()) {
+    els.sourceCount.textContent = total
+      ? "Awaiting mission description"
+      : "Source catalog not loaded";
+  } else {
+    els.sourceCount.textContent = selectedCount
+      ? `${selectedCount} selected from ${total} available sources`
+      : `0 selected from ${total} available sources`;
+  }
+  updateWorkflowPanel();
 }
 
 function renderSourceList() {
@@ -486,7 +544,17 @@ function renderSourceList() {
     return;
   }
 
-  for (const source of state.dataSources) {
+  const visibleSources = getSelectedSources();
+  if (!visibleSources.length) {
+    const empty = document.createElement("div");
+    empty.className = "source-empty";
+    empty.textContent = "Send a mission description in chat. TERA will infer a compact source list here.";
+    els.sourceList.appendChild(empty);
+    updateSourceCount();
+    return;
+  }
+
+  for (const source of visibleSources) {
     const article = document.createElement("article");
     article.className = "source-item";
     article.dataset.selected = String(state.selectedSourceIds.has(source.id));
@@ -504,6 +572,7 @@ function renderSourceList() {
         state.selectedSourceIds.delete(source.id);
       }
       state.packagePlan = null;
+      state.sourceConfirmed = false;
       article.dataset.selected = String(checkbox.checked);
       hidePackageOutput();
       updateSourceCount();
@@ -540,16 +609,6 @@ function renderSourceList() {
   updateSourceCount();
 }
 
-function selectRecommendedSources() {
-  const missionFocus = els.missionFocusSelect.value;
-  const defaults = MISSION_DEFAULT_SOURCE_IDS[missionFocus] || state.primarySourceIds;
-  state.selectedSourceIds = new Set(defaults);
-  state.packagePlan = null;
-  hidePackageOutput();
-  renderSourceList();
-  els.packageStatus.textContent = `Recommended sources selected for ${missionFocus}.`;
-}
-
 function hidePackageOutput() {
   els.packageManifest.classList.add("hidden");
   els.packageManifest.textContent = "";
@@ -562,7 +621,8 @@ async function loadDataSources() {
     const data = await fetchJson("/api/data-sources");
     state.dataSources = Array.isArray(data.sources) ? data.sources : [];
     state.primarySourceIds = Array.isArray(data.primary_streams) ? data.primary_streams : [];
-    selectRecommendedSources();
+    state.selectedSourceIds = new Set();
+    renderSourceList();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     state.dataSources = [];
@@ -576,6 +636,10 @@ function buildMapContext() {
     imagery_source: els.imageryStatus.textContent || null,
     terrain_source: els.terrainStatus.textContent || null,
   };
+
+  if (state.selectedArea) {
+    context.selected_area = { ...state.selectedArea };
+  }
 
   if (state.selectedPoint) {
     context.selected_point = {
@@ -616,24 +680,74 @@ function buildMapContext() {
 function buildSourceContext() {
   const selectedSources = getSelectedSources();
   const sourceNames = selectedSources.map((source) => source.name);
+  const inference = state.sourceInference;
   const packageSummary = state.packagePlan
     ? `${state.packagePlan.package_name}: ${sourceNames.length} sources, manifest ${state.packagePlan.package_id}`
-    : `${sourceNames.length} selected sources for ${els.missionFocusSelect.value}`;
+    : `${sourceNames.length} sources inferred from chat for ${inference?.mission_focus || "mission-data-package"}`;
 
   return {
-    mission_focus: els.missionFocusSelect.value,
+    mission_focus: inference?.mission_focus || "mission-data-package",
+    mission_text: state.lastMissionText ? state.lastMissionText.slice(0, 2000) : null,
     selected_source_ids: selectedSources.map((source) => source.id),
     selected_source_names: sourceNames,
+    required_source_ids: inference?.required_source_ids || [],
+    optional_source_ids: inference?.optional_source_ids || [],
+    clarifying_questions: inference?.clarifying_questions || [],
     package_summary: packageSummary,
   };
 }
 
+function resetPlannerWorkflow() {
+  state.sourceInference = null;
+  state.sourceConfirmed = false;
+  state.workflowStageIndex = 0;
+  state.selectedSourceIds = new Set();
+  state.packagePlan = null;
+  state.lastMissionText = "";
+  state.areaSelectActive = false;
+  state.areaDrawing = false;
+  state.areaResizeHandle = null;
+  state.areaResizeAnchorPoint = null;
+  state.selectedArea = null;
+  state.areaStartPoint = null;
+  setCameraDragEnabled(true);
+  if (state.viewer && state.areaEntity) {
+    state.viewer.entities.remove(state.areaEntity);
+  }
+  state.areaEntity = null;
+  clearAreaHandles();
+  updateSelectedArea();
+  els.inferredMission.textContent = "Describe the mission in chat to draft a focused source package.";
+  els.packageNameInput.value = "";
+  setChip(els.packageModeChip, "Awaiting mission");
+  hidePackageOutput();
+  renderSourceList();
+  els.packageStatus.textContent = "No sources selected yet. Send a mission description to infer the needed package.";
+  els.mapHint.textContent = "Click the map to pin context. AO drawing unlocks after source confirmation.";
+  updateWorkflowPanel();
+}
+
+function confirmSources() {
+  if (!state.selectedSourceIds.size) {
+    els.packageStatus.textContent = "No sources are selected yet.";
+    return;
+  }
+  state.sourceConfirmed = true;
+  hidePackageOutput();
+  setWorkflowStage(3);
+  els.packageStatus.textContent = "Sources confirmed. Draw or adjust the AO rectangle for the data package.";
+  els.mapHint.textContent = state.selectedArea
+    ? "Drag a rectangle corner to adjust AO coverage."
+    : "Use Draw AO to drag a rectangle for package coverage.";
+}
+
 function clearChat() {
+  resetPlannerWorkflow();
   els.chatLog.innerHTML = "";
   state.chatCount = 0;
   appendMessage(
     "assistant",
-    "Source planner ready. Select mission focus and data sources, then ask what the server database needs for the mission.",
+    "Source planner ready. Describe the mission in chat. I will work through the source package as a short question-driven dialogue.",
   );
 }
 
@@ -665,6 +779,23 @@ function formatPoint(lat, lon, height = null) {
   return `${base} | ${height.toFixed(0)} m`;
 }
 
+function formatBounds(bounds) {
+  if (!bounds) {
+    return "Camera view will be used until an AO is drawn.";
+  }
+  const width = Math.abs(bounds.east - bounds.west).toFixed(3);
+  const height = Math.abs(bounds.north - bounds.south).toFixed(3);
+  return `W ${bounds.west.toFixed(4)} | S ${bounds.south.toFixed(4)} | E ${bounds.east.toFixed(4)} | N ${bounds.north.toFixed(4)} (${width} x ${height} deg)`;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeDegrees(degrees) {
+  return ((degrees % 360) + 360) % 360;
+}
+
 function updateSelectedPoint() {
   if (!state.selectedPoint) {
     els.selectedPoint.textContent = "No point selected";
@@ -677,6 +808,29 @@ function updateSelectedPoint() {
   );
 }
 
+function updateSelectedArea() {
+  els.selectedArea.textContent = formatBounds(state.selectedArea);
+  els.clearAreaBtn.disabled = !state.sourceConfirmed || !state.selectedArea;
+  updateWorkflowPanel();
+}
+
+function updateMapInstruments() {
+  if (!state.viewer) {
+    return;
+  }
+  const camera = state.viewer.camera;
+  const headingDeg = normalizeDegrees(Cesium.Math.toDegrees(camera.heading));
+  const pitchDeg = Cesium.Math.toDegrees(camera.pitch);
+  const tiltDeg = clampNumber(90 + pitchDeg, 0, 90);
+  const tiltPercentFromTop = 100 - (tiltDeg / 90) * 100;
+
+  els.compassRose.style.setProperty("--heading-deg", `${headingDeg}deg`);
+  els.compassRose.querySelector(".compass-needle").style.transform = `rotate(${headingDeg}deg)`;
+  els.compassHeading.textContent = `${Math.round(headingDeg).toString().padStart(3, "0")} deg`;
+  els.tiltNeedle.style.top = `calc(${tiltPercentFromTop}% - 1px)`;
+  els.tiltValue.textContent = `${Math.round(tiltDeg)} deg tilt`;
+}
+
 function updateCameraText() {
   if (!state.viewer) {
     return;
@@ -687,6 +841,7 @@ function updateCameraText() {
   const height = cartographic.height;
   state.cameraText = formatPoint(lat, lon, height);
   els.cameraPosition.textContent = state.cameraText;
+  updateMapInstruments();
 }
 
 async function loadRuntimeConfig() {
@@ -753,17 +908,75 @@ async function loadModels() {
 }
 
 function makeSelectedPointContext() {
-  if (!els.includeMapPoint.checked || !state.selectedPoint) {
+  if (!els.includeMapPoint.checked) {
     return "";
   }
-  return `\n\nAO context:\nSelected point latitude ${state.selectedPoint.lat.toFixed(6)}, longitude ${state.selectedPoint.lon.toFixed(6)}, terrain height ${state.selectedPoint.heightM.toFixed(1)} meters.`;
+
+  const lines = [];
+  if (state.selectedArea) {
+    lines.push(
+      `Selected AO west ${state.selectedArea.west.toFixed(6)}, south ${state.selectedArea.south.toFixed(6)}, east ${state.selectedArea.east.toFixed(6)}, north ${state.selectedArea.north.toFixed(6)}.`,
+    );
+  }
+  if (state.selectedPoint) {
+    lines.push(
+      `Selected point latitude ${state.selectedPoint.lat.toFixed(6)}, longitude ${state.selectedPoint.lon.toFixed(6)}, terrain height ${state.selectedPoint.heightM.toFixed(1)} meters.`,
+    );
+  }
+  if (!lines.length) {
+    return "";
+  }
+  return `\n\nAO context:\n${lines.join("\n")}`;
+}
+
+async function inferSourcesFromMission(missionText, mapContext) {
+  els.packageStatus.textContent = "Inferring compact source package from mission text...";
+  setChip(els.packageModeChip, "Inferring", "warn");
+
+  const data = await fetchJson("/api/source-package/recommend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mission_text: missionText,
+      map_context: mapContext,
+    }),
+  });
+
+  state.sourceInference = data;
+  state.lastMissionText = missionText;
+  state.selectedSourceIds = new Set(data.selected_source_ids || []);
+  state.sourceConfirmed = false;
+  state.workflowStageIndex = data.clarifying_questions?.length ? 1 : 2;
+  state.packagePlan = null;
+  hidePackageOutput();
+
+  if (!els.packageNameInput.value.trim() && data.package_name_suggestion) {
+    els.packageNameInput.value = data.package_name_suggestion;
+  }
+
+  els.inferredMission.textContent = data.mission_summary || missionText;
+  setChip(els.packageModeChip, data.mission_focus || "Inferred", "good");
+  renderSourceList();
+
+  const questionText = data.clarifying_questions?.length
+    ? ` Next questions: ${data.clarifying_questions.join(" ")}`
+    : "";
+  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources. Answer the dialogue questions to broaden or narrow the package.${questionText}`;
+  updateWorkflowPanel();
+  return data;
 }
 
 async function buildSourcePackage() {
+  if (!state.sourceConfirmed) {
+    els.packageStatus.textContent = "Confirm the inferred source list before building the manifest.";
+    setWorkflowStage(2);
+    return;
+  }
+
   const selectedSources = getSelectedSources();
   const body = {
     source_ids: selectedSources.map((source) => source.id),
-    mission_focus: els.missionFocusSelect.value,
+    mission_focus: state.sourceInference?.mission_focus || "mission-data-package",
     package_name: els.packageNameInput.value.trim() || null,
     map_context: buildMapContext(),
   };
@@ -809,6 +1022,14 @@ async function submitPrompt(event) {
   const agentProfile = els.agentProfileSelect.value;
   const finalPrompt = `${prompt}${makeSelectedPointContext()}`;
   const mapContext = els.includeMapPoint.checked ? buildMapContext() : null;
+  els.requestStatus.textContent = "Inferring source package...";
+  try {
+    await inferSourcesFromMission(prompt, mapContext);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    els.packageStatus.textContent = `Source inference failed: ${message}`;
+    setChip(els.packageModeChip, "Inference failed", "bad");
+  }
   const sourceContext = buildSourceContext();
 
   appendMessage(
@@ -1018,6 +1239,246 @@ function setMarker(point) {
   });
 }
 
+function getCartographicFromScreenPosition(position) {
+  if (!state.viewer || !position) {
+    return null;
+  }
+  const cartesian = state.viewer.scene.pickPosition(position)
+    || state.viewer.camera.pickEllipsoid(position, state.viewer.scene.globe.ellipsoid);
+  if (!cartesian) {
+    return null;
+  }
+  const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+  return {
+    lat: Cesium.Math.toDegrees(cartographic.latitude),
+    lon: Cesium.Math.toDegrees(cartographic.longitude),
+  };
+}
+
+function makeBoundsFromPoints(firstPoint, secondPoint) {
+  const west = Math.min(firstPoint.lon, secondPoint.lon);
+  const east = Math.max(firstPoint.lon, secondPoint.lon);
+  const south = Math.min(firstPoint.lat, secondPoint.lat);
+  const north = Math.max(firstPoint.lat, secondPoint.lat);
+  return {
+    west,
+    south,
+    east,
+    north,
+    center_lat: (south + north) / 2,
+    center_lon: (west + east) / 2,
+  };
+}
+
+function rectangleFromBounds(bounds) {
+  return Cesium.Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north);
+}
+
+function getAreaHandleDefinitions(bounds) {
+  return [
+    { key: "nw", lat: bounds.north, lon: bounds.west },
+    { key: "ne", lat: bounds.north, lon: bounds.east },
+    { key: "se", lat: bounds.south, lon: bounds.east },
+    { key: "sw", lat: bounds.south, lon: bounds.west },
+  ];
+}
+
+function clearAreaHandles() {
+  if (!state.viewer) {
+    state.areaHandleEntities = [];
+    return;
+  }
+  for (const entity of state.areaHandleEntities) {
+    state.viewer.entities.remove(entity);
+  }
+  state.areaHandleEntities = [];
+}
+
+function updateAreaHandles(bounds) {
+  if (!state.viewer || !bounds) {
+    return;
+  }
+  const handles = getAreaHandleDefinitions(bounds);
+  for (const handle of handles) {
+    const existing = state.areaHandleEntities.find((entity) => entity.areaHandle === handle.key);
+    const position = Cesium.Cartesian3.fromDegrees(handle.lon, handle.lat, 0);
+    if (existing) {
+      existing.position = position;
+      continue;
+    }
+    const entity = state.viewer.entities.add({
+      position,
+      point: {
+        pixelSize: 11,
+        color: Cesium.Color.fromCssColorString("#f0c982"),
+        outlineColor: Cesium.Color.fromCssColorString("#111820"),
+        outlineWidth: 2,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+    entity.areaHandle = handle.key;
+    state.areaHandleEntities.push(entity);
+  }
+}
+
+function getPickedAreaHandle(position) {
+  if (!state.viewer || !state.selectedArea || !position) {
+    return null;
+  }
+  const picked = state.viewer.scene.pick(position);
+  const entity = picked?.id;
+  if (!entity) {
+    return null;
+  }
+  const handleEntity = state.areaHandleEntities.find((candidate) => candidate === entity);
+  return handleEntity?.areaHandle || null;
+}
+
+function getResizeAnchorPoint(handleKey) {
+  if (!state.selectedArea) {
+    return null;
+  }
+  const { west, south, east, north } = state.selectedArea;
+  const anchors = {
+    nw: { lat: south, lon: east },
+    ne: { lat: south, lon: west },
+    se: { lat: north, lon: west },
+    sw: { lat: north, lon: east },
+  };
+  return anchors[handleKey] || null;
+}
+
+function setAreaEntityBounds(bounds) {
+  if (!state.viewer || !bounds) {
+    return;
+  }
+  if (!state.areaEntity) {
+    state.areaEntity = state.viewer.entities.add({
+      rectangle: {
+        coordinates: rectangleFromBounds(bounds),
+        material: Cesium.Color.fromCssColorString("#d6b06d").withAlpha(0.18),
+        outline: true,
+        outlineColor: Cesium.Color.fromCssColorString("#f0c982"),
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      },
+    });
+    updateAreaHandles(bounds);
+    return;
+  }
+  state.areaEntity.rectangle.coordinates = rectangleFromBounds(bounds);
+  updateAreaHandles(bounds);
+}
+
+function setSelectedArea(bounds) {
+  state.selectedArea = bounds;
+  setAreaEntityBounds(bounds);
+  updateSelectedArea();
+  hidePackageOutput();
+  els.mapHint.textContent = "AO rectangle selected. New recommendations and manifests will use this area.";
+}
+
+function clearSelectedArea() {
+  state.selectedArea = null;
+  state.areaStartPoint = null;
+  state.areaDrawing = false;
+  setCameraDragEnabled(true);
+  setAreaSelectMode(false);
+  if (state.viewer && state.areaEntity) {
+    state.viewer.entities.remove(state.areaEntity);
+  }
+  state.areaEntity = null;
+  clearAreaHandles();
+  updateSelectedArea();
+  hidePackageOutput();
+  els.mapHint.textContent = "AO cleared. Camera view will be used unless you draw a new rectangle.";
+}
+
+function setAreaSelectMode(active) {
+  if (active && !state.sourceConfirmed) {
+    els.packageStatus.textContent = "Confirm the inferred source list before drawing AO coverage.";
+    setWorkflowStage(2);
+    return;
+  }
+  state.areaSelectActive = active;
+  els.mapStage.classList.toggle("is-drawing-area", active);
+  els.drawAreaBtn.textContent = active ? "Drawing AO" : "Draw AO";
+  els.drawAreaBtn.setAttribute("aria-pressed", String(active));
+  els.mapHint.textContent = active
+    ? "Drag on the map to draw an AO rectangle."
+    : state.sourceConfirmed
+      ? "Use Draw AO to drag a rectangle, or click once to pin a point."
+      : "Click the map to pin context. AO drawing unlocks after source confirmation.";
+}
+
+function setCameraDragEnabled(enabled) {
+  if (!state.viewer) {
+    return;
+  }
+  const controller = state.viewer.scene.screenSpaceCameraController;
+  controller.enableRotate = enabled;
+  controller.enableTranslate = enabled;
+  controller.enableTilt = enabled;
+  controller.enableLook = enabled;
+}
+
+function finishAreaResize(position) {
+  if (!state.areaResizeHandle || !state.areaResizeAnchorPoint) {
+    return;
+  }
+  const point = getCartographicFromScreenPosition(position);
+  const handleKey = state.areaResizeHandle;
+  state.areaResizeHandle = null;
+  state.areaResizeAnchorPoint = null;
+  setCameraDragEnabled(true);
+  if (!point) {
+    return;
+  }
+
+  const bounds = makeBoundsFromPoints(state.areaResizeAnchorPoint, point);
+  if (Math.abs(bounds.east - bounds.west) < 0.0001 || Math.abs(bounds.north - bounds.south) < 0.0001) {
+    if (state.selectedArea) {
+      setAreaEntityBounds(state.selectedArea);
+    }
+    els.mapHint.textContent = "AO corner adjustment was too small.";
+    return;
+  }
+
+  state.suppressNextClick = true;
+  setSelectedArea(bounds);
+  els.mapHint.textContent = `AO ${handleKey.toUpperCase()} corner adjusted.`;
+}
+
+function finishAreaDrawing(position) {
+  if (!state.areaDrawing || !state.areaStartPoint) {
+    return;
+  }
+  const endPoint = getCartographicFromScreenPosition(position);
+  state.areaDrawing = false;
+  setCameraDragEnabled(true);
+  if (!endPoint) {
+    setAreaSelectMode(false);
+    return;
+  }
+
+  const bounds = makeBoundsFromPoints(state.areaStartPoint, endPoint);
+  if (Math.abs(bounds.east - bounds.west) < 0.0001 || Math.abs(bounds.north - bounds.south) < 0.0001) {
+    if (state.selectedArea) {
+      setAreaEntityBounds(state.selectedArea);
+    } else if (state.viewer && state.areaEntity) {
+      state.viewer.entities.remove(state.areaEntity);
+      state.areaEntity = null;
+    }
+    setAreaSelectMode(false);
+    els.mapHint.textContent = "AO drag was too small. Draw a larger rectangle.";
+    return;
+  }
+
+  state.suppressNextClick = true;
+  setAreaSelectMode(false);
+  setSelectedArea(bounds);
+}
+
 function wireMapInteraction() {
   if (state.clickHandler) {
     state.clickHandler.destroy();
@@ -1026,6 +1487,66 @@ function wireMapInteraction() {
   const handler = new Cesium.ScreenSpaceEventHandler(state.viewer.scene.canvas);
   state.clickHandler = handler;
   handler.setInputAction((movement) => {
+    const pickedHandle = getPickedAreaHandle(movement.position);
+    if (pickedHandle) {
+      state.areaResizeHandle = pickedHandle;
+      state.areaResizeAnchorPoint = getResizeAnchorPoint(pickedHandle);
+      state.areaDrawing = false;
+      state.suppressNextClick = true;
+      setAreaSelectMode(false);
+      setCameraDragEnabled(false);
+      els.mapHint.textContent = `Drag the ${pickedHandle.toUpperCase()} AO corner to adjust coverage.`;
+      return;
+    }
+
+    if (!state.areaSelectActive) {
+      return;
+    }
+    const point = getCartographicFromScreenPosition(movement.position);
+    if (!point) {
+      return;
+    }
+    state.areaStartPoint = point;
+    state.areaDrawing = true;
+    setCameraDragEnabled(false);
+  }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+
+  handler.setInputAction((movement) => {
+    if (state.areaResizeHandle && state.areaResizeAnchorPoint) {
+      const point = getCartographicFromScreenPosition(movement.endPosition);
+      if (!point) {
+        return;
+      }
+      setAreaEntityBounds(makeBoundsFromPoints(state.areaResizeAnchorPoint, point));
+      return;
+    }
+
+    if (!state.areaDrawing || !state.areaStartPoint) {
+      return;
+    }
+    const point = getCartographicFromScreenPosition(movement.endPosition);
+    if (!point) {
+      return;
+    }
+    setAreaEntityBounds(makeBoundsFromPoints(state.areaStartPoint, point));
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+  handler.setInputAction((movement) => {
+    if (state.areaResizeHandle) {
+      finishAreaResize(movement.position);
+      return;
+    }
+    finishAreaDrawing(movement.position);
+  }, Cesium.ScreenSpaceEventType.LEFT_UP);
+
+  handler.setInputAction((movement) => {
+    if (state.suppressNextClick) {
+      state.suppressNextClick = false;
+      return;
+    }
+    if (state.areaSelectActive || state.areaDrawing) {
+      return;
+    }
     const cartesian = state.viewer.scene.pickPosition(movement.position)
       || state.viewer.camera.pickEllipsoid(movement.position, state.viewer.scene.globe.ellipsoid);
     if (!cartesian) {
@@ -1054,6 +1575,9 @@ async function buildViewer() {
       state.clickHandler = null;
     }
     state.viewer.destroy();
+    state.markerEntity = null;
+    state.areaEntity = null;
+    state.areaHandleEntities = [];
   }
 
   if (state.config.cesium_ion_token) {
@@ -1084,6 +1608,7 @@ async function buildViewer() {
 
   state.viewer.scene.globe.depthTestAgainstTerrain = false;
   state.viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+  state.viewer.camera.percentageChanged = 0.01;
 
   const target = state.lastCamera || {
     lat: state.config.default_lat,
@@ -1098,12 +1623,19 @@ async function buildViewer() {
 
   els.imageryStatus.textContent = imagery.label;
   els.terrainStatus.textContent = terrain.label;
-  els.previewStatus.textContent = `${imagery.label} with ${terrain.label.replace("Terrain: ", "")}`;
   installResizeHandling();
   state.viewer.resize();
   state.viewer.scene.requestRender();
   wireMapInteraction();
+  if (state.selectedPoint) {
+    setMarker(state.selectedPoint);
+  }
+  if (state.selectedArea) {
+    setAreaEntityBounds(state.selectedArea);
+  }
   updateSelectedPoint();
+  updateSelectedArea();
+  updateMapInstruments();
 }
 
 function resetView() {
@@ -1214,19 +1746,30 @@ async function streamSelectedSources() {
 async function init() {
   clearChat();
   applyPanelState();
+  updateSelectedArea();
 
   if (!state.handlersBound) {
     els.promptForm.addEventListener("submit", submitPrompt);
     els.promptInput.addEventListener("keydown", onPromptInputKeyDown);
     els.clearChatBtn.addEventListener("click", clearChat);
     els.resetViewBtn.addEventListener("click", resetView);
+    els.mapResetViewBtn.addEventListener("click", resetView);
     els.panelToggleBtn.addEventListener("click", togglePanel);
     els.settingsToggleBtn.addEventListener("click", toggleSettingsMenu);
     els.panelResizer.addEventListener("pointerdown", onResizerPointerDown);
-    els.selectRecommendedBtn.addEventListener("click", selectRecommendedSources);
+    els.workflowPrevBtn.addEventListener("click", () => {
+      setWorkflowStage(state.workflowStageIndex - 1);
+    });
+    els.workflowNextBtn.addEventListener("click", () => {
+      setWorkflowStage(state.workflowStageIndex + 1);
+    });
+    els.confirmSourcesBtn.addEventListener("click", confirmSources);
+    els.drawAreaBtn.addEventListener("click", () => {
+      setAreaSelectMode(!state.areaSelectActive);
+    });
+    els.clearAreaBtn.addEventListener("click", clearSelectedArea);
     els.streamSelectedBtn.addEventListener("click", streamSelectedSources);
     els.buildPackageBtn.addEventListener("click", buildSourcePackage);
-    els.missionFocusSelect.addEventListener("change", selectRecommendedSources);
     els.imagerySelect.addEventListener("change", async (event) => {
       state.imageryMode = event.target.value;
       await buildViewer();

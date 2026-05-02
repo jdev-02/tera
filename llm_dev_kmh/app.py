@@ -38,8 +38,12 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class SourceContext(BaseModel):
     mission_focus: str | None = Field(default=None, max_length=120)
+    mission_text: str | None = Field(default=None, max_length=2000)
     selected_source_ids: list[str] = Field(default_factory=list)
     selected_source_names: list[str] = Field(default_factory=list)
+    required_source_ids: list[str] = Field(default_factory=list)
+    optional_source_ids: list[str] = Field(default_factory=list)
+    clarifying_questions: list[str] = Field(default_factory=list)
     package_summary: str | None = Field(default=None, max_length=2000)
 
 
@@ -87,6 +91,7 @@ class ViewBounds(BaseModel):
 
 class MapContext(BaseModel):
     selected_point: MapPoint | None = None
+    selected_area: ViewBounds | None = None
     camera: MapPoint | None = None
     view_bounds: ViewBounds | None = None
     imagery_source: str | None = Field(default=None, max_length=200)
@@ -113,6 +118,23 @@ class SourceOption(BaseModel):
 class SourceCatalogResponse(BaseModel):
     primary_streams: list[str]
     sources: list[SourceOption]
+
+
+class SourceRecommendationRequest(BaseModel):
+    mission_text: str = Field(min_length=1, max_length=12000)
+    map_context: MapContext | None = None
+
+
+class SourceRecommendationResponse(BaseModel):
+    mission_focus: str
+    mission_summary: str
+    required_source_ids: list[str]
+    optional_source_ids: list[str]
+    selected_source_ids: list[str]
+    sources: list[SourceOption]
+    clarifying_questions: list[str]
+    rationale: list[str]
+    package_name_suggestion: str
 
 
 class DownloadPlanRequest(BaseModel):
@@ -588,6 +610,30 @@ SOURCE_BY_ID: dict[str, SourceOption] = {source.id: source for source in SOURCE_
 PRIMARY_STREAM_SOURCE_IDS = ["esri_world_imagery", "cesium_world_terrain", "osm_basemap"]
 PACKAGE_MANIFESTS: dict[str, dict[str, object]] = {}
 
+FOCUS_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("water-access", ("water", "stream", "river", "spring", "lake", "potable", "hydrate")),
+    ("sar-planning", ("search", "rescue", "sar", "missing", "lost person", "hasty")),
+    ("evacuation", ("evac", "evacuation", "exfil", "casualty", "ambulance", "convoy")),
+    ("signal-planning", ("signal", "radio", "comms", "communications", "line of sight", "relay")),
+    ("hazard-routing", ("wildfire", "fire", "flood", "storm", "avalanche", "hazard", "closure")),
+    ("access-control", ("private", "restricted", "public land", "access", "boundary", "parcel")),
+    ("terrain-routing", ("route", "patrol", "walk", "foot", "trail", "slope", "terrain", "ridge")),
+    ("imagery-preview", ("imagery", "aerial", "satellite", "visual", "inspect", "preview")),
+)
+
+US_CONTEXT_TERMS = (
+    "united states",
+    "u.s.",
+    " usa",
+    "california",
+    "san francisco",
+    "sf ",
+    "national forest",
+    "blm",
+    "nps",
+    "usfs",
+)
+
 
 def _get_source_options_by_ids(source_ids: list[str]) -> list[SourceOption]:
     seen: set[str] = set()
@@ -629,15 +675,35 @@ def _format_source_context(source_context: SourceContext | None) -> str:
     selected_sources = ", ".join(names) if names else "none selected"
     lines = [
         f"- Mission focus: {source_context.mission_focus or 'not provided'}",
+        f"- Mission text: {source_context.mission_text or 'not provided'}",
         f"- Selected data sources: {selected_sources}",
     ]
+    if source_context.required_source_ids:
+        required_names = [
+            SOURCE_BY_ID[source_id].name
+            for source_id in source_context.required_source_ids
+            if source_id in SOURCE_BY_ID
+        ]
+        lines.append(f"- Required sources inferred: {', '.join(required_names)}")
+    if source_context.optional_source_ids:
+        optional_names = [
+            SOURCE_BY_ID[source_id].name
+            for source_id in source_context.optional_source_ids
+            if source_id in SOURCE_BY_ID
+        ]
+        lines.append(f"- Optional sources inferred: {', '.join(optional_names)}")
+    if source_context.clarifying_questions:
+        lines.append(
+            "- Socratic questions to ask next: "
+            + " | ".join(source_context.clarifying_questions)
+        )
     if source_context.package_summary:
         lines.append(f"- Package summary: {source_context.package_summary}")
     return "\n".join(lines)
 
 
 def _format_manifest_bounds(map_context: MapContext | None) -> dict[str, float | None] | None:
-    bounds = map_context.view_bounds if map_context else None
+    bounds = (map_context.selected_area or map_context.view_bounds) if map_context else None
     if bounds is None:
         return None
     return {
@@ -648,6 +714,248 @@ def _format_manifest_bounds(map_context: MapContext | None) -> dict[str, float |
         "center_lat": bounds.center_lat,
         "center_lon": bounds.center_lon,
     }
+
+
+def _text_has_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _infer_is_us_context(prompt_text: str, map_context: MapContext | None) -> bool:
+    if _text_has_any(prompt_text, US_CONTEXT_TERMS):
+        return True
+    bounds = (map_context.selected_area or map_context.view_bounds) if map_context else None
+    if bounds and bounds.center_lat is not None and bounds.center_lon is not None:
+        return 18.0 <= bounds.center_lat <= 72.0 and -170.0 <= bounds.center_lon <= -50.0
+    point = map_context.selected_point if map_context else None
+    if point:
+        return 18.0 <= point.lat <= 72.0 and -170.0 <= point.lon <= -50.0
+    return False
+
+
+def _infer_mission_focus(prompt_text: str) -> str:
+    scores: dict[str, int] = {}
+    for focus, keywords in FOCUS_KEYWORDS:
+        score = sum(1 for keyword in keywords if keyword in prompt_text)
+        if score:
+            scores[focus] = score
+    if not scores:
+        return "mission-data-package"
+    return max(scores.items(), key=lambda item: item[1])[0]
+
+
+def _append_unique(source_ids: list[str], *new_source_ids: str) -> None:
+    for source_id in new_source_ids:
+        if source_id in SOURCE_BY_ID and source_id not in source_ids:
+            source_ids.append(source_id)
+
+
+def _sanitize_package_slug(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-")
+    return slug[:60] or "mission-package"
+
+
+def _infer_source_recommendation(
+    mission_text: str, map_context: MapContext | None
+) -> SourceRecommendationResponse:
+    prompt_text = mission_text.strip().lower()
+    is_us_context = _infer_is_us_context(prompt_text, map_context)
+    mission_focus = _infer_mission_focus(prompt_text)
+
+    required_ids: list[str] = []
+    optional_ids: list[str] = []
+    questions: list[str] = []
+    rationale: list[str] = []
+
+    _append_unique(optional_ids, "esri_world_imagery", "osm_basemap")
+    rationale.append("Esri imagery and OSM basemap stay as lightweight preview/context layers.")
+
+    needs_routing = _text_has_any(
+        prompt_text,
+        (
+            "route",
+            "routing",
+            "patrol",
+            "walk",
+            "foot",
+            "trail",
+            "road",
+            "evac",
+            "exfil",
+            "nearest",
+            "avoid",
+        ),
+    )
+    needs_terrain = needs_routing or _text_has_any(
+        prompt_text,
+        ("terrain", "slope", "ridge", "mountain", "valley", "steep", "exposed", "viewshed"),
+    )
+    needs_water = _text_has_any(
+        prompt_text, ("water", "stream", "river", "spring", "lake", "potable", "hydrate")
+    )
+    needs_landcover = needs_routing or _text_has_any(
+        prompt_text, ("cover", "conceal", "brush", "forest", "canopy", "wetland", "vegetation")
+    )
+    needs_hazards = _text_has_any(
+        prompt_text,
+        ("wildfire", "fire", "flood", "storm", "weather", "avalanche", "closure", "hazard"),
+    )
+    needs_access = _text_has_any(
+        prompt_text,
+        ("private", "restricted", "public land", "boundary", "parcel", "permission", "access"),
+    )
+    needs_signal = _text_has_any(
+        prompt_text,
+        ("signal", "radio", "comms", "communications", "line of sight", "los", "relay"),
+    )
+    needs_sar = _text_has_any(prompt_text, ("sar", "search", "rescue", "missing", "lost person"))
+    needs_current_imagery = _text_has_any(
+        prompt_text, ("current", "recent", "latest", "flood", "burn", "changed", "cloud")
+    )
+
+    if needs_routing:
+        _append_unique(required_ids, "osm_extract")
+        rationale.append("OSM PBF is required for the local routable graph and POI/feature lookup.")
+
+    if needs_terrain:
+        _append_unique(required_ids, "usgs_3dep" if is_us_context else "copernicus_dem")
+        _append_unique(optional_ids, "cesium_world_terrain")
+        rationale.append("An analysis DEM is required for slope, exposure, hydrology, and cost surfaces.")
+
+    if needs_landcover:
+        _append_unique(required_ids, "nlcd" if is_us_context else "esa_worldcover")
+        rationale.append(
+            "Land cover is included only because the mission mentions movement "
+            "friction, cover, vegetation, or route quality."
+        )
+
+    if needs_water:
+        _append_unique(required_ids, "usgs_3dhp" if is_us_context else "hydrosheds")
+        if is_us_context:
+            _append_unique(optional_ids, "nwis")
+        _append_unique(optional_ids, "sentinel_2")
+        rationale.append(
+            "Hydrography is required for water-source and drainage queries; "
+            "imagery/observations are optional confidence boosters."
+        )
+
+    if needs_sar:
+        _append_unique(required_ids, "osm_extract")
+        _append_unique(optional_ids, "naip" if is_us_context else "sentinel_2", "noaa_alerts")
+        rationale.append(
+            "SAR planning needs access features and often benefits from "
+            "high-detail imagery and current alerts."
+        )
+
+    if needs_hazards:
+        _append_unique(optional_ids, "noaa_alerts")
+        if "fire" in prompt_text or "wildfire" in prompt_text:
+            _append_unique(required_ids, "nasa_firms")
+        if "flood" in prompt_text:
+            _append_unique(required_ids, "fema_flood" if is_us_context else "sentinel_1_sar")
+        rationale.append(
+            "Hazard feeds are included only when the mission says current "
+            "hazards affect routing or safety."
+        )
+
+    if needs_access:
+        _append_unique(required_ids, "pad_us" if is_us_context else "parcels_boundaries")
+        if is_us_context:
+            _append_unique(optional_ids, "blm_usfs_nps", "parcels_boundaries")
+        rationale.append(
+            "Access and boundary layers are included only when "
+            "legal/restricted movement matters."
+        )
+
+    if needs_signal:
+        _append_unique(required_ids, "viewshed_surfaces")
+        _append_unique(optional_ids, "fcc_towers" if is_us_context else "osm_towers", "osm_towers")
+        if not needs_terrain:
+            _append_unique(required_ids, "usgs_3dep" if is_us_context else "copernicus_dem")
+        rationale.append("Signal planning requires DEM-derived viewsheds plus tower/high-ground candidates.")
+
+    if needs_current_imagery and not needs_water and not needs_hazards:
+        _append_unique(optional_ids, "sentinel_2", "landsat_collection_2")
+        if is_us_context:
+            _append_unique(optional_ids, "naip")
+        rationale.append(
+            "Current or historical imagery is optional unless the mission "
+            "depends on recent conditions."
+        )
+
+    if not required_ids:
+        questions.append(
+            "Which mission outcome must the database answer first: routing, "
+            "water lookup, SAR sectors, signal planning, hazards, or access "
+            "control? This decides the required source family."
+        )
+        rationale.append(
+            "No deterministic analytical layer was inferred yet, so the "
+            "package stays in preview mode."
+        )
+
+    if needs_routing and not _text_has_any(
+        prompt_text, ("foot", "vehicle", "atv", "convoy", "boat", "drone")
+    ):
+        questions.append(
+            "Should movement be optimized for foot, vehicle, ATV, boat, "
+            "drone, or mixed movement? This determines whether OSM roads "
+            "alone are enough or whether trail/off-road friction layers are "
+            "required."
+        )
+    if needs_water:
+        questions.append(
+            "Is the operator asking for mapped water features only, or "
+            "confidence in current and potable water availability? The "
+            "broader answer adds observation or imagery layers beyond "
+            "hydrography."
+        )
+    if needs_hazards:
+        questions.append(
+            "Which hazards must be current at package time versus treated as "
+            "cached baseline risk? Current hazards add live feeds; baseline "
+            "risk keeps the package smaller."
+        )
+    if needs_signal:
+        questions.append(
+            "What antenna height and radio role should viewshed or relay "
+            "analysis assume? This controls whether tower datasets are needed "
+            "or a DEM-derived viewshed is sufficient."
+        )
+    if needs_access:
+        questions.append(
+            "Should the package enforce legal or restricted access boundaries, "
+            "or only support terrain movement? Enforcing access adds parcels, "
+            "protected areas, or land-management boundaries."
+        )
+    if map_context is None or (map_context.selected_area is None and map_context.view_bounds is None):
+        questions.append(
+            "Is this AO inside the U.S. or outside it? That choice switches "
+            "between U.S.-authoritative layers and global open layers."
+        )
+
+    selected_ids = []
+    preview_ids = [
+        source_id
+        for source_id in ("esri_world_imagery", "osm_basemap")
+        if source_id in optional_ids
+    ]
+    _append_unique(selected_ids, *required_ids, *preview_ids)
+    sources = _get_source_options_by_ids(selected_ids)
+    mission_summary = mission_text.strip()
+    if len(mission_summary) > 220:
+        mission_summary = f"{mission_summary[:217]}..."
+
+    return SourceRecommendationResponse(
+        mission_focus=mission_focus,
+        mission_summary=mission_summary,
+        required_source_ids=required_ids,
+        optional_source_ids=[source_id for source_id in optional_ids if source_id not in required_ids],
+        selected_source_ids=selected_ids,
+        sources=sources,
+        clarifying_questions=questions[:3],
+        rationale=rationale[:5],
+        package_name_suggestion=f"tera-{_sanitize_package_slug(mission_focus)}",
+    )
 
 
 AGENT_PROFILE_PROMPTS: dict[str, str] = {
@@ -1119,6 +1427,9 @@ def _build_system_prompt(request: PromptRequest) -> str:
     )
     map_lines = [
         _format_point("Selected point", map_context.selected_point if map_context else None),
+        _format_view_bounds(map_context.selected_area if map_context else None).replace(
+            "Visible map bounds", "Selected AO bounds"
+        ),
         _format_point("Camera position", map_context.camera if map_context else None),
         _format_view_bounds(map_context.view_bounds if map_context else None),
         f"- Imagery source: {(map_context.imagery_source if map_context else None) or 'unknown'}",
@@ -1156,6 +1467,25 @@ def _build_system_prompt(request: PromptRequest) -> str:
                         "- For imagery-sourcing requests, separate display streams from "
                         "analysis/download datasets and explain required, optional, and "
                         "not-needed sources."
+                    ),
+                    (
+                        "- Do not recommend the full catalog. Optimize for the smallest "
+                        "package that enables the mission and explain what would be missing "
+                        "if a source is omitted."
+                    ),
+                    (
+                        "- Ask no more than three clarifying questions, and only ask "
+                        "questions that would materially change the data package."
+                    ),
+                    (
+                        "- Use a Socratic sourcing dialogue for imagery-sourcing: "
+                        "reflect the mission read, ask ranked questions that broaden "
+                        "or limit the package, and state what source decision each "
+                        "answer controls."
+                    ),
+                    (
+                        "- Do not present a final manifest-style answer until the "
+                        "planner has confirmed mission scope and source families."
                     ),
                     "- Do not invent exact trails, water, roads, hazards, or route geometry.",
                     (
@@ -1262,6 +1592,13 @@ async def list_data_sources() -> SourceCatalogResponse:
     )
 
 
+@app.post("/api/source-package/recommend", response_model=SourceRecommendationResponse)
+async def recommend_source_package(
+    request: SourceRecommendationRequest,
+) -> SourceRecommendationResponse:
+    return _infer_source_recommendation(request.mission_text, request.map_context)
+
+
 def _build_package_manifest(
     *,
     package_id: str,
@@ -1346,7 +1683,9 @@ def _download_plan_warnings(
         warnings.append(f"Unknown source ids ignored: {', '.join(unknown_ids)}")
     if not sources:
         warnings.append("No sources selected; manifest has no server ingest work.")
-    if request.map_context is None or request.map_context.view_bounds is None:
+    if request.map_context is None or (
+        request.map_context.selected_area is None and request.map_context.view_bounds is None
+    ):
         warnings.append("No AO bounds were provided; downloads must be clipped before ingest.")
     if not any(source.id == "osm_extract" for source in sources):
         warnings.append("OSM PBF extract is not selected, so server-side routable graph work is blocked.")
