@@ -1,0 +1,76 @@
+# team.yml -- single source of truth for the team.
+# Read by scripts/onboard.sh, .agents/onboard/*.md, and CODEOWNERS at kickoff.
+#
+# Update github_username for each member at kickoff (Jon owns this).
+# Then run: bash scripts/sync-team.sh   (rewrites CODEOWNERS with the real handles)
+
+team:
+  - id: jon
+    name: Jon
+    role: P1
+    lane: agent / ontology / voice (in+out) / eval / figma
+    background: >
+      Navy Cyber Warfare Officer; CS + AI focus, specifically ontology.
+      Owns UI/UX end-to-end (Figma reassigned to him at kickoff review 2026-05-02).
+      Wrote the parsing-verification paper (see /docs/papers/).
+    directories: [agent, ontology, voice, eval, figma]
+    pairs_with: [ben]
+    presenter_role: floor support (AI / agent questions)
+    primary_issues: ["#4", "#5", "#6", "#10", "#17", "#18", "#21", "#26-tts"]
+    github_username: jdev-02
+    email: TODO_jon_email
+
+  - id: satriyo
+    name: Satriyo
+    role: P2
+    lane: security / crypto / infra / CI
+    background: >
+      Indonesian Navy; cybersecurity. Owns the threat model and the
+      ML-DSA signer. Reads Jon's parsing-verification paper before kickoff.
+    directories: [security, crypto, infra, .github, .agents]
+    pairs_with: [ben, kyle]
+    presenter_role: floor support (security / PQC questions)
+    primary_issues: ["#2", "#3", "#12", "#15", "#19", "#22"]
+    github_username: aleens-labs
+    email: TODO_satriyo_email
+
+  - id: kyle
+    name: Kyle
+    role: P3
+    lane: hardware / deploy / models / mesh
+    background: >
+      USMC SIGINT Officer; robotics background. Brought the Jetson Orin Nano,
+      display, battery, and Android EUD. Owns the demo-day device wrangling.
+    directories: [hardware, deploy, models, mesh]
+    pairs_with: [satriyo]
+    presenter_role: Presenter B (drives the live demo on stage)
+    primary_issues: ["#11", "#14", "#16", "#23", "#24", "#25"]
+    github_username: khicks1724          # primary (laptop / Codex / Cesium Ion)
+    github_username_alt: kylemhicks      # Jetson commits flow from this account
+    email: TODO_kyle_email
+    resources_owned:
+      - { name: "Cesium Ion token", scope: "NPS SF Hackathon, khicks1724", consumers: [jon, ben], stored_in: ".env -> CESIUM_ION_TOKEN" }
+      - { name: "RFSim repo (reference, not copy-paste)", url: "https://github.com/khicks1724/RFSim", note: "Kyle's prior RF simulator. Public + openly accessible per hackathon Tool Usage rule. Use as a REFERENCE for design patterns or as a dependency if licensed permissively. Do NOT copy-paste source into our repo (project must be 'new work only'). Most relevant to: mesh stretch (#23), parsing-verification on RF anomalies (#22)." }
+
+  - id: ben
+    name: Ben
+    role: P4
+    lane: atak / routing / data
+    background: >
+      USMC Combat Engineer; CS student; Marine Corps Mountain Warfare School.
+      Operator credibility for the pitch ("I trained at Mountain Warfare").
+      (Figma reassigned to Jon at kickoff review 2026-05-02.)
+    directories: [atak, routing, data]
+    pairs_with: [jon, satriyo]
+    presenter_role: Presenter A (lead narrator on stage)
+    primary_issues: ["#7", "#8", "#9", "#13", "#20", "#25"]
+    github_username: benschwierking
+    email: TODO_ben_email
+
+# Shared roles
+integrators:
+  rotation:
+    - { from: "Sat 1145", to: "Sat 1900", who: jon }
+    - { from: "Sat 1900", to: "Sun 0700", who: kyle }
+    - { from: "Sun 0700", to: "Sun 1200", who: ben }
+  always_on_security_review: satriyo
