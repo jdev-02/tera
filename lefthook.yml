@@ -1,0 +1,35 @@
+# lefthook.yml — git hook runner. PRD §14.4.
+# Install: pip install lefthook  OR  brew install lefthook
+# Activate: lefthook install
+
+pre-commit:
+  commands:
+    fmt:
+      run: ruff format {staged_files}
+    lint:
+      run: ruff check {staged_files}
+    secrets:
+      run: |
+        # Block accidental .env or key file commits
+        if git diff --cached --name-only | grep -E '\.(env|sk|pem|key)$'; then
+          echo "[ERROR] Refusing to commit secret/key files. Remove them from staging."
+          exit 1
+        fi
+
+pre-push:
+  commands:
+    ci:
+      run: make ci
+
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        MSG=$(cat {1})
+        if ! echo "$MSG" | grep -qE '^(feat|fix|chore|docs|refactor|test|ci|security|crypto)\([a-z/]+\):'; then
+          echo "[ERROR] Commit message must follow conventional commits:"
+          echo "  feat(agent): add freshwater poi tool"
+          echo "  fix(routing): correct slope threshold"
+          echo "  security(crypto): add ML-DSA signer"
+          exit 1
+        fi

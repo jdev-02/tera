@@ -1,0 +1,38 @@
+# CODEOWNERS — enforced by GitHub branch protection.
+# PRD §13: directory ownership split. Cross-directory PRs require paired reviewer.
+# P2 sets up and maintains this file.
+
+# Default fallback
+*                   @p2-cyber
+
+# P1 — Navy Cyber Warfare Officer
+/agent/             @p1-nav
+/ontology/          @p1-nav
+/eval/              @p1-nav
+/voice/             @p1-nav
+
+# P2 — Indonesian Navy (Cybersecurity)  ← YOU
+/security/          @p2-cyber
+/crypto/            @p2-cyber
+/infra/             @p2-cyber
+/.github/           @p2-cyber
+/.cursor/           @p2-cyber
+/lefthook.yml       @p2-cyber
+/Makefile           @p2-cyber
+/CODEOWNERS         @p2-cyber
+
+# P3 — USMC SIGINT Officer
+/hardware/          @p3-hw
+/deploy/            @p3-hw
+/models/            @p3-hw
+/mesh/              @p3-hw
+
+# P4 — USMC Combat Engineer
+/atak/              @p4-atak
+/routing/           @p4-atak
+/data/              @p4-atak
+/figma/             @p4-atak
+
+# Shared — all four sign off
+/docs/              @p1-nav @p2-cyber @p3-hw @p4-atak
+/README.md          @p1-nav @p2-cyber @p3-hw @p4-atak

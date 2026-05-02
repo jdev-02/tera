@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RouteQuery",
+  "description": "Schema-validated structured geospatial query. The LLM may only produce output conforming to this schema. It cannot call tools, sign routes, or modify policy directly.",
+  "type": "object",
+  "required": [
+    "mission_type",
+    "objective",
+    "max_distance_km",
+    "constraints",
+    "allowed_data_layers",
+    "authority_context"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "mission_type": {
+      "type": "string",
+      "enum": ["search_and_rescue", "tactical_route", "evacuation_route"]
+    },
+    "objective": {
+      "type": "string",
+      "enum": [
+        "fastest_route",
+        "fastest_covered_route",
+        "nearest_water",
+        "priority_search_area"
+      ]
+    },
+    "destination_type": {
+      "type": "string",
+      "enum": ["freshwater", "safe_zone", "trailhead", "known_location", "none"]
+    },
+    "max_distance_km": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "avoid_ridgelines",
+          "prefer_cover",
+          "avoid_high_comms_risk",
+          "avoid_steep_terrain",
+          "stay_on_trails"
+        ]
+      }
+    },
+    "allowed_data_layers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "terrain",
+          "trails",
+          "hydrography",
+          "roads",
+          "safe_zones",
+          "comms_risk"
+        ]
+      }
+    },
+    "authority_context": {
+      "type": "object",
+      "required": ["user_role", "requires_approval"],
+      "additionalProperties": false,
+      "properties": {
+        "user_role": {
+          "type": "string",
+          "enum": ["operator", "team_lead", "viewer"]
+        },
+        "requires_approval": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

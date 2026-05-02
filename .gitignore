@@ -1,0 +1,36 @@
+# Secrets — never commit
+.env
+*.env
+.env.*
+
+# Crypto private keys — never commit
+crypto/keys/*.sk
+crypto/keys/*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Models (use LFS or external bucket with hash check — PRD §7.2)
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
+# Map data (large binary — ship via hash-verified bundle)
+data/*.pbf
+data/*.tif
+data/*.img
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
