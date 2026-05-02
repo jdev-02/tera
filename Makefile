@@ -17,9 +17,10 @@ help: ## Show this help
 onboard: ## "I am Ben, get me ready to party." (interactive). Pass NAME=ben to skip prompt.
 	@bash scripts/onboard.sh $(NAME)
 
-$(VENV)/bin/activate: pyproject.toml ## Create venv if missing
+$(VENV)/bin/activate: pyproject.toml requirements-ci.txt ## Create venv if missing
 	$(PY) -m venv $(VENV)
 	$(PIP) install --upgrade pip
+	$(PIP) install -r requirements-ci.txt
 	$(PIP) install -e ".[dev]"
 
 install: $(VENV)/bin/activate ## Install core deps into venv (everyone runs this first)
@@ -46,22 +47,28 @@ fmt: install ## Format code with ruff
 	$(RUFF) format .
 	$(RUFF) check --fix .
 
-lint: install ## Lint with ruff + mypy
+lint: install ## Lint with ruff + mypy (mypy only on populated lanes)
 	$(RUFF) check .
 	$(RUFF) format --check .
-	$(MYPY) agent routing crypto
+	@for d in agent routing crypto security; do \
+		if [ -n "$$(find $$d -name '*.py' -type f 2>/dev/null)" ]; then \
+			echo "$(MYPY) $$d --ignore-missing-imports --no-error-summary"; \
+			$(MYPY) $$d --ignore-missing-imports --no-error-summary || exit 1; \
+		else \
+			echo "[mypy] skipping $$d (no .py files yet)"; \
+		fi; \
+	done
 
-test: install ## Run pytest (fast tests only)
-	$(PYTEST) -q -m "not slow"
+test: install ## Run pytest, including P2 security regressions
+	$(PYTEST) -q -m "not slow" tests security crypto
 
-security: install ## Bandit + pip-audit + gitleaks
-	@if [ ! -f $(BANDIT) ]; then echo "bandit missing; run 'make install' first"; exit 1; fi
-	$(BANDIT) -r agent routing atak voice security -ll || true
-	$(PIPAUDIT) --strict --skip-editable || true
+security: install ## Bandit + pip-audit + optional gitleaks
+	$(BANDIT) -r agent routing atak voice security crypto -ll -q
+	$(PIPAUDIT) -r requirements-ci.txt --desc --fix --dry-run
 	@if which gitleaks > /dev/null 2>&1; then \
-		gitleaks detect --no-banner --redact --no-git || true; \
+		gitleaks detect --no-banner --redact --no-git; \
 	else \
-		echo "[security] gitleaks not installed (brew install gitleaks); skipping secret scan"; \
+		echo "[security] gitleaks not installed locally; GitHub Action still runs gitleaks"; \
 	fi
 
 ci: lint test security ## Full CI gate (must pass before push)
@@ -71,7 +78,7 @@ run: install ## Start the agent service locally (stub)
 	$(VENV)/bin/uvicorn agent.app:app --host 0.0.0.0 --port 8000 --reload
 
 demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
-	@echo "make demo: not yet wired \u2014 will run hero scenario E2E by Sun 0500"
+	@echo "make demo: not yet wired - will run hero scenario E2E by Sun 0500"
 	@echo "stub: hitting /plan with sample prompt"
 	@curl -s -X POST http://localhost:8000/plan \
 	    -H 'Content-Type: application/json' \
