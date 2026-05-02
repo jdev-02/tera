@@ -46,10 +46,17 @@ fmt: install ## Format code with ruff
 	$(RUFF) format .
 	$(RUFF) check --fix .
 
-lint: install ## Lint with ruff + mypy
+lint: install ## Lint with ruff + mypy (mypy only on populated lanes)
 	$(RUFF) check .
 	$(RUFF) format --check .
-	$(MYPY) agent routing crypto
+	@for d in agent routing crypto; do \
+		if [ -n "$$(find $$d -name '*.py' -type f 2>/dev/null)" ]; then \
+			echo "$(MYPY) $$d"; \
+			$(MYPY) $$d || exit 1; \
+		else \
+			echo "[mypy] skipping $$d (no .py files yet)"; \
+		fi; \
+	done
 
 test: install ## Run pytest (fast tests only)
 	$(PYTEST) -q -m "not slow"
