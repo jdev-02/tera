@@ -28,57 +28,113 @@
     <div class="workspace-shell">
       <main class="map-stage">
         <div id="cesiumContainer" class="map-canvas"></div>
-        <div class="map-overlay top-left">
-          <div class="overlay-card">
-            <strong>Source Preview</strong>
-            <span id="previewStatus">Stream imagery, terrain, and OSM basemaps while building an offline package.</span>
+        <div class="map-overlay top-right">
+          <div class="map-instruments" aria-label="Map orientation controls">
+            <div class="instrument-row">
+              <div class="compass-instrument" aria-label="Map heading">
+                <div id="compassRose" class="compass-rose">
+                  <span class="compass-label compass-n">N</span>
+                  <span class="compass-label compass-e">E</span>
+                  <span class="compass-label compass-s">S</span>
+                  <span class="compass-label compass-w">W</span>
+                  <span class="compass-needle"></span>
+                </div>
+                <div id="compassHeading" class="instrument-value">000 deg</div>
+              </div>
+              <div class="tilt-instrument" aria-label="Map inclination">
+                <div class="tilt-scale">
+                  <span class="tilt-mark top"></span>
+                  <span id="tiltNeedle" class="tilt-needle"></span>
+                  <span class="tilt-mark bottom"></span>
+                </div>
+                <div id="tiltValue" class="instrument-value">0 deg tilt</div>
+              </div>
+            </div>
+            <button id="mapResetViewBtn" class="map-reset-button" type="button">Reset View</button>
           </div>
         </div>
         <div class="map-overlay bottom-right">
-          <div class="overlay-card" id="mapHint">Click the map to pin AO context for the package manifest and advisor.</div>
+          <div class="overlay-card" id="mapHint">Click the map to pin context. AO drawing unlocks after source confirmation.</div>
         </div>
       </main>
 
       <div id="panelResizer" class="panel-resizer" role="separator" aria-orientation="vertical" aria-label="Resize planner panel"></div>
 
       <aside id="agentPanel" class="agent-panel">
-        <section class="sidebar-card source-panel-shell">
+        <section id="sourcePanel" class="sidebar-card source-panel-shell workflow-panel is-empty">
           <div class="section-header">
             <div>
               <h2>Data Package</h2>
               <div id="sourceCount" class="section-meta">Loading sources...</div>
             </div>
-            <button id="selectRecommendedBtn" class="ghost-button small-button" type="button">Recommended</button>
+            <span id="packageModeChip" class="chip">Awaiting mission</span>
           </div>
 
-          <div class="package-controls">
-            <label>
-              Mission focus
-              <select id="missionFocusSelect">
-                <option value="terrain-routing">Terrain routing</option>
-                <option value="water-access">Water access</option>
-                <option value="sar-planning">SAR planning</option>
-                <option value="evacuation">Evacuation</option>
-                <option value="signal-planning">Signal planning</option>
-                <option value="hazard-routing">Hazard routing</option>
-                <option value="access-control">Access control</option>
-                <option value="imagery-preview">Imagery preview</option>
-              </select>
-            </label>
-            <label>
-              Package name
-              <input id="packageNameInput" type="text" placeholder="sf-water-route-package" />
-            </label>
+          <div id="workflowEmpty" class="workflow-empty">Describe the mission in chat to begin source planning.</div>
+
+          <div id="workflowCarousel" class="workflow-carousel hidden" aria-live="polite">
+            <div class="workflow-nav">
+              <button id="workflowPrevBtn" class="ghost-button icon-button carousel-arrow" type="button" aria-label="Previous workflow step">&lt;</button>
+              <div class="workflow-nav-center">
+                <div id="workflowStageLabel" class="section-subtitle">Mission</div>
+                <div id="workflowStageMeta" class="section-meta">Review extracted mission</div>
+                <div id="workflowDots" class="workflow-dots" aria-hidden="true"></div>
+              </div>
+              <button id="workflowNextBtn" class="ghost-button icon-button carousel-arrow" type="button" aria-label="Next workflow step">&gt;</button>
+            </div>
+
+            <div class="workflow-slides">
+              <section class="workflow-slide active" data-workflow-slide="mission">
+                <div class="package-controls">
+                  <div class="mission-summary">
+                    <div class="section-subtitle">Mission extracted</div>
+                    <div id="inferredMission">Describe the mission in chat to draft a focused source package.</div>
+                  </div>
+                  <label>
+                    Package name
+                    <input id="packageNameInput" type="text" placeholder="sf-water-route-package" />
+                  </label>
+                </div>
+              </section>
+
+              <section class="workflow-slide" data-workflow-slide="questions">
+                <div class="workflow-card">
+                  <div class="section-subtitle">Socratic questions</div>
+                  <ul id="clarifyingQuestions" class="question-list"></ul>
+                </div>
+              </section>
+
+              <section class="workflow-slide" data-workflow-slide="sources">
+                <div id="sourceList" class="source-list" aria-live="polite"></div>
+                <div class="button-row source-actions">
+                  <button id="streamSelectedBtn" class="ghost-button" type="button">Stream Selected</button>
+                  <button id="confirmSourcesBtn" class="primary-button" type="button">Confirm Sources</button>
+                </div>
+              </section>
+
+              <section class="workflow-slide" data-workflow-slide="area">
+                <div id="aoLockedNotice" class="workflow-card">
+                  <div class="section-subtitle">Source AO</div>
+                  <div>Confirm the mission sources before selecting coverage.</div>
+                </div>
+                <div id="areaControlSurface" class="area-controls hidden">
+                  <div>
+                    <div class="section-subtitle">Source AO</div>
+                    <div id="selectedArea">Camera view will be used until an AO is drawn.</div>
+                  </div>
+                  <div class="area-buttons">
+                    <button id="drawAreaBtn" class="ghost-button small-button" type="button" aria-pressed="false">Draw AO</button>
+                    <button id="clearAreaBtn" class="ghost-button small-button" type="button">Clear AO</button>
+                  </div>
+                </div>
+                <div class="button-row source-actions">
+                  <button id="buildPackageBtn" class="primary-button" type="button">Build Manifest</button>
+                </div>
+              </section>
+            </div>
           </div>
 
-          <div id="sourceList" class="source-list" aria-live="polite"></div>
-
-          <div class="button-row source-actions">
-            <button id="streamSelectedBtn" class="ghost-button" type="button">Stream Selected</button>
-            <button id="buildPackageBtn" class="primary-button" type="button">Build Manifest</button>
-          </div>
-
-          <div id="packageStatus" class="section-meta">Select sources for a server ingest package.</div>
+          <div id="packageStatus" class="section-meta">No sources selected yet. Send a mission description to infer the needed package.</div>
           <pre id="packageManifest" class="package-output hidden"></pre>
           <a id="downloadManifestLink" class="download-link hidden" href="#" download>Download manifest JSON</a>
         </section>
@@ -176,7 +232,7 @@
           <div id="chatLog" class="chat-log"></div>
 
           <form id="promptForm" class="chat-composer" autocomplete="off">
-            <textarea id="promptInput" name="prompt" placeholder="Build a data package for nearest-water routing in mountainous terrain." required></textarea>
+            <textarea id="promptInput" name="prompt" placeholder="We need an offline package for a patrol to find the nearest reliable water source while avoiding steep exposed terrain." required></textarea>
             <div class="composer-actions">
               <div class="composer-hint">Enter sends. Shift+Enter inserts a new line.</div>
               <button id="submitBtn" class="primary-button" type="submit">Ask Advisor</button>
