@@ -14,6 +14,7 @@ For dev/demo: keys stored in ./keys/ relative to this file.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -73,6 +74,22 @@ class SignedPayload:
             "key_id": self.key_id,
             "algorithm": self.algorithm,
             "timestamp": self.timestamp,
+            "payload_hash": self.payload_hash,
+        }
+
+    def to_signature_dict(self, canonicalization: str = "payload-json-v1") -> dict:
+        """
+        Return the signature envelope shape expected by docs/contracts/cot_signed.md.
+
+        The legacy `to_dict()` method remains intentionally unchanged because
+        existing verification code consumes its internal field names.
+        """
+        return {
+            "scheme": self.algorithm,
+            "key_id": self.key_id,
+            "signed_at": self.timestamp,
+            "canonicalization": canonicalization,
+            "value_b64": base64.b64encode(bytes.fromhex(self.signature)).decode("ascii"),
             "payload_hash": self.payload_hash,
         }
 
