@@ -36,7 +36,6 @@ data/dem/*.tif
 
 .archive/
 .DS_Store
-Thumbs.db
 .vscode/
 .idea/
 *.swp
