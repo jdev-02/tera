@@ -7,6 +7,7 @@ the TERA hackathon demo.
 
 P2 owns the security claim that natural language, map text, compromised local
 context, and unsigned CoT messages cannot become trusted route authority.
+The paper/pitch framing lives in `docs/cyber_mitigation_contribution.md`.
 
 The demo should prove four things:
 
@@ -14,6 +15,8 @@ The demo should prove four things:
 2. Structured route queries are schema-validated before execution.
 3. Unsigned or tampered CoT envelopes are rejected.
 4. Offline mode produces no outbound network traffic.
+5. Device-signed routes remain provisional until `/plan/approve` returns an
+   operator signature over the same route hash.
 
 ## Preflight
 
@@ -156,6 +159,15 @@ One-sentence claim:
 ```text
 TERA does not merely compute a route; it proves whether the route is authorized,
 provenance-bound, and safe to render as trusted.
+```
+
+Paper-ready claim:
+
+```text
+TERA contributes a cyber-secure cognitive control architecture for offline
+natural-language tactical route agents: intent can guide route optimization,
+but natural language, map data, and adversarial context cannot become
+unauthorized executable instruction.
 ```
 
 ## PR Checklist

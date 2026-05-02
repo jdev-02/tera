@@ -22,6 +22,7 @@ P4 integration: from crypto.cot_signer import sign_cot, verify_cot, CotRoute
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -318,6 +319,194 @@ def verify_cot(cot_xml: str, trust_list: dict[str, bytes] | None = None) -> Veri
             key_id="",
             algorithm="",
             reason=f"CoT signature parse error: {e}",
+        )
+
+
+# -------------------------------------------------------------------------------
+# Two-signature approval wrapper verification (ADR-003)
+# -------------------------------------------------------------------------------
+
+
+def verify_approval_wrapper(
+    wrapper: dict,
+    trust_list: dict[str, bytes] | None = None,
+) -> VerificationResult:
+    """
+    Verifies the two-signature approval wrapper returned by POST /plan/approve.
+
+    Steps:
+      1. Both device_signature and operator_signature must be present.
+      2. operator_signature.approves_route_hash must equal wrapper.route_hash.
+      3. operator key_id must be in trust_list (if provided).
+      4. payload_json must hash to payload_hash and match the wrapper fields.
+      5. Operator signature must verify over canonical payload_json bytes.
+
+    The device signature is NOT re-verified here — it was verified at /plan
+    time and is bound into the operator's signed payload (so tampering it
+    invalidates the operator signature automatically).
+
+    P4 calls this in atak/bridge.py before forwarding a committed route.
+    """
+    try:
+        op_sig = wrapper.get("operator_signature") or {}
+        dev_sig = wrapper.get("device_signature") or {}
+        route_hash = wrapper.get("route_hash", "")
+
+        if not op_sig or not dev_sig:
+            return VerificationResult(
+                valid=False,
+                key_id="",
+                algorithm="",
+                reason="Missing device_signature or operator_signature — wrapper REJECTED",
+            )
+
+        key_id = op_sig.get("key_id", "")
+        algorithm = op_sig.get("scheme", "")
+        sig_b64 = op_sig.get("value_b64", "")
+        payload_hash = op_sig.get("payload_hash", "")
+        payload_json_str = op_sig.get("payload_json", "")
+
+        if not all([key_id, algorithm, sig_b64, payload_hash, payload_json_str]):
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Incomplete operator_signature fields — wrapper REJECTED",
+            )
+
+        # Step 2: route_hash binding
+        approves = op_sig.get("approves_route_hash", "")
+        if approves != route_hash:
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason=(
+                    f"operator_signature.approves_route_hash {approves!r} does not "
+                    f"match wrapper.route_hash {route_hash!r} — replay or tamper REJECTED"
+                ),
+            )
+
+        # Step 3: trust list
+        pub_key: bytes | None = None
+        if trust_list is not None:
+            pub_key = trust_list.get(key_id)
+            if pub_key is None:
+                return VerificationResult(
+                    valid=False,
+                    key_id=key_id,
+                    algorithm=algorithm,
+                    reason=f"operator key_id '{key_id}' not in trust list — wrapper REJECTED",
+                )
+
+        # Step 4: payload integrity and wrapper binding (fast, no crypto)
+        payload = json.loads(payload_json_str)
+        canonical_bytes = _canonical_json(payload)
+        if canonical_bytes != payload_json_str.encode("utf-8"):
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Operator payload_json is not canonical JSON — wrapper REJECTED",
+            )
+
+        computed = _sha256(canonical_bytes)
+        if computed != payload_hash:
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Operator payload_hash mismatch — payload tampered — wrapper REJECTED",
+            )
+
+        if payload.get("route_id") != wrapper.get("route_id"):
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Operator payload route_id does not match wrapper — wrapper REJECTED",
+            )
+
+        if payload.get("approves_route_hash") != route_hash:
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Operator payload route_hash does not match wrapper — wrapper REJECTED",
+            )
+
+        if payload.get("device_signature") != dev_sig:
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason=(
+                    "Operator payload device_signature does not match wrapper — wrapper REJECTED"
+                ),
+            )
+
+        # Step 5: signature verification
+        try:
+            sig_bytes = base64.b64decode(sig_b64)
+        except Exception:
+            return VerificationResult(
+                valid=False,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Operator signature value_b64 is not valid base64 — wrapper REJECTED",
+            )
+
+        signer = _get_signer()
+
+        if algorithm == "Ed25519-fallback":
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+            pk = (
+                cast(Ed25519PublicKey, load_pem_public_key(pub_key))
+                if pub_key
+                else cast(Ed25519PublicKey, signer._pk)
+            )
+            try:
+                pk.verify(sig_bytes, canonical_bytes)
+                ok = True
+            except Exception:
+                ok = False
+        else:
+            try:
+                import oqs
+
+                pk_bytes = pub_key if pub_key else signer.public_key_bytes
+                with oqs.Signature("Dilithium3") as s:
+                    ok = s.verify(canonical_bytes, sig_bytes, pk_bytes)
+            except Exception as e:
+                return VerificationResult(
+                    valid=False,
+                    key_id=key_id,
+                    algorithm=algorithm,
+                    reason=f"ML-DSA operator verification error: {e}",
+                )
+
+        if ok:
+            return VerificationResult(
+                valid=True,
+                key_id=key_id,
+                algorithm=algorithm,
+                reason="Both signatures valid — route is operator-committed",
+            )
+        return VerificationResult(
+            valid=False,
+            key_id=key_id,
+            algorithm=algorithm,
+            reason="Operator signature invalid — wrapper REJECTED",
+        )
+
+    except (KeyError, TypeError, ValueError) as e:
+        return VerificationResult(
+            valid=False,
+            key_id="",
+            algorithm="",
+            reason=f"Approval wrapper parse error: {e}",
         )
 
 
