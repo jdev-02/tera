@@ -1,23 +1,29 @@
-"""LLM client abstraction with device-profile gating.
+"""LLM client abstraction with multi-provider frontier + device-profile gating.
 
-Two concrete clients (`FrontierClient` for OpenAI; `OllamaClient` for local Gemma)
-sit behind a single `LLMClient` Protocol. An `LLMRegistry` decides which clients
-are available for the current device, based on the `TERA_DEVICE_PROFILE` env var.
+Three concrete clients sit behind one Protocol:
+
+  OpenAIClient     -- frontier, uses native response_format=json_schema (strict)
+  AnthropicClient  -- frontier, uses native tool-calling for structured output
+  OllamaClient     -- local, uses native format=schema (Ollama Dec-2024 feature)
+
+All three implement `complete()` (free-form text) and `complete_structured()`
+(returns a dict guaranteed to match a JSON schema).
 
 Why profiles, not just an env var picking one provider:
 A frontier API call from a comms-denied environment is an OPSEC failure -- it
-emits RF (HTTPS request to OpenAI) that an adversary can geolocate. The
-`austere` profile makes this mechanically impossible by never even constructing
-the FrontierClient. The OPENAI_API_KEY never enters memory.
+emits RF (HTTPS request) that an adversary can geolocate. The `austere` profile
+makes this mechanically impossible by never even constructing a frontier client.
+The API key never enters memory.
 
 Profiles:
-    austere   default; local-only. FrontierClient never constructed.
+    austere   default; local-only.
     garrison  local default; frontier allowed if operator explicitly chooses.
     sar       frontier default (satellite assumed); can fall back to local.
 
-The orchestrator (#5) calls `get_registry().get(mode)` per request. `mode` is
-"auto" (uses profile default), "frontier", or "local". Mode validation against
-the profile's allowed set raises `PermissionError` -- a 403 at the API layer.
+Frontier provider selection (when allowed by profile):
+    TERA_FRONTIER_PROVIDER=openai|anthropic   (default: openai)
+    Falls back to whichever API key is present if the chosen provider's key
+    is missing.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ import os
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import structlog
+from anthropic import Anthropic
 from ollama import Client as OllamaLib
 from openai import OpenAI
 
@@ -37,6 +44,7 @@ log = structlog.get_logger(__name__)
 Profile = Literal["austere", "garrison", "sar"]
 Mode = Literal["frontier", "local"]
 ModeOrAuto = Literal["frontier", "local", "auto"]
+FrontierProvider = Literal["openai", "anthropic"]
 
 PROFILE_ALLOWED: dict[Profile, frozenset[Mode]] = {
     "austere": frozenset({"local"}),
@@ -53,12 +61,8 @@ PROFILE_DEFAULT: dict[Profile, Mode] = {
 
 @runtime_checkable
 class LLMClient(Protocol):
-    """Provider-agnostic LLM interface.
-
-    Implementations must be deterministic for the same `(messages, tools, temperature)`
-    when temperature=0, and must raise standard exceptions on transport failure
-    (no silent retries -- the orchestrator decides retry policy).
-    """
+    """Provider-agnostic LLM interface. Both methods must be deterministic
+    for the same inputs when temperature=0."""
 
     name: str
 
@@ -70,22 +74,39 @@ class LLMClient(Protocol):
         temperature: float = 0.0,
     ) -> Completion: ...
 
+    def complete_structured(
+        self,
+        messages: list[Message],
+        schema: dict[str, Any],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        """Return a dict guaranteed (by the provider) to match the JSON schema.
 
-class FrontierClient:
-    """OpenAI-compatible frontier model.
+        Raises RuntimeError if the provider's structured-output mechanism fails.
+        """
+        ...
 
-    Phase 1 / 2 only. Network-egressing -- must NEVER be instantiated in austere
-    profile. The `LLMRegistry` enforces this; do not bypass.
-    """
 
-    name = "frontier"
+# ---------------------------------------------------------------------------
+# OpenAI (frontier)
+# ---------------------------------------------------------------------------
+
+
+class OpenAIClient:
+    """OpenAI frontier model. Uses native response_format=json_schema (strict)."""
+
+    name = "openai"
 
     def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
-            raise RuntimeError("OPENAI_API_KEY required for FrontierClient")
+            raise RuntimeError("OPENAI_API_KEY required for OpenAIClient")
         self.client = OpenAI(api_key=key)
         self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+    def _to_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
+        return [m.model_dump(exclude_none=True) for m in messages]
 
     def complete(
         self,
@@ -94,10 +115,9 @@ class FrontierClient:
         max_tokens: int = 1024,
         temperature: float = 0.0,
     ) -> Completion:
-        oa_messages = [m.model_dump(exclude_none=True) for m in messages]
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": oa_messages,
+            "messages": self._to_messages(messages),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -119,7 +139,6 @@ class FrontierClient:
                 usage_prompt_tokens=prompt_tokens,
                 usage_completion_tokens=completion_tokens,
             )
-
         return Completion(
             text=msg.content,
             finish_reason="stop" if choice.finish_reason == "stop" else "length",
@@ -128,12 +147,160 @@ class FrontierClient:
             usage_completion_tokens=completion_tokens,
         )
 
+    def complete_structured(
+        self,
+        messages: list[Message],
+        schema: dict[str, Any],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        # mypy's strict overload typing on OpenAI's create() doesn't play nicely
+        # with our generic dict[str, Any] message list; the runtime call is fine.
+        resp = self.client.chat.completions.create(  # type: ignore[call-overload]
+            model=self.model,
+            messages=self._to_messages(messages),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "RouteQuery",
+                    "schema": schema,
+                    "strict": True,
+                },
+            },
+        )
+        content = resp.choices[0].message.content
+        if not content:
+            raise RuntimeError("OpenAI returned empty content for structured completion")
+        parsed: dict[str, Any] = json.loads(content)
+        return parsed
+
+
+# ---------------------------------------------------------------------------
+# Anthropic (frontier)
+# ---------------------------------------------------------------------------
+
+
+class AnthropicClient:
+    """Anthropic frontier model. Uses tool-calling for structured output (the
+    Anthropic-recommended pattern -- the model emits a single tool call whose
+    `input` is the JSON object matching the schema)."""
+
+    name = "anthropic"
+
+    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("ANTHROPIC_API_KEY required for AnthropicClient")
+        self.client = Anthropic(api_key=key)
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+
+    def _split_messages(self, messages: list[Message]) -> tuple[str | None, list[dict[str, Any]]]:
+        """Anthropic takes `system` separately from `messages`."""
+        system: str | None = None
+        rest: list[dict[str, Any]] = []
+        for m in messages:
+            if m.role == "system":
+                system = m.content if system is None else system + "\n\n" + m.content
+            else:
+                rest.append({"role": m.role, "content": m.content})
+        return system, rest
+
+    def complete(
+        self,
+        messages: list[Message],
+        tools: list[ToolDef] | None = None,
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> Completion:
+        system, rest = self._split_messages(messages)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": rest,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.parameters or {"type": "object"},
+                }
+                for t in tools
+            ]
+        resp = self.client.messages.create(**kwargs)
+
+        prompt_tokens = resp.usage.input_tokens if resp.usage else 0
+        completion_tokens = resp.usage.output_tokens if resp.usage else 0
+
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use":
+                return Completion(
+                    tool_call=ToolCall(name=block.name, args_json=json.dumps(block.input)),
+                    finish_reason="tool_call",
+                    model=self.model,
+                    usage_prompt_tokens=prompt_tokens,
+                    usage_completion_tokens=completion_tokens,
+                )
+        text = "".join(getattr(b, "text", "") for b in resp.content)
+        return Completion(
+            text=text,
+            finish_reason="stop" if resp.stop_reason == "end_turn" else "length",
+            model=self.model,
+            usage_prompt_tokens=prompt_tokens,
+            usage_completion_tokens=completion_tokens,
+        )
+
+    def complete_structured(
+        self,
+        messages: list[Message],
+        schema: dict[str, Any],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        system, rest = self._split_messages(messages)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": rest,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "tools": [
+                {
+                    "name": "emit_route_query",
+                    "description": (
+                        "Emit a RouteQuery JSON object. This is the only thing you may do."
+                    ),
+                    "input_schema": schema,
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": "emit_route_query"},
+        }
+        if system:
+            kwargs["system"] = system
+        resp = self.client.messages.create(**kwargs)
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use":
+                return dict(block.input)
+        raise RuntimeError("Anthropic did not return a tool_use block for structured completion")
+
+
+# ---------------------------------------------------------------------------
+# Ollama (local)
+# ---------------------------------------------------------------------------
+
 
 class OllamaClient:
-    """Local Gemma via ollama. Phase 3. Loopback only.
+    """Local Gemma via ollama. Loopback only.
 
     Refuses to start if OLLAMA_HOST is not loopback -- defense in depth so a
     misconfiguration cannot turn this into an egressing client.
+
+    Uses ollama's native `format=<schema>` parameter (added Dec 2024) for
+    structured output -- no prompt-based JSON parsing needed.
     """
 
     name = "local"
@@ -152,6 +319,9 @@ class OllamaClient:
         self.model = model or os.environ.get("OLLAMA_MODEL", "gemma2:2b")
         self.client = OllamaLib(host=self.host)
 
+    def _to_messages(self, messages: list[Message]) -> list[dict[str, str]]:
+        return [{"role": m.role, "content": m.content} for m in messages]
+
     def complete(
         self,
         messages: list[Message],
@@ -159,9 +329,7 @@ class OllamaClient:
         max_tokens: int = 1024,
         temperature: float = 0.0,
     ) -> Completion:
-        ol_messages: list[dict[str, str]] = [
-            {"role": m.role, "content": m.content} for m in messages
-        ]
+        ol_messages = self._to_messages(messages)
         if tools:
             tool_prompt = (
                 "When you need to call a tool, respond with ONLY a JSON object "
@@ -199,8 +367,51 @@ class OllamaClient:
                     )
             except json.JSONDecodeError:
                 pass
-
         return Completion(text=text, finish_reason="stop", model=self.model)
+
+    def complete_structured(
+        self,
+        messages: list[Message],
+        schema: dict[str, Any],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        resp = self.client.chat(
+            model=self.model,
+            messages=self._to_messages(messages),
+            format=schema,
+            options={"num_predict": max_tokens, "temperature": temperature},
+        )
+        content = resp["message"]["content"]
+        parsed: dict[str, Any] = json.loads(content)
+        return parsed
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+
+def _select_frontier_class() -> type[LLMClient] | None:
+    """Pick OpenAI or Anthropic based on env var + key presence.
+
+    Returns the class to instantiate, or None if no frontier provider is
+    configured (e.g. austere profile with no API keys).
+    """
+    pref = os.environ.get("TERA_FRONTIER_PROVIDER", "openai").lower()
+    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    if pref == "anthropic" and has_anthropic:
+        return AnthropicClient
+    if pref == "openai" and has_openai:
+        return OpenAIClient
+    # Fallback: whichever key is present
+    if has_openai:
+        return OpenAIClient
+    if has_anthropic:
+        return AnthropicClient
+    return None
 
 
 class LLMRegistry:
@@ -222,16 +433,20 @@ class LLMRegistry:
             log.warning("local_client_unavailable", error=str(e))
 
         if "frontier" in PROFILE_ALLOWED[self.profile]:
-            try:
-                self._clients["frontier"] = FrontierClient()
-            except RuntimeError as e:
-                log.warning("frontier_client_unavailable", error=str(e))
+            frontier_cls = _select_frontier_class()
+            if frontier_cls is not None:
+                try:
+                    self._clients["frontier"] = frontier_cls()
+                except RuntimeError as e:
+                    log.warning("frontier_client_unavailable", error=str(e))
+            else:
+                log.warning("frontier_no_api_key", note="set OPENAI_API_KEY or ANTHROPIC_API_KEY")
 
         log.info(
             "llm_registry_initialized",
             profile=self.profile,
             allowed_modes=sorted(PROFILE_ALLOWED[self.profile]),
-            available=sorted(self._clients.keys()),
+            available={mode: c.name for mode, c in self._clients.items()},
             default=PROFILE_DEFAULT[self.profile],
         )
 
@@ -253,12 +468,6 @@ class LLMRegistry:
         return PROFILE_ALLOWED[self.profile]
 
     def get(self, mode: ModeOrAuto = "auto") -> LLMClient:
-        """Return an LLM client for the requested mode.
-
-        Raises:
-            PermissionError: mode is not allowed by the current device profile.
-            RuntimeError: mode is allowed but the client failed to initialize.
-        """
         resolved: Mode = self.default_mode if mode == "auto" else mode
         if resolved not in self.allowed_modes:
             raise PermissionError(
@@ -268,7 +477,8 @@ class LLMRegistry:
         if resolved not in self._clients:
             raise RuntimeError(
                 f"mode {resolved!r} is allowed but the client did not initialize. "
-                "Check service availability (ollama running? OPENAI_API_KEY set?)."
+                "Check service availability "
+                "(ollama running? OPENAI_API_KEY / ANTHROPIC_API_KEY set?)."
             )
         return self._clients[resolved]
 
