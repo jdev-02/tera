@@ -39,11 +39,19 @@ _CASES: list[tuple[str, str, str]] = [
         "MGRS with two 4-digit halves",
     ),
 
-    # MGRS grid -- inline 4-digit precision (no space)
+    # MGRS grid -- 4-digit no-space form (1km precision, 2+2 split).
+    # The standard read inserts a beat between easting and northing.
     (
         "Hill at 11SMS1234",
-        "Hill at one one sierra mike sierra one two three four",
-        "MGRS without the second half",
+        "Hill at one one sierra mike sierra one two, three four",
+        "MGRS no-space 4-digit precision (split 2+2)",
+    ),
+
+    # MGRS grid -- 8-digit no-space form (10m precision, 4+4 split).
+    (
+        "Hill at 11SMS12345678.",
+        "Hill at one one sierra mike sierra one two three four, five six seven eight.",
+        "MGRS no-space 8-digit precision",
     ),
 
     # The flagship rationale from PRD §6 (hero scenario A)

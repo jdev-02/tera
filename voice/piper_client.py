@@ -8,6 +8,9 @@ Why a wrapper:
   tests) shouldn't crash on import.
 - Graceful degradation. If Piper or the voice model isn't available,
   return None from synth calls; the orchestrator falls back to text-only.
+- Synthesis params. Operator cadence wants slower speech, normalized
+  volume, and a small inter-sentence pause -- this module owns those
+  defaults so downstream callers don't think about them.
 
 Usage::
 
@@ -37,6 +40,17 @@ log = structlog.get_logger(__name__)
 _DEFAULT_VOICE = "en_US-libritts_r-medium"
 _DEFAULT_DIR = Path(__file__).resolve().parent.parent / "models" / "piper"
 
+# Synthesis defaults tuned for operator cadence:
+#   length_scale > 1.0 -> slower speech (1.15 = ~15% slower than default).
+#   sentence_silence_s -> pause inserted between sentences (Piper inserts
+#     this when it sees sentence-ending punctuation).
+#   volume = 1.0 -> no attenuation. Normalize handles peak limiting.
+_DEFAULT_LENGTH_SCALE = 1.15  # slow down ~15% for operator pacing
+_DEFAULT_NOISE_SCALE = 0.667  # piper default; controls vocal variation
+_DEFAULT_NOISE_W_SCALE = 0.8  # piper default; controls phoneme duration jitter
+_DEFAULT_SENTENCE_SILENCE_S = 0.35
+_DEFAULT_VOLUME = 1.0
+
 
 def _resolve_model_path() -> Path:
     """Locate the voice .onnx file, prefer env override."""
@@ -50,8 +64,21 @@ def _resolve_model_path() -> Path:
 class PiperClient:
     """Thin wrapper around piper-tts. Holds a single loaded voice."""
 
-    def __init__(self, model_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        length_scale: float = _DEFAULT_LENGTH_SCALE,
+        noise_scale: float = _DEFAULT_NOISE_SCALE,
+        noise_w_scale: float = _DEFAULT_NOISE_W_SCALE,
+        sentence_silence_s: float = _DEFAULT_SENTENCE_SILENCE_S,
+        volume: float = _DEFAULT_VOLUME,
+    ) -> None:
         self.model_path = Path(model_path) if model_path else _resolve_model_path()
+        self.length_scale = length_scale
+        self.noise_scale = noise_scale
+        self.noise_w_scale = noise_w_scale
+        self.sentence_silence_s = sentence_silence_s
+        self.volume = volume
         self._voice: Any | None = None
         self._sample_rate: int = 22050  # default; overridden when voice loads
 
@@ -94,14 +121,41 @@ class PiperClient:
     def sample_rate(self) -> int:
         return self._sample_rate
 
-    def synthesize_wav(self, text: str) -> bytes:
+    def _build_syn_config(self, length_scale: float | None = None) -> Any | None:
+        """Build a piper.SynthesisConfig if available, else None.
+
+        piper-tts >=1.3 exposes SynthesisConfig with length_scale, volume,
+        noise params, and sentence_silence. Older versions don't have it,
+        so we return None and let the synth use library defaults.
+        """
+        try:
+            from piper import SynthesisConfig
+        except ImportError:
+            return None
+        return SynthesisConfig(
+            length_scale=length_scale if length_scale is not None else self.length_scale,
+            noise_scale=self.noise_scale,
+            noise_w_scale=self.noise_w_scale,
+            volume=self.volume,
+        )
+
+    def synthesize_wav(self, text: str, length_scale: float | None = None) -> bytes:
         """Synthesize the given text and return WAV bytes.
+
+        Args:
+            text: input text. Sentence-ending punctuation triggers Piper's
+                  inter-sentence silence pause.
+            length_scale: optional override of the configured pace. Higher
+                  values mean slower speech (1.0 = default Piper, 1.15 =
+                  operator cadence, 1.3 = very slow).
 
         Raises RuntimeError if Piper isn't available or model isn't loaded
         (call .is_available() first to gate).
         """
         self.load()
         assert self._voice is not None  # post-condition of self.load()
+
+        syn_config = self._build_syn_config(length_scale)
 
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav:
@@ -112,10 +166,17 @@ class PiperClient:
             # wave file in chunks. The piper-tts package version >=1.4 exposes
             # `synthesize_wav(text, wav_writer)` directly. Older versions used
             # `synthesize(text, wav_writer)`. Try both; fall back gracefully.
+            # syn_config is passed when available; older versions ignore it.
             if hasattr(self._voice, "synthesize_wav"):
-                self._voice.synthesize_wav(text, wav)
+                if syn_config is not None:
+                    self._voice.synthesize_wav(text, wav, syn_config=syn_config)
+                else:
+                    self._voice.synthesize_wav(text, wav)
             elif hasattr(self._voice, "synthesize"):
-                self._voice.synthesize(text, wav)
+                if syn_config is not None:
+                    self._voice.synthesize(text, wav, syn_config=syn_config)
+                else:
+                    self._voice.synthesize(text, wav)
             else:
                 raise RuntimeError(
                     "PiperVoice has neither synthesize_wav nor synthesize -- "

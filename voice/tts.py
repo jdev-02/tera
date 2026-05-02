@@ -20,13 +20,20 @@ from voice.rationale import to_operator_cadence
 log = structlog.get_logger(__name__)
 
 
-def synthesize_rationale_b64(rationale: str) -> str | None:
+def synthesize_rationale_b64(
+    rationale: str, length_scale: float | None = None
+) -> str | None:
     """Take an English rationale, return base64-encoded WAV (or None).
 
     Steps:
       1. Convert to operator cadence.
       2. Synthesize via Piper.
       3. Base64-encode for JSON transport.
+
+    Args:
+        rationale: plain English. Empty string returns None.
+        length_scale: optional pacing override (1.0 = default, 1.15 = ops
+                      cadence, 1.3 = slow). None uses the client default.
 
     Returns None if Piper isn't available (no model, package missing) so
     the caller can degrade gracefully. Never raises -- TTS is auxiliary
@@ -42,7 +49,7 @@ def synthesize_rationale_b64(rationale: str) -> str | None:
 
     spoken = to_operator_cadence(rationale)
     try:
-        wav_bytes = client.synthesize_wav(spoken)
+        wav_bytes = client.synthesize_wav(spoken, length_scale=length_scale)
     except Exception as e:  # noqa: BLE001 -- TTS failure must not fail /plan
         log.warning("piper_synth_failed", error=str(e))
         return None
