@@ -32,9 +32,9 @@ from typing import Any, cast
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
 try:
-    from .ml_dsa_signer import create_signer, _canonical_json, _sha256
+    from .ml_dsa_signer import _canonical_json, _sha256, create_signer
 except ImportError:  # Allows `python crypto/cot_signer.py` during demos.
-    from ml_dsa_signer import create_signer, _canonical_json, _sha256  # type: ignore[no-redef]
+    from ml_dsa_signer import _canonical_json, _sha256, create_signer  # type: ignore[no-redef]
 
 # Device key ID — read from environment, default to hostname
 _KEY_ID = os.environ.get("WAYFINDER_KEY_ID", "wayfinder-device-001")
@@ -76,9 +76,7 @@ class VerificationResult:
 
 
 def _reject(key_id: str, algorithm: str, reason: str) -> VerificationResult:
-    return VerificationResult(
-        valid=False, key_id=key_id, algorithm=algorithm, reason=reason
-    )
+    return VerificationResult(valid=False, key_id=key_id, algorithm=algorithm, reason=reason)
 
 
 # -------------------------------------------------------------------------------
@@ -109,9 +107,7 @@ def _float_matches(actual: str | None, expected: Any, tolerance: float = 1e-7) -
     if actual is None:
         return False
     try:
-        return math.isclose(
-            float(actual), float(expected), rel_tol=0.0, abs_tol=tolerance
-        )
+        return math.isclose(float(actual), float(expected), rel_tol=0.0, abs_tol=tolerance)
     except (TypeError, ValueError):
         return False
 
@@ -190,9 +186,7 @@ def embed_signature_in_cot_xml(cot_xml: str, signed_dict: dict) -> str:
 # -------------------------------------------------------------------------------
 
 
-def verify_cot(
-    cot_xml: str, trust_list: dict[str, bytes] | None = None
-) -> VerificationResult:
+def verify_cot(cot_xml: str, trust_list: dict[str, bytes] | None = None) -> VerificationResult:
     """
     Extracts and fully verifies the ML-DSA (or Ed25519) signature from a CoT XML.
 

@@ -1,38 +1,53 @@
-# CODEOWNERS — enforced by GitHub branch protection.
-# PRD §13: directory ownership split. Cross-directory PRs require paired reviewer.
-# P2 sets up and maintains this file.
+# CODEOWNERS - enforces lane ownership at PR review time.
+# See PRD section 13 for the lane split.
 
-# Default fallback
-*                   @p2-cyber
+# Handles locked pre-kickoff (2026-05-02). Source of truth: team.yml
+#   @jdev-02                    = Jon     (P1 - Navy CWO, AI/ontology, UI/UX)
+#   @aleens-labs                = Satriyo (P2 - Indonesian Navy, cybersecurity)
+#   @khicks1724 + @kylemhicks   = Kyle    (P3 - USMC SIGINT; commits from BOTH his laptop/Codex
+#                                 and the Jetson, so both handles are listed for his lanes)
+#   @benschwierking             = Ben     (P4 - USMC Combat Engineer, Mountain Warfare School)
 
-# P1 — Navy Cyber Warfare Officer
-/agent/             @p1-nav
-/ontology/          @p1-nav
-/eval/              @p1-nav
-/voice/             @p1-nav
+# Default fallback: full team review
+*                                @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
 
-# P2 — Indonesian Navy (Cybersecurity)  ← YOU
-/security/          @p2-cyber
-/crypto/            @p2-cyber
-/infra/             @p2-cyber
-/.github/           @p2-cyber
-/.cursor/           @p2-cyber
-/lefthook.yml       @p2-cyber
-/Makefile           @p2-cyber
-/CODEOWNERS         @p2-cyber
+# Lane: Agent / Ontology / Voice / Eval / Figma (P1 - Jon, owns UI/UX)
+/agent/                          @jdev-02
+/ontology/                       @jdev-02
+/voice/                          @jdev-02
+/eval/                           @jdev-02
+/figma/                          @jdev-02
 
-# P3 — USMC SIGINT Officer
-/hardware/          @p3-hw
-/deploy/            @p3-hw
-/models/            @p3-hw
-/mesh/              @p3-hw
+# Lane: ATAK / Routing / Data (P4 - Ben)
+/atak/                           @benschwierking
+/routing/                        @benschwierking
+/data/                           @benschwierking
 
-# P4 — USMC Combat Engineer
-/atak/              @p4-atak
-/routing/           @p4-atak
-/data/              @p4-atak
-/figma/             @p4-atak
+# Lane: Hardware / Deploy / Models / Mesh (P3 - Kyle, dual handles)
+/hardware/                       @khicks1724 @kylemhicks
+/deploy/                         @khicks1724 @kylemhicks
+/models/                         @khicks1724 @kylemhicks
+/mesh/                           @khicks1724 @kylemhicks
 
-# Shared — all four sign off
-/docs/              @p1-nav @p2-cyber @p3-hw @p4-atak
-/README.md          @p1-nav @p2-cyber @p3-hw @p4-atak
+# Lane: Security / Crypto / Infra / CI (P2 - Satriyo)
+/security/                       @aleens-labs
+/crypto/                         @aleens-labs
+/infra/                          @aleens-labs
+/.github/                        @aleens-labs
+/.agents/                        @aleens-labs
+Makefile                         @aleens-labs
+lefthook.yml                     @aleens-labs
+pyproject.toml                   @aleens-labs
+requirements-ci.txt              @aleens-labs
+
+# Cross-cutting contracts: paired sign-off required
+/docs/contracts/agent_routing.schema.json   @jdev-02 @benschwierking
+/docs/contracts/cot_signed.md               @aleens-labs @benschwierking
+
+# Top-level docs / agent rules: full team review
+/AGENTS.md                       @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
+/.agents/00-team.md              @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
+/.agents/10-architecture.md      @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
+/team.yml                        @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
+/docs/PRD.md                     @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
+/README.md                       @benschwierking

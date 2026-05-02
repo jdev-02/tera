@@ -17,15 +17,15 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from superagent_integration import guard_input, redact_input
-from data_provenance import tag_input, is_safe_to_forward
-from structured_query_validator import validate_route_query
+from data_provenance import is_safe_to_forward, tag_input
 from policy_gate import allow
-from route_trust_score import compute_route_trust, atak_label
-
+from route_trust_score import atak_label, compute_route_trust
+from structured_query_validator import validate_route_query
+from superagent_integration import guard_input, redact_input
 
 # -------------------------------------------------------------------------------
 # Pipeline result
@@ -206,7 +206,7 @@ async def run_pipeline(
 # Demo scenarios
 # -------------------------------------------------------------------------------
 
-SCENARIOS = [
+SCENARIOS: list[dict[str, Any]] = [
     {
         "name": "Normal operator request (fully approved)",
         "raw_text": "Plot the fastest covered route to the nearest freshwater within 5 km.",
@@ -361,9 +361,7 @@ async def main():
             elif stage["stage"] == "superagent_redact" and stage.get("findings"):
                 print(f"      PII redacted: {stage['findings']}")
             elif stage["stage"] == "route_trust_score":
-                print(
-                    f"      score={stage.get('trust_score')} status={stage.get('trust_status')}"
-                )
+                print(f"      score={stage.get('trust_score')} status={stage.get('trust_status')}")
                 if stage.get("reasons"):
                     print(f"      reasons: {stage['reasons']}")
 

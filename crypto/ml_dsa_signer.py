@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -39,9 +40,9 @@ try:
     )
     from cryptography.hazmat.primitives.serialization import (
         Encoding,
-        PublicFormat,
-        PrivateFormat,
         NoEncryption,
+        PrivateFormat,
+        PublicFormat,
         load_pem_private_key,
         load_pem_public_key,
     )
@@ -76,7 +77,7 @@ class SignedPayload:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SignedPayload":
+    def from_dict(cls, d: dict) -> SignedPayload:
         return cls(**d)
 
 
@@ -123,10 +124,8 @@ class MLDSASigner:
             self._sk_path.write_bytes(self._sk)
             self._pk_path.write_bytes(self._pk)
             # Restrict permissions on Jetson (POSIX only)
-            try:
+            with suppress(Exception):
                 os.chmod(self._sk_path, 0o600)
-            except Exception:
-                pass
 
     @property
     def public_key_bytes(self) -> bytes:
@@ -146,9 +145,7 @@ class MLDSASigner:
             payload_hash=_sha256(canonical),
         )
 
-    def verify(
-        self, signed: SignedPayload, public_key_bytes: bytes | None = None
-    ) -> bool:
+    def verify(self, signed: SignedPayload, public_key_bytes: bytes | None = None) -> bool:
         pk = public_key_bytes or self._pk
         canonical = _canonical_json(signed.payload)
         # Verify payload hash first (fast check)
@@ -186,23 +183,19 @@ class FallbackSigner:
     def _load_or_generate(self):
         if self._sk_path.exists():
             pem = self._sk_path.read_bytes()
-            self._sk = load_pem_private_key(pem, password=None)
+            self._sk = cast(Ed25519PrivateKey, load_pem_private_key(pem, password=None))
             self._pk = self._sk.public_key()
         else:
             self._sk = Ed25519PrivateKey.generate()
             self._pk = self._sk.public_key()
             self._sk_path.write_bytes(
-                self._sk.private_bytes(
-                    Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
-                )
+                self._sk.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
             )
             self._pk_path.write_bytes(
                 self._pk.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
             )
-            try:
+            with suppress(Exception):
                 os.chmod(self._sk_path, 0o600)
-            except Exception:
-                pass
 
     @property
     def public_key_pem(self) -> bytes:
@@ -222,9 +215,7 @@ class FallbackSigner:
             payload_hash=_sha256(canonical),
         )
 
-    def verify(
-        self, signed: SignedPayload, public_key_pem: bytes | None = None
-    ) -> bool:
+    def verify(self, signed: SignedPayload, public_key_pem: bytes | None = None) -> bool:
         canonical = _canonical_json(signed.payload)
         if _sha256(canonical) != signed.payload_hash:
             return False
@@ -252,11 +243,8 @@ def create_signer(key_id: str | None = None) -> MLDSASigner | FallbackSigner:
     if _PQC_AVAILABLE:
         print(f"[crypto] ML-DSA-65 signer active (liboqs) — key_id={key_id}")
         return MLDSASigner(key_id=key_id)
-    else:
-        print(
-            f"[crypto] WARNING: liboqs not available — using Ed25519 fallback — key_id={key_id}"
-        )
-        return FallbackSigner(key_id=key_id)
+    print(f"[crypto] WARNING: liboqs not available — using Ed25519 fallback — key_id={key_id}")
+    return FallbackSigner(key_id=key_id)
 
 
 # -------------------------------------------------------------------------------

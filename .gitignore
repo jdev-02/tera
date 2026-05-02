@@ -1,36 +1,57 @@
-# Secrets — never commit
-.env
-*.env
-.env.*
-
-# Crypto private keys — never commit
-crypto/keys/*.sk
-crypto/keys/*.pem
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
 .venv/
 venv/
-*.egg-info/
-dist/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
+dist/
+*.egg-info/
+.eggs/
 
-# Models (use LFS or external bucket with hash check — PRD §7.2)
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+crypto/keys/
+!crypto/keys/.gitkeep
+
 models/*.gguf
 models/*.bin
 models/*.safetensors
+data/runtime/
+data/cache/
+data/extracts/*.osm.pbf
+data/dem/*.tif
+*.zip
 
-# Map data (large binary — ship via hash-verified bundle)
-data/*.pbf
-data/*.tif
-data/*.img
-
-# OS
+.archive/
 .DS_Store
 Thumbs.db
-
-# IDE
+.vscode/
 .idea/
 *.swp
+*.swo
+*~
+
+logs/
+*.log
+.coverage*
+
+figma/exports/*.fig
+
+deploy/secrets/
+.terraform/
+*.tfstate*
+
+valhalla_tiles/
+*.gph

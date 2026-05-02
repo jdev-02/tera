@@ -47,9 +47,7 @@ ALLOWED_USER_ROLES = {
     "viewer",
 }
 
-SCHEMA_PATH = (
-    Path(__file__).resolve().parent.parent / "docs" / "route_query.schema.json"
-)
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "docs" / "route_query.schema.json"
 
 # Prompt injection / instruction override patterns.
 FORBIDDEN_TERMS = [

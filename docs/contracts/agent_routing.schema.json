@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wayfinder/contracts/agent_routing.schema.json",
+  "title": "Wayfinder Agent <-> Routing Contract v0.1",
+  "description": "Co-owned by P1 (agent lane) and P4 (routing lane). Changes require both sign-off. See PRD \u00a77.2 and /.agents/10-architecture.md.",
+  "type": "object",
+  "definitions": {
+    "Coord": {
+      "type": "object",
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+      },
+      "additionalProperties": false
+    },
+    "Signature": {
+      "type": "object",
+      "required": ["scheme", "key_id", "value_b64", "signed_at"],
+      "properties": {
+        "scheme": { "type": "string", "enum": ["ML-DSA-65", "ML-DSA-44", "ML-DSA-87"] },
+        "key_id": { "type": "string", "minLength": 8 },
+        "value_b64": { "type": "string", "minLength": 1 },
+        "signed_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "PlanRequest": {
+      "type": "object",
+      "required": ["prompt", "current"],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "current": { "$ref": "#/definitions/Coord" },
+        "request_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "Waypoint": {
+      "type": "object",
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "label": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PlanResponse": {
+      "type": "object",
+      "required": ["request_id", "route", "waypoints", "rationale", "cost_breakdown"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "route": {
+          "type": "object",
+          "required": ["type", "geometry"],
+          "properties": {
+            "type": { "type": "string", "const": "Feature" },
+            "geometry": {
+              "type": "object",
+              "required": ["type", "coordinates"],
+              "properties": {
+                "type": { "type": "string", "const": "LineString" },
+                "coordinates": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": { "type": "number" },
+                    "minItems": 2,
+                    "maxItems": 3
+                  },
+                  "minItems": 2
+                }
+              }
+            },
+            "properties": { "type": "object" }
+          }
+        },
+        "waypoints": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Waypoint" }
+        },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "cost_breakdown": {
+          "type": "object",
+          "properties": {
+            "distance_m": { "type": "number", "minimum": 0 },
+            "time_s": { "type": "number", "minimum": 0 },
+            "elevation_gain_m": { "type": "number" }
+          }
+        },
+        "signature": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/Signature" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FindPoisArgs": {
+      "type": "object",
+      "required": ["type", "from"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["freshwater", "shelter", "high_ground", "road", "trail", "bridge", "named_feature"]
+        },
+        "from": { "$ref": "#/definitions/Coord" },
+        "radius_m": { "type": "number", "minimum": 1, "maximum": 50000 }
+      },
+      "additionalProperties": false
+    },
+    "RouteArgs": {
+      "type": "object",
+      "required": ["profile", "from", "to"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["foot", "foot_covered", "vehicle_mrap", "vehicle_truck"]
+        },
+        "from": { "$ref": "#/definitions/Coord" },
+        "to": { "$ref": "#/definitions/Coord" },
+        "avoid": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["ridgelines", "skyline_crossings", "fords", "bridges"] }
+        },
+        "max_slope_deg": { "type": "number", "minimum": 0, "maximum": 90 },
+        "max_ford_m": { "type": "number", "minimum": 0 },
+        "exclude_tags": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}
