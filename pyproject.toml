@@ -85,6 +85,8 @@ ignore = [
 # print to stdout. Ignoring T201 in those modules.
 "security/*" = ["T201"]
 "crypto/*" = ["T201"]
+# eval/runner.py is a CLI tool that prints to stdout intentionally.
+"eval/runner.py" = ["T201"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology"]

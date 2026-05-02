@@ -110,7 +110,7 @@ create_issue "[ci] AI PR review enabled; lefthook installed on each dev machine"
 create_issue "[agent] Wire frontier LLM client behind LLMClient interface" \
     "lane:agent,phase:P1,priority:P0" \
     "**Owner:** P1
-**Acceptance:** \`agent/llm.py\` defines \`LLMClient\` Protocol; \`FrontierClient\` and \`OllamaClient\` impls; selected via \`TERA_PHASE\`.
+**Acceptance:** \`agent/llm.py\` defines \`LLMClient\` Protocol; \`FrontierClient\` and \`OllamaClient\` impls; selected via \`WAYFINDER_PHASE\`.
 **Files:** \`agent/llm.py\`, \`agent/orchestrator.py\`
 **Source:** TASKS.md #4"
 
@@ -171,7 +171,7 @@ create_issue "[atak] Signed CoT bridge over multicast" \
 create_issue "[deploy] systemd unit for agent + bridge on Jetson" \
     "lane:deploy,phase:P2,priority:P1" \
     "**Owner:** P3
-**Acceptance:** \`tera-agent.service\` + \`tera-bridge.service\` start on boot, restart on failure, log to journald.
+**Acceptance:** \`wayfinder-agent.service\` + \`wayfinder-bridge.service\` start on boot, restart on failure, log to journald.
 **Source:** TASKS.md #14"
 
 create_issue "[security] tcpdump demo capture + audit log scroll" \
@@ -189,7 +189,7 @@ create_issue "[models] Pull + verify Gemma + Whisper-tiny" \
 create_issue "[agent] Wire ollama (Gemma) as Phase 3 LLM" \
     "lane:agent,phase:P3,priority:P0" \
     "**Owner:** P1
-**Acceptance:** \`OllamaClient\` works against local ollama; \`TERA_PHASE=3\` flips orchestrator without code change. Tool-calling via structured-output prompting.
+**Acceptance:** \`OllamaClient\` works against local ollama; \`WAYFINDER_PHASE=3\` flips orchestrator without code change. Tool-calling via structured-output prompting.
 **Source:** TASKS.md #17"
 
 create_issue "[voice] Whisper-tiny push-to-talk endpoint (voice IN)" \
@@ -206,7 +206,7 @@ create_issue "[agent] CesiumJS 3D globe frontend (Phase 1 web visualization)" \
 - agent/static/index.html loads CesiumJS, reads CESIUM_ION_TOKEN via server-side /config endpoint.
 - Click point on globe -> POST /plan -> render route as polyline draped on terrain.
 - Camera fly-to on route generation; 3D terrain visible.
-**Files:** agent/static/index.html, agent/static/tera.js, agent/app.py (/config endpoint scoped to CESIUM_ION_TOKEN).
+**Files:** agent/static/index.html, agent/static/wayfinder.js, agent/app.py (/config endpoint scoped to CESIUM_ION_TOKEN).
 **Decision point Sat 1400:** fall back to Leaflet if CesiumJS too heavy.
 **Source:** TASKS.md #27"
 
@@ -238,7 +238,7 @@ create_issue "[voice] Piper TTS voice-out -- speak rationale + waypoints (voice 
 create_issue "[infra] Egress firewall: default-deny outbound for Phase 3" \
     "lane:infra,phase:P3,priority:P0" \
     "**Owner:** P2
-**Acceptance:** \`TERA_PHASE=3\` activates iptables ruleset dropping all outbound except loopback + multicast. Verified by tcpdump showing zero packets.
+**Acceptance:** \`WAYFINDER_PHASE=3\` activates iptables ruleset dropping all outbound except loopback + multicast. Verified by tcpdump showing zero packets.
 **Source:** TASKS.md #19"
 
 create_issue "[routing] Slope + ridgeline-prominence cost extension" \

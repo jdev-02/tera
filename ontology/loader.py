@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 ONTOLOGY_PATH = Path(__file__).resolve().parent / "route_ontology.yml"
+ENTITIES_PATH = Path(__file__).resolve().parent / "entities.yml"
 PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent / "system_prompt.md"
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "docs" / "route_query.schema.json"
 
@@ -34,6 +35,34 @@ def load_route_query_schema() -> dict[str, Any]:
     with SCHEMA_PATH.open("r", encoding="utf-8") as f:
         schema: dict[str, Any] = json.load(f)
     return schema
+
+
+@lru_cache(maxsize=1)
+def load_entities() -> dict[str, Any]:
+    """Parse entities.yml. Cached for the process lifetime.
+
+    Returns the full document; callers typically iterate `data["entities"]`
+    or look up by `data["entities_by_type"][type]` (built lazily here).
+    """
+    with ENTITIES_PATH.open("r", encoding="utf-8") as f:
+        data: dict[str, Any] = yaml.safe_load(f)
+    if not isinstance(data, dict) or "entities" not in data:
+        raise RuntimeError(f"Malformed entities at {ENTITIES_PATH}: missing 'entities'")
+    # Build a type→entry index for fast lookup at runtime.
+    by_type: dict[str, dict[str, Any]] = {}
+    for entry in data["entities"]:
+        if "type" not in entry:
+            raise RuntimeError(f"Entity entry missing 'type': {entry}")
+        if entry["type"] in by_type:
+            raise RuntimeError(f"Duplicate entity type: {entry['type']}")
+        by_type[entry["type"]] = entry
+    data["entities_by_type"] = by_type
+    return data
+
+
+def entity_types() -> list[str]:
+    """Return the sorted list of all entity type ids. Used by tests + ATAK overlay."""
+    return sorted(load_entities()["entities_by_type"].keys())
 
 
 def _format_field_block(part: dict[str, Any]) -> str:
