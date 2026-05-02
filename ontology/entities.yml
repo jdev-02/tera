@@ -1,0 +1,238 @@
+# TERA route entities ontology
+#
+# Companion to route_ontology.yml. Where route_ontology.yml describes the
+# OPERATOR INTENT (WHERE / WHAT / HOW), this file describes the THINGS THE
+# OPERATOR WILL ENCOUNTER along a route -- water, ridgelines, choke points,
+# bridges, etc.
+#
+# Why a typed enum and not free-form labels:
+# - Ben's ATAK overlay needs deterministic icons. "freshwater_stream" → blue
+#   line; "obstacle_rock" → red X. The LLM should NEVER invent a category;
+#   it can only classify into this enum.
+# - Operators tap an entity on the map and see its `operator_props` (depth,
+#   grade, distance, etc.). The contract is what's tappable.
+# - Routing cost model (Ben's Valhalla custom-cost) consumes these to penalize
+#   edges. slope_extreme adds prominent cost; freshwater_lake makes an edge
+#   uncrossable for foot profiles.
+#
+# Classification is data-driven (OSM tags + DEM thresholds + landcover
+# layers), NOT LLM-driven. An entity is what the underlying data says it is.
+
+version: 1
+
+entities:
+  # -----------------------------------------------------------------------
+  # WATER
+  # -----------------------------------------------------------------------
+  - type: freshwater_stream
+    description: "Crossable creek or stream. Drinkable with treatment."
+    osm_tags_match:
+      - "waterway=stream"
+      - "waterway=brook"
+      - "natural=spring"
+    atak_icon_hint: "water_stream_blue"
+    operator_props: [name, width_m, flow_seasonal]
+    routing_cost: { foot: 1.2, foot_covered: 1.2, vehicle: 999 }
+
+  - type: freshwater_lake
+    description: "Standing freshwater. Too large to ford. Drinkable with treatment."
+    osm_tags_match:
+      - "natural=water,water=lake"
+      - "natural=water,water=pond"
+      - "natural=water,water=reservoir"
+    atak_icon_hint: "water_lake_blue"
+    operator_props: [name, area_m2]
+    routing_cost: { foot: 999, foot_covered: 999, vehicle: 999 }
+
+  - type: saltwater_body
+    description: "Ocean / bay / saltwater. Uncrossable, undrinkable."
+    osm_tags_match:
+      - "natural=coastline"
+      - "place=sea"
+    atak_icon_hint: "water_salt_navy"
+    operator_props: [name]
+    routing_cost: { foot: 999, foot_covered: 999, vehicle: 999 }
+
+  - type: ford
+    description: "Designated water crossing. Depth-dependent."
+    osm_tags_match:
+      - "ford=yes"
+      - "ford=stepping_stones"
+    atak_icon_hint: "water_ford_dashed"
+    operator_props: [depth_m, vehicle_class_max]
+    routing_cost: { foot: 2.0, foot_covered: 2.0, vehicle: 3.0 }
+
+  # -----------------------------------------------------------------------
+  # TERRAIN
+  # -----------------------------------------------------------------------
+  - type: ridgeline
+    description: "High-prominence ridge. Visible from far; risk of skylining."
+    derived_from: "DEM prominence > 50m within 200m kernel"
+    atak_icon_hint: "ridge_brown"
+    operator_props: [elevation_m, prominence_m]
+    routing_cost: { foot: 1.5, foot_covered: 2.5, vehicle: 1.2 }
+
+  - type: slope_steep
+    description: "Grade 20-35%. Slow on foot, treacherous in vehicle."
+    derived_from: "DEM slope 20-35 deg (computed per edge)"
+    atak_icon_hint: "slope_amber"
+    operator_props: [grade_pct]
+    routing_cost: { foot: 1.5, foot_covered: 1.5, vehicle: 2.0 }
+
+  - type: slope_extreme
+    description: "Grade > 35%. Climbing terrain."
+    derived_from: "DEM slope > 35 deg"
+    atak_icon_hint: "slope_red"
+    operator_props: [grade_pct]
+    routing_cost: { foot: 5.0, foot_covered: 5.0, vehicle: 999 }
+
+  - type: choke_point
+    description: "Narrow passage. Ambush risk."
+    derived_from: "OSM passage with width < 5m AND surrounded by impassable terrain"
+    atak_icon_hint: "choke_red_x"
+    operator_props: [width_m, alternate_route_distance_m]
+    routing_cost: { foot: 1.3, foot_covered: 1.5, vehicle: 1.4 }
+
+  - type: obstacle_rock
+    description: "Boulder field or rocky outcrop. Slow."
+    osm_tags_match:
+      - "natural=rock"
+      - "natural=stone"
+      - "natural=bare_rock"
+    atak_icon_hint: "rock_grey"
+    operator_props: []
+    routing_cost: { foot: 2.0, foot_covered: 2.0, vehicle: 4.0 }
+
+  - type: obstacle_dense_vegetation
+    description: "Thick brush / canopy. Slow and hard to navigate."
+    osm_tags_match:
+      - "natural=scrub"
+      - "landuse=forest,leaf_type=mixed"
+    atak_icon_hint: "veg_dark_green"
+    operator_props: []
+    routing_cost: { foot: 1.8, foot_covered: 1.0, vehicle: 4.0 }
+
+  # -----------------------------------------------------------------------
+  # LANDUSE
+  # -----------------------------------------------------------------------
+  - type: landuse_urban
+    description: "Built-up area. Concealment + comms risk."
+    osm_tags_match:
+      - "landuse=residential"
+      - "landuse=commercial"
+      - "landuse=industrial"
+      - "place=city"
+      - "place=town"
+    atak_icon_hint: "landuse_grey"
+    operator_props: [population_estimate]
+    routing_cost: { foot: 1.0, foot_covered: 0.8, vehicle: 1.0 }
+
+  - type: landuse_forest
+    description: "Forested area. Good cover."
+    osm_tags_match:
+      - "landuse=forest"
+      - "natural=wood"
+    atak_icon_hint: "landuse_forest_green"
+    operator_props: [canopy_density]
+    routing_cost: { foot: 1.2, foot_covered: 0.7, vehicle: 2.0 }
+
+  - type: landuse_open
+    description: "Open ground. Exposed."
+    osm_tags_match:
+      - "landuse=meadow"
+      - "landuse=grass"
+      - "natural=grassland"
+    atak_icon_hint: "landuse_pale_green"
+    operator_props: []
+    routing_cost: { foot: 1.0, foot_covered: 1.5, vehicle: 1.0 }
+
+  # -----------------------------------------------------------------------
+  # INFRASTRUCTURE
+  # -----------------------------------------------------------------------
+  - type: bridge_passable
+    description: "Bridge with no known restriction."
+    osm_tags_match:
+      - "bridge=yes"
+    atak_icon_hint: "bridge_grey"
+    operator_props: [length_m, max_weight_t]
+    routing_cost: { foot: 0.9, foot_covered: 0.9, vehicle: 0.9 }
+
+  - type: bridge_restricted
+    description: "Bridge flagged as restricted (weight, height, or other)."
+    osm_tags_match:
+      - "bridge=yes,access=no"
+      - "bridge=yes,maxweight=*"
+    atak_icon_hint: "bridge_amber"
+    operator_props: [restriction_type, max_weight_t]
+    routing_cost: { foot: 1.0, foot_covered: 1.0, vehicle: 999 }
+
+  - type: road_paved
+    description: "Paved road. Vehicle-fast, exposed."
+    osm_tags_match:
+      - "highway=primary"
+      - "highway=secondary"
+      - "highway=tertiary"
+    atak_icon_hint: "road_solid_black"
+    operator_props: [name, surface]
+    routing_cost: { foot: 0.9, foot_covered: 1.5, vehicle: 0.5 }
+
+  - type: road_unpaved
+    description: "Dirt or gravel road. Vehicle-slow."
+    osm_tags_match:
+      - "highway=track"
+      - "highway=unclassified,surface=unpaved"
+    atak_icon_hint: "road_dashed_brown"
+    operator_props: [surface]
+    routing_cost: { foot: 1.0, foot_covered: 1.2, vehicle: 0.8 }
+
+  - type: trail
+    description: "Foot trail. Fast for foot, impassable for vehicle."
+    osm_tags_match:
+      - "highway=path"
+      - "highway=footway"
+    atak_icon_hint: "trail_dotted_brown"
+    operator_props: []
+    routing_cost: { foot: 0.8, foot_covered: 0.9, vehicle: 999 }
+
+  # -----------------------------------------------------------------------
+  # SECURITY / SITUATIONAL
+  # -----------------------------------------------------------------------
+  - type: comms_risk_zone
+    description: "Area flagged for comms emission risk (RF detection, jamming)."
+    derived_from: "Operator-provided overlay or OSINT layer"
+    atak_icon_hint: "comms_risk_red_dotted"
+    operator_props: [risk_level, source]
+    routing_cost: { foot: 1.0, foot_covered: 1.0, vehicle: 1.0 }
+    # Used by avoid_high_comms_risk constraint, not by base profile cost.
+
+  - type: named_landmark
+    description: "Operator-recognizable landmark (Ferry Building, FOB Bravo, named hill)."
+    osm_tags_match:
+      - "place=*"
+      - "tourism=attraction"
+    atak_icon_hint: "landmark_yellow_diamond"
+    operator_props: [name, type]
+    routing_cost: { foot: 1.0, foot_covered: 1.0, vehicle: 1.0 }
+
+  - type: fob_or_safe_zone
+    description: "Forward operating base, evacuation point, or pre-cleared safe area."
+    derived_from: "Operator overlay or mission input"
+    atak_icon_hint: "fob_blue_diamond"
+    operator_props: [name, status]
+    routing_cost: { foot: 1.0, foot_covered: 1.0, vehicle: 1.0 }
+
+# Notes:
+# - `routing_cost` is a multiplier applied to the base edge cost in Valhalla's
+#   custom-cost lua. 1.0 is neutral; >1.0 is slower; 999 is "uncrossable."
+#   Ben (P4) implements the cost lookup; this file is the single source of
+#   truth for the multipliers. Tune via PR + paired signoff.
+# - `osm_tags_match` is matched left-to-right; first match wins. Multiple-tag
+#   matches (e.g. `landuse=forest,leaf_type=mixed`) require ALL to be present.
+# - `derived_from` entities don't come from OSM; they're computed from DEM /
+#   landcover / overlays at tile-build time and added as edge attributes.
+#
+# Adding a new entity:
+#   1. Append here with type, description, classification rule, icon hint.
+#   2. Update tests/test_entities.py to assert it loads.
+#   3. If it affects routing, pair with Ben on the cost-multiplier value.
+#   4. ATAK icon must exist in atak/icons/ (Ben's lane).

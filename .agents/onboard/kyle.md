@@ -124,7 +124,7 @@ Hardware is unreliable. Always check the physical layer first.
 Kyle has a public RF simulator project that may inform mesh + parsing-verification work:
 
 - **URL:** https://github.com/khicks1724/RFSim
-- **Hackathon rule:** "openly accessible materials" are allowed → you may reference it or depend on it. The hackathon also says "no previous work" → you may NOT copy-paste source into TERA. Reference patterns; do not duplicate code.
+- **Hackathon rule:** "openly accessible materials" are allowed → you may reference it or depend on it. The hackathon also says "no previous work" → you may NOT copy-paste source into TruePoint. Reference patterns; do not duplicate code.
 - **Most relevant to:** issue #23 (mesh stretch — RF substrate), and Satriyo's #22 (parsing-verification — if RFSim has anomaly detection patterns for RF transmissions).
 - **Suggested first action:** ask Kyle what 1-2 patterns from RFSim are most relevant; record in `hardware/REFERENCES.md` with attribution.
 

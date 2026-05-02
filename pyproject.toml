@@ -61,6 +61,10 @@ exclude = ["tests*", "scripts*", "docs*", "figma*", "hardware*", "deploy*", "mod
 line-length = 100
 target-version = "py311"
 src = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology", "tests"]
+# Kyle's local LLM dev sandbox + tests of the same. Has its own deps + its own
+# style; not subject to repo-wide ruff config. Track in GH issue if/when we
+# merge it into the main app.
+extend-exclude = ["llm_dev_kmh", "tests/test_llm_dev_stream.py"]
 
 [tool.ruff.lint]
 select = [
@@ -85,6 +89,8 @@ ignore = [
 # print to stdout. Ignoring T201 in those modules.
 "security/*" = ["T201"]
 "crypto/*" = ["T201"]
+# eval/runner.py is a CLI tool that prints to stdout intentionally.
+"eval/runner.py" = ["T201"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology"]
