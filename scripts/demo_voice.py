@@ -27,11 +27,15 @@ Usage
   python scripts/demo_voice.py --dry-run
 
 In interactive mode (default), at each phrase prompt:
-  [Enter]  -> next phrase
-  r        -> replay current phrase
-  s        -> slow down (length_scale +0.05)
-  f        -> speed up (length_scale -0.05)
-  q        -> quit
+  [Enter]   -> next phrase (no notes captured)
+  r         -> replay current phrase
+  s         -> slow down (length_scale +0.05)
+  f         -> speed up (length_scale -0.05)
+  q         -> quit and write notes file
+  any text  -> save as a note for THIS phrase, then advance
+
+At the end (or on q), notes are written to a markdown file in /tmp and the
+path is printed. Paste that file back to chat to triage cadence fixes.
 
 Listen-for checklist (printed once at start):
 - clarity, pace, comma pause, sentence pause
@@ -50,6 +54,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from voice.phrases import PHRASES, by_category, by_id, categories
@@ -107,6 +112,38 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  listen:  {listen_for}")
 
 
+def _write_notes(
+    notes: list[tuple[str, str, str, str]], length_scale: float
+) -> Path:
+    """Write captured notes to a timestamped markdown file. Returns the path.
+
+    Format mirrors what's useful when triaging cadence rules: phrase id,
+    category, the cadence-transformed text (so I can see what Piper actually
+    received), and the operator's note.
+    """
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # noqa: DTZ005 -- local time fine for filename
+    out = Path(tempfile.gettempdir()) / f"tera_voice_notes_{stamp}.md"
+
+    lines: list[str] = []
+    lines.append(f"# TERA voice notes — {stamp}")
+    lines.append("")
+    lines.append(f"- length_scale (final): {length_scale:.2f}")
+    lines.append(f"- phrases noted: {len(notes)}")
+    lines.append("")
+    if not notes:
+        lines.append("_No notes captured. All phrases sounded clean._")
+    else:
+        lines.append("| id | category | cadence | note |")
+        lines.append("|---|---|---|---|")
+        for pid, cat, cadence, note in notes:
+            # Escape pipes inside cadence/note for markdown table safety.
+            cadence_safe = cadence.replace("|", "\\|")
+            note_safe = note.replace("|", "\\|")
+            lines.append(f"| `{pid}` | {cat} | {cadence_safe} | {note_safe} |")
+    out.write_text("\n".join(lines) + "\n")
+    return out
+
+
 def _interactive_loop(
     phrases: list[tuple[str, str, str, str]], length_scale: float
 ) -> int:
@@ -121,14 +158,26 @@ def _interactive_loop(
 
     print(CHECKLIST)
     print(f"phrases: {len(phrases)}, starting length_scale={length_scale:.2f}")
-    print("controls: [Enter]=next  r=replay  s=slower  f=faster  q=quit\n")
+    print("controls:")
+    print("  [Enter]   -> next phrase (no note)")
+    print("  r         -> replay")
+    print("  s / f     -> slower / faster")
+    print("  q         -> quit + write notes file")
+    print("  any text  -> save as note for THIS phrase, then advance\n")
+
+    notes: list[tuple[str, str, str, str]] = []  # (id, category, cadence, note)
+
+    def _commands_help() -> None:
+        print("  -- single-char commands: r=replay s=slower f=faster q=quit; "
+              "any other text becomes a note for this phrase --")
 
     i = 0
     while i < len(phrases):
         phrase = phrases[i]
+        pid, cat, raw_text, _ = phrase
         _show_phrase(phrase)
 
-        wav = _synth_to_tempfile(phrase[2], length_scale)
+        wav = _synth_to_tempfile(raw_text, length_scale)
         if wav is None:
             print("  ! synth failed, skipping")
             i += 1
@@ -138,38 +187,49 @@ def _interactive_loop(
         wav.unlink(missing_ok=True)
 
         try:
-            cmd = input(
-                f"  [{i + 1}/{len(phrases)}] length_scale={length_scale:.2f} > "
-            ).strip().lower()
+            raw = input(
+                f"  [{i + 1}/{len(phrases)}] note (or r/s/f/q, Enter=next) > "
+            )
         except EOFError:
             print()
-            return 0
+            break
 
-        if cmd == "q":
-            return 0
-        if cmd == "r":
-            continue  # replay same phrase
-        if cmd == "s":
-            length_scale = min(2.0, length_scale + 0.05)
-            # Rebuild client with new length_scale default and play again.
+        cmd = raw.strip()
+        cmd_lower = cmd.lower()
+
+        # Single-char commands.
+        if cmd_lower == "q":
+            break
+        if cmd_lower == "r":
+            continue
+        if cmd_lower in ("s", "f"):
+            delta = 0.05 if cmd_lower == "s" else -0.05
+            length_scale = max(0.5, min(2.0, length_scale + delta))
             reset_piper()
             from voice import piper_client
 
             piper_client._client = piper_client.PiperClient(length_scale=length_scale)
-            print(f"  -> length_scale {length_scale:.2f} (slower)")
+            label = "slower" if cmd_lower == "s" else "faster"
+            print(f"  -> length_scale {length_scale:.2f} ({label}); replaying")
             continue
-        if cmd == "f":
-            length_scale = max(0.5, length_scale - 0.05)
-            reset_piper()
-            from voice import piper_client
+        if cmd_lower in ("h", "help", "?"):
+            _commands_help()
+            continue
 
-            piper_client._client = piper_client.PiperClient(length_scale=length_scale)
-            print(f"  -> length_scale {length_scale:.2f} (faster)")
+        # Empty Enter -> advance, no note.
+        if cmd == "":
+            i += 1
             continue
-        # Anything else (including blank Enter) -> next phrase
+
+        # Anything else -> capture as note, then advance.
+        cadence = to_operator_cadence(raw_text)
+        notes.append((pid, cat, cadence, cmd))
+        print(f"  noted: {cmd}")
         i += 1
 
-    print("\nEnd of corpus. Take notes on which phrases need cadence rule fixes.")
+    out = _write_notes(notes, length_scale)
+    print(f"\nWrote {len(notes)} note(s) to {out}")
+    print("Paste that file back to chat to triage cadence fixes.")
     return 0
 
 
