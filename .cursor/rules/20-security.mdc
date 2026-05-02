@@ -1,0 +1,32 @@
+---
+description: Security-specific rules for P2 (security/ and crypto/ directories)
+globs: ["security/**/*.py", "crypto/**/*.py"]
+alwaysApply: false
+---
+
+# P2 Security Lane Rules
+
+## ML-DSA signing
+- Always use `create_signer()` factory — never instantiate `MLDSASigner` directly
+- Key files live in `crypto/keys/` — never elsewhere
+- Key files must have mode 0600 on Jetson (enforced in `ml_dsa_signer.py`)
+- liboqs not available → `FallbackSigner` (Ed25519) is acceptable for dev, MUST log a WARNING
+
+## CoT verification
+- `verify_cot()` returning `valid=False` means HARD REJECT — never downgrade to warning
+- Trust list is a flat JSON for MVP — no dynamic update at hackathon scale
+
+## SuperAgent Guard
+- `guard_input()` is async — always await it
+- If `classification == "block"` → stop the pipeline, do not proceed to routing
+- `force_local=True` for offline demo (Jetson with WiFi off)
+
+## Security test requirements
+- Every new detection pattern in `structured_query_validator.py` needs a test in `security/prompt_injection_tests.py`
+- Every trust verification path in `cot_signer.py` needs a test
+
+## What P2 ships to P4 (interface contract)
+```python
+from crypto.cot_signer import sign_cot, verify_cot, CotRoute, VerificationResult
+```
+P4 only imports these — never `ml_dsa_signer` directly.

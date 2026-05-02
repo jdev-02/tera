@@ -1,0 +1,40 @@
+---
+description: Team coding standards for Wayfinder hackathon build
+globs: ["**/*.py"]
+alwaysApply: true
+---
+
+# Wayfinder — Team Standards
+
+## Language & Runtime
+- Python 3.11 only
+- All functions must have type hints
+- No `print()` — use `structlog` for logging (or `print(f"[module] msg")` pattern for hackathon speed)
+- No `requests` without explicit timeout parameter
+
+## Frameworks
+- Agent orchestrator: FastAPI
+- Testing: pytest
+- Linting: ruff
+- No Flask, no Django (FastAPI only)
+
+## Security (non-negotiable)
+- No plaintext secrets in code or config files
+- `.env` is gitignored — never commit it
+- All LLM tool calls must go through the allow-list in `agent/tool_registry.py`
+- No `http_get` or outbound URL tool exposed to the LLM
+- All CoT emitted by the agent must be signed via `crypto/cot_signer.py`
+- All CoT received must be verified via `crypto/cot_signer.py` before forwarding to ATAK
+
+## Directory ownership (CODEOWNERS enforced)
+- Only touch your own directory unless paired
+- Cross-directory changes require paired reviewer from §13 of PRD
+
+## Commit style (lefthook enforced)
+- `feat(agent): description`
+- `fix(routing): description`
+- `security(crypto): description`
+- `chore(infra): description`
+
+## Definition of Done
+A change is done when: `make ci` passes locally AND on the PR.

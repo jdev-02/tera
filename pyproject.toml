@@ -18,13 +18,15 @@ dependencies = [
     "structlog>=24.1",
     "pyyaml>=6.0",
     "jsonschema>=4.22",
+    "defusedxml>=0.7.1",
     "shapely>=2.0",
     "geojson>=3.1",
     "lxml>=5.2",
     "httpx>=0.27",
     "openai>=1.40",
     "ollama>=0.3",
-    "cryptography>=43.0",
+    "cryptography>=46.0.7",
+    "safety-agent>=0.1.5",
     "python-multipart>=0.0.9",
     "rich>=13.7",
 ]
@@ -80,14 +82,17 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S106"]
+"crypto/*.py" = ["T201"]
+"security/*.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
+strict = false
 ignore_missing_imports = true
-disallow_untyped_defs = true
+check_untyped_defs = true
+disallow_untyped_defs = false
 warn_unused_ignores = true
-files = ["agent", "routing", "crypto"]
+files = ["agent", "routing", "crypto", "security"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

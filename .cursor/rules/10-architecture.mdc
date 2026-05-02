@@ -1,0 +1,45 @@
+---
+description: System architecture reference for Wayfinder — read by Cursor on every prompt
+globs: ["**/*.py", "**/*.sh", "**/*.yml"]
+alwaysApply: true
+---
+
+# Wayfinder — Architecture Reference (PRD §7 + §8)
+
+## Pipeline (left to right)
+```
+Voice → Whisper-tiny → Agent (Gemma) → Structured Query
+      → Security Gate (security/) → Routing (Valhalla)
+      → ML-DSA Signer (crypto/) → CoT XML → ATAK
+```
+
+## Security pipeline (P2 owns)
+```
+Raw input → SuperAgent Guard → SuperAgent Redact
+          → Provenance tag → Schema validator → Policy gate
+          → Route trust score → ATAK display label
+```
+
+## P2/P4 integration contract
+- P4's ATAK bridge calls `sign_cot(route: CotRoute)` from `crypto/cot_signer.py`
+- P4's ATAK bridge calls `verify_cot(cot_xml: str)` on every received CoT
+- P4 rejects any CoT where `verify_cot().valid is False`
+- `CotRoute` dataclass is in `crypto/cot_signer.py` — P4 imports it
+
+## P1/P4 agent↔routing contract
+- Agent posts `POST /route` with `RouteQuery` (see `docs/route_query.schema.json`)
+- Routing engine returns `RouteResponse` (GeoJSON + waypoints + cost_breakdown)
+- Contract frozen Sat 1500 — changes require P1 + P4 sign-off
+
+## Forbidden patterns
+- LLM must NEVER directly call routing, signing, or ATAK rendering
+- LLM output must pass `security/structured_query_validator.py` before any action
+- No outbound HTTP from the Jetson during demo (iptables enforced by `infra/jetson_firewall.sh`)
+
+## Key files
+- Threat model: `docs/cyber_trust_boundary.md`
+- Route schema: `docs/route_query.schema.json`
+- ML-DSA signer: `crypto/ml_dsa_signer.py`
+- CoT signer: `crypto/cot_signer.py`
+- Policy gate: `security/policy_gate.py`
+- Trust list: `crypto/keys/trust_list.json`
