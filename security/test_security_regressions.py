@@ -1,9 +1,9 @@
 import importlib
 import xml.etree.ElementTree as ET
 
-from crypto.cot_signer import CotRoute, embed_signature_in_cot_xml, sign_cot, verify_cot
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
+from crypto.cot_signer import CotRoute, embed_signature_in_cot_xml, sign_cot, verify_cot
 from security.structured_query_validator import validate_route_query
 
 

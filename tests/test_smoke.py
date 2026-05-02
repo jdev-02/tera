@@ -1,9 +1,17 @@
-"""Smoke tests. Must always pass on main."""
+"""Smoke tests. Must always pass on main.
+
+Keeps tests narrow:
+- /health is a no-deps liveness probe.
+- /plan validation (422 on bad input) doesn't require the LLM/pipeline to run.
+
+Full /plan integration tests live in tests/test_orchestrator.py with mocks.
+"""
 
 from __future__ import annotations
 
-from agent.app import app
 from fastapi.testclient import TestClient
+
+from agent.app import app
 
 client = TestClient(app)
 
@@ -14,28 +22,21 @@ def test_health() -> None:
     body = r.json()
     assert body["status"] == "ok"
     assert "phase" in body
-
-
-def test_plan_stub_shape() -> None:
-    r = client.post(
-        "/plan",
-        json={
-            "prompt": "route to nearest freshwater within 5km",
-            "current": {"lat": 37.7955, "lon": -122.3937},
-        },
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert "route" in body
-    assert body["route"]["type"] == "Feature"
-    assert body["route"]["geometry"]["type"] == "LineString"
-    assert "waypoints" in body
-    assert "rationale" in body
+    assert "profile" in body
 
 
 def test_plan_validation_rejects_bad_lat() -> None:
+    """422 from pydantic; doesn't require the orchestrator to run."""
     r = client.post(
         "/plan",
         json={"prompt": "x", "current": {"lat": 999, "lon": 0}},
+    )
+    assert r.status_code == 422
+
+
+def test_plan_validation_rejects_empty_prompt() -> None:
+    r = client.post(
+        "/plan",
+        json={"prompt": "", "current": {"lat": 37.7, "lon": -122.4}},
     )
     assert r.status_code == 422
