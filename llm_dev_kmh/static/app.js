@@ -87,7 +87,10 @@ function appendMessage(role, body, meta = "") {
 
   const bodyNode = document.createElement("div");
   bodyNode.className = "message-body";
-  bodyNode.textContent = body;
+  if (role === "assistant") {
+    bodyNode.classList.add("markdown-body");
+  }
+  renderMessageBody(bodyNode, body, role === "assistant");
 
   article.append(roleNode, bodyNode);
   if (meta) {
@@ -108,6 +111,168 @@ function appendMessage(role, body, meta = "") {
   };
 }
 
+function isMarkdownBlockStart(line) {
+  return /^```/.test(line)
+    || /^(#{1,4})\s+/.test(line)
+    || /^(\d+)\.\s+/.test(line)
+    || /^[-*]\s+/.test(line)
+    || /^(-{3,}|\*{3,})$/.test(line.trim());
+}
+
+function appendInlineMarkdown(parent, text) {
+  const tokenPattern = /(`[^`]+`|\*\*[\s\S]+?\*\*|\*[^*\n]+\*|\[[^\]]+\]\((https?:\/\/[^)\s]+)\))/g;
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(tokenPattern)) {
+    if (match.index > lastIndex) {
+      parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+
+    const token = match[0];
+    if (token.startsWith("`")) {
+      const code = document.createElement("code");
+      code.textContent = token.slice(1, -1);
+      parent.appendChild(code);
+    } else if (token.startsWith("**")) {
+      const strong = document.createElement("strong");
+      appendInlineMarkdown(strong, token.slice(2, -2));
+      parent.appendChild(strong);
+    } else if (token.startsWith("*")) {
+      const emphasis = document.createElement("em");
+      appendInlineMarkdown(emphasis, token.slice(1, -1));
+      parent.appendChild(emphasis);
+    } else {
+      const linkMatch = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      if (linkMatch) {
+        const anchor = document.createElement("a");
+        anchor.href = linkMatch[2];
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.textContent = linkMatch[1];
+        parent.appendChild(anchor);
+      } else {
+        parent.appendChild(document.createTextNode(token));
+      }
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+}
+
+function appendParagraph(container, lines) {
+  const paragraph = document.createElement("p");
+  appendInlineMarkdown(paragraph, lines.map((line) => line.trim()).join(" "));
+  container.appendChild(paragraph);
+}
+
+function appendList(container, lines, ordered) {
+  const list = document.createElement(ordered ? "ol" : "ul");
+  const itemPattern = ordered ? /^\d+\.\s+(.*)$/ : /^[-*]\s+(.*)$/;
+
+  for (const line of lines) {
+    const item = document.createElement("li");
+    appendInlineMarkdown(item, line.match(itemPattern)?.[1] || line.trim());
+    list.appendChild(item);
+  }
+
+  container.appendChild(list);
+}
+
+function renderMarkdown(container, markdown) {
+  container.replaceChildren();
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      code.textContent = codeLines.join("\n");
+      pre.appendChild(code);
+      container.appendChild(pre);
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
+      container.appendChild(document.createElement("hr"));
+      index += 1;
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      const headingLevel = Math.min(heading[1].length + 2, 6);
+      const headingNode = document.createElement(`h${headingLevel}`);
+      appendInlineMarkdown(headingNode, heading[2]);
+      container.appendChild(headingNode);
+      index += 1;
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const listLines = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index].trim())) {
+        listLines.push(lines[index].trim());
+        index += 1;
+      }
+      appendList(container, listLines, true);
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const listLines = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index].trim())) {
+        listLines.push(lines[index].trim());
+        index += 1;
+      }
+      appendList(container, listLines, false);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !isMarkdownBlockStart(lines[index].trim())
+    ) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    appendParagraph(container, paragraphLines);
+  }
+}
+
+function renderMessageBody(bodyNode, body, useMarkdown) {
+  bodyNode.removeAttribute("aria-label");
+  if (useMarkdown) {
+    renderMarkdown(bodyNode, body);
+    return;
+  }
+  bodyNode.textContent = body;
+}
+
 function ensureMessageMeta(messageRef, meta) {
   if (messageRef.metaNode) {
     messageRef.metaNode.textContent = meta;
@@ -118,6 +283,29 @@ function ensureMessageMeta(messageRef, meta) {
   metaNode.textContent = meta;
   messageRef.article.append(metaNode);
   messageRef.metaNode = metaNode;
+}
+
+function setMessagePending(messageRef, label = "Agent is thinking") {
+  messageRef.article.classList.add("is-pending");
+  messageRef.bodyNode.textContent = "";
+  messageRef.bodyNode.setAttribute("aria-label", label);
+
+  const indicator = document.createElement("span");
+  indicator.className = "typing-indicator";
+  indicator.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 3; i += 1) {
+    indicator.appendChild(document.createElement("span"));
+  }
+  messageRef.bodyNode.appendChild(indicator);
+}
+
+function setMessageBody(messageRef, text) {
+  messageRef.article.classList.remove("is-pending");
+  renderMessageBody(
+    messageRef.bodyNode,
+    text,
+    messageRef.article.classList.contains("assistant-message"),
+  );
 }
 
 async function readEventStream(response, onEvent) {
@@ -370,8 +558,16 @@ async function submitPrompt(event) {
     ].join(" | "),
   );
 
+  let activeAssistantMessage = null;
+
   try {
-    const assistantMessage = appendMessage("assistant", "", model ? `model: ${model} | streaming` : "streaming");
+    const assistantMessage = appendMessage(
+      "assistant",
+      "",
+      model ? `model: ${model} | streaming` : "streaming",
+    );
+    activeAssistantMessage = assistantMessage;
+    setMessagePending(assistantMessage);
     const response = await fetch("/api/prompt/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -402,8 +598,12 @@ async function submitPrompt(event) {
       }
       if (eventData.type === "token") {
         streamedText += eventData.text || "";
-        assistantMessage.bodyNode.textContent = streamedText;
+        setMessageBody(assistantMessage, streamedText);
         els.chatLog.scrollTop = els.chatLog.scrollHeight;
+        return;
+      }
+      if (eventData.type === "status") {
+        els.requestStatus.textContent = eventData.detail || "Streaming response...";
         return;
       }
       if (eventData.type === "error") {
@@ -422,7 +622,12 @@ async function submitPrompt(event) {
     els.promptInput.value = "";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    appendMessage("assistant", message, "request failed");
+    if (activeAssistantMessage) {
+      setMessageBody(activeAssistantMessage, message);
+      ensureMessageMeta(activeAssistantMessage, "request failed");
+    } else {
+      appendMessage("assistant", message, "request failed");
+    }
     els.requestStatus.textContent = "Request failed";
   } finally {
     els.submitBtn.disabled = false;
@@ -692,12 +897,31 @@ function onResizerPointerUp() {
   window.removeEventListener("pointermove", onResizerPointerMove);
 }
 
+function onPromptInputKeyDown(event) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    return;
+  }
+
+  event.preventDefault();
+  if (els.submitBtn.disabled) {
+    return;
+  }
+
+  if (typeof els.promptForm.requestSubmit === "function") {
+    els.promptForm.requestSubmit();
+    return;
+  }
+
+  els.submitBtn.click();
+}
+
 async function init() {
   clearChat();
   applyPanelState();
 
-   if (!state.handlersBound) {
+  if (!state.handlersBound) {
     els.promptForm.addEventListener("submit", submitPrompt);
+    els.promptInput.addEventListener("keydown", onPromptInputKeyDown);
     els.clearChatBtn.addEventListener("click", clearChat);
     els.resetViewBtn.addEventListener("click", resetView);
     els.panelToggleBtn.addEventListener("click", togglePanel);
