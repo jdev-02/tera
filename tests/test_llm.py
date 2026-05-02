@@ -26,7 +26,7 @@ def test_invalid_profile_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_austere_never_constructs_frontier(monkeypatch: pytest.MonkeyPatch) -> None:
     """Defense in depth: austere profile must NEVER instantiate FrontierClient."""
     monkeypatch.setenv("TERA_DEVICE_PROFILE", "austere")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-be-used")
+    monkeypatch.setenv("OPENAI_API_KEY", "placeholder-frontier-token")
     with (
         patch("agent.llm.OllamaClient") as mock_ollama,
         patch("agent.llm.FrontierClient") as mock_frontier,
@@ -52,7 +52,7 @@ def test_austere_rejects_frontier_request(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_garrison_allows_both_local_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERA_DEVICE_PROFILE", "garrison")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "placeholder-frontier-token")
     with (
         patch("agent.llm.OllamaClient") as mock_ollama,
         patch("agent.llm.FrontierClient") as mock_frontier,
@@ -71,7 +71,7 @@ def test_garrison_allows_both_local_default(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_sar_defaults_to_frontier(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERA_DEVICE_PROFILE", "sar")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "placeholder-frontier-token")
     with (
         patch("agent.llm.OllamaClient") as mock_ollama,
         patch("agent.llm.FrontierClient") as mock_frontier,
