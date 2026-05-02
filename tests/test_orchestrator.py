@@ -15,10 +15,21 @@ from agent import llm
 from agent.orchestrator import (
     PlanBlockedError,
     _avoid_for,
+    _pipeline_passed,
     _profile_for,
+    _route_hash,
+    _run_security_pipeline,
+    approve_plan,
     plan,
 )
-from agent.schemas import Coord, PlanRequest
+from agent.schemas import (
+    Coord,
+    OperatorSignature,
+    PlanApprovalRequest,
+    PlanRequest,
+    Signature,
+    Waypoint,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +97,44 @@ def _blocked_pipeline_result(blocked_at: str) -> dict[str, Any]:
     }
 
 
+def test_pipeline_passed_accepts_plan_guard_key() -> None:
+    assert _pipeline_passed({"allowed": True}) is True
+    assert _pipeline_passed({"allowed": False}) is False
+
+
+@pytest.mark.asyncio
+async def test_run_security_pipeline_uses_plan_guard() -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_guard(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        result = MagicMock()
+        result.to_dict.return_value = {
+            "allowed": True,
+            "blocked_at": None,
+            "stages": [],
+            "atak_display": "Suggested Route - Needs Review",
+            "trust_result": {"trust_status": "needs_review"},
+        }
+        return result
+
+    with patch.dict(
+        "sys.modules",
+        {"security.plan_guard": MagicMock(guard_plan_request=fake_guard)},
+    ):
+        result = await _run_security_pipeline(
+            raw_text="Route me to freshwater.",
+            source="operator_text",
+            structured_query=VALID_FRESHWATER_QUERY,
+        )
+
+    assert result["allowed"] is True
+    assert captured["target_agent"] == "RoutingAgent"
+    assert captured["operation"] == "ComputeRoute"
+    assert captured["operator_approved"] is False
+    assert captured["signature_valid"] is False
+
+
 # ---------------------------------------------------------------------------
 # Canonical RouteQuery JSONs anchored to PRD §6 scenarios. These MIRROR the
 # examples in ontology/route_ontology.yml. If you change them here, change
@@ -145,7 +194,7 @@ async def test_plan_happy_path_returns_route(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("TERA_DEVICE_PROFILE", "austere")
     mock_client = _make_mock_llm(VALID_FRESHWATER_QUERY)
 
-    async def fake_pipeline(**kwargs: Any) -> Any:
+    async def fake_guard(**kwargs: Any) -> Any:
         result = MagicMock()
         result.to_dict.return_value = _passing_pipeline_result(VALID_FRESHWATER_QUERY)
         return result
@@ -156,7 +205,7 @@ async def test_plan_happy_path_returns_route(monkeypatch: pytest.MonkeyPatch) ->
         # Patch the import inside _run_security_pipeline.
         patch.dict(
             "sys.modules",
-            {"security.pipeline": MagicMock(run_pipeline=fake_pipeline)},
+            {"security.plan_guard": MagicMock(guard_plan_request=fake_guard)},
         ),
     ):
         mock_reg.return_value.get.return_value = mock_client
@@ -177,11 +226,35 @@ async def test_plan_happy_path_returns_route(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_plan_runs_real_plan_guard_without_operator_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TERA_DEVICE_PROFILE", "austere")
+    monkeypatch.delenv("SUPERAGENT_API_KEY", raising=False)
+    mock_client = _make_mock_llm(VALID_FRESHWATER_QUERY)
+
+    with (
+        patch("agent.orchestrator.get_registry") as mock_reg,
+        patch("agent.orchestrator._sign_response", return_value=None),
+    ):
+        mock_reg.return_value.get.return_value = mock_client
+        req = PlanRequest(
+            prompt="Route me to nearest freshwater within 5km on foot, covered terrain.",
+            current=Coord(lat=37.7955, lon=-122.3937),
+        )
+        resp = await plan(req)
+
+    assert resp.route["type"] == "Feature"
+    assert resp.trust["trust_status"] == "needs_review"
+    assert "Operator approval missing" in resp.trust["reasons"]
+
+
+@pytest.mark.asyncio
 async def test_plan_pipeline_blocked_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERA_DEVICE_PROFILE", "austere")
     mock_client = _make_mock_llm(VALID_FRESHWATER_QUERY)
 
-    async def fake_pipeline(**kwargs: Any) -> Any:
+    async def fake_guard(**kwargs: Any) -> Any:
         result = MagicMock()
         result.to_dict.return_value = _blocked_pipeline_result("superagent_guard")
         return result
@@ -190,7 +263,7 @@ async def test_plan_pipeline_blocked_raises(monkeypatch: pytest.MonkeyPatch) -> 
         patch("agent.orchestrator.get_registry") as mock_reg,
         patch.dict(
             "sys.modules",
-            {"security.pipeline": MagicMock(run_pipeline=fake_pipeline)},
+            {"security.plan_guard": MagicMock(guard_plan_request=fake_guard)},
         ),
     ):
         mock_reg.return_value.get.return_value = mock_client
@@ -317,7 +390,7 @@ async def test_prd_scenario_end_to_end_with_mock_llm(
     monkeypatch.setenv("TERA_DEVICE_PROFILE", "austere")
     mock_client = _make_mock_llm(query)
 
-    async def fake_pipeline(**kwargs: Any) -> Any:
+    async def fake_guard(**kwargs: Any) -> Any:
         result = MagicMock()
         result.to_dict.return_value = _passing_pipeline_result(query)
         return result
@@ -327,7 +400,7 @@ async def test_prd_scenario_end_to_end_with_mock_llm(
         patch("agent.orchestrator._sign_response", return_value=None),
         patch.dict(
             "sys.modules",
-            {"security.pipeline": MagicMock(run_pipeline=fake_pipeline)},
+            {"security.plan_guard": MagicMock(guard_plan_request=fake_guard)},
         ),
     ):
         mock_reg.return_value.get.return_value = mock_client
@@ -363,7 +436,7 @@ async def test_plan_no_pois_returns_empty_with_rationale(
 
     mock_client = _make_mock_llm(too_small_query)
 
-    async def fake_pipeline(**kwargs: Any) -> Any:
+    async def fake_guard(**kwargs: Any) -> Any:
         result = MagicMock()
         result.to_dict.return_value = _passing_pipeline_result(too_small_query)
         return result
@@ -373,7 +446,7 @@ async def test_plan_no_pois_returns_empty_with_rationale(
         patch("agent.orchestrator._sign_response", return_value=None),
         patch.dict(
             "sys.modules",
-            {"security.pipeline": MagicMock(run_pipeline=fake_pipeline)},
+            {"security.plan_guard": MagicMock(guard_plan_request=fake_guard)},
         ),
     ):
         mock_reg.return_value.get.return_value = mock_client
@@ -383,3 +456,54 @@ async def test_plan_no_pois_returns_empty_with_rationale(
         )
         resp = await plan(req)
     assert "No freshwater found" in resp.rationale or "expanding radius" in resp.rationale
+
+
+def test_approve_plan_returns_operator_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    route = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-122.3937, 37.7955], [-122.415, 37.803]],
+        },
+        "properties": {},
+    }
+    waypoints = [Waypoint(lat=37.803, lon=-122.415, label="HLZ open field")]
+    device_signature = Signature(
+        scheme="ML-DSA-65",
+        key_id="wayfinder-device-001",
+        value_b64="ZGV2aWNlLXNpZw==",
+        signed_at="2026-05-02T22:30:00Z",
+    )
+    expected_hash = _route_hash(route, waypoints)
+
+    def fake_sign(**kwargs: Any) -> OperatorSignature:
+        return OperatorSignature(
+            scheme="ML-DSA-65",
+            key_id=kwargs["operator_key_id"],
+            value_b64="b3BlcmF0b3Itc2ln",
+            signed_at="2026-05-02T22:31:00Z",
+            approves_route_hash=kwargs["route_hash"],
+            payload_hash="b" * 64,
+            payload_json=(
+                '{"approved_by":"Sgt. Vega","approves_route_hash":"'
+                + kwargs["route_hash"]
+                + '","route_id":"TERA-approval-test"}'
+            ),
+        )
+
+    monkeypatch.setattr("agent.orchestrator._sign_operator_commit", fake_sign)
+    response = approve_plan(
+        PlanApprovalRequest(
+            route_id="TERA-approval-test",
+            route=route,
+            waypoints=waypoints,
+            device_signature=device_signature,
+            operator_key_id="OPERATOR-VEGA-001",
+            approved_by="Sgt. Vega",
+        )
+    )
+
+    assert response.approval_state == "operator_committed"
+    assert response.route_hash == expected_hash
+    assert response.operator_signature.approves_route_hash == expected_hash
+    assert response.operator_signature.key_id == "OPERATOR-VEGA-001"

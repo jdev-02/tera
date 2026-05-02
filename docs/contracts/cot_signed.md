@@ -105,6 +105,35 @@ forward_to_atak(event_xml)
 }
 ```
 
+## Operator approval wrapper (`POST /plan/approve`)
+
+Stage-1 `/plan` responses are device-signed and provisional. After the operator reviews a route, the UI calls `/plan/approve` and receives a stage-3 commit wrapper:
+
+```json
+{
+  "route_id": "TERA-2026-05-02-0001",
+  "approval_state": "operator_committed",
+  "route_hash": "<sha256 of canonical route geometry + waypoints>",
+  "device_signature": {
+    "scheme": "ML-DSA-65",
+    "key_id": "WF-DEV-0001",
+    "value_b64": "...",
+    "signed_at": "2026-05-02T22:30:00Z"
+  },
+  "operator_signature": {
+    "scheme": "ML-DSA-65",
+    "key_id": "OPERATOR-VEGA-001",
+    "value_b64": "...",
+    "signed_at": "2026-05-02T22:31:00Z",
+    "approves_route_hash": "<same route_hash>",
+    "payload_hash": "<sha256 of canonical approval payload>",
+    "payload_json": "{\"approved_by\":\"Sgt. Vega\",\"approves_route_hash\":\"<same route_hash>\",\"device_signature\":{...},\"route_id\":\"TERA-2026-05-02-0001\"}"
+  }
+}
+```
+
+Downstream components must treat device-signed-only routes as suggested/provisional. Only wrappers with a valid device signature and a valid operator signature over the same canonical `payload_json` and `route_hash` may be forwarded as committed routes.
+
 ## Performance budget
 
 - Sign: < 5 ms per CoT message on Jetson Orin Nano.

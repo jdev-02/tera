@@ -25,13 +25,44 @@
       },
       "additionalProperties": false
     },
+    "OperatorSignature": {
+      "type": "object",
+      "required": [
+        "scheme",
+        "key_id",
+        "value_b64",
+        "signed_at",
+        "approves_route_hash",
+        "payload_hash",
+        "payload_json"
+      ],
+      "properties": {
+        "scheme": { "type": "string" },
+        "key_id": { "type": "string", "minLength": 3 },
+        "value_b64": { "type": "string", "minLength": 1 },
+        "signed_at": { "type": "string", "format": "date-time" },
+        "approves_route_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "payload_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "payload_json": {
+          "type": "string",
+          "minLength": 2,
+          "description": "Canonical route-approval JSON signed by the operator key."
+        }
+      },
+      "additionalProperties": false
+    },
     "PlanRequest": {
       "type": "object",
       "required": ["prompt", "current"],
       "properties": {
         "prompt": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "current": { "$ref": "#/definitions/Coord" },
-        "request_id": { "type": "string" }
+        "request_id": { "type": "string" },
+        "source": {
+          "type": "string",
+          "enum": ["operator_voice", "operator_text", "test"],
+          "default": "operator_text"
+        }
       },
       "additionalProperties": false
     },
@@ -88,12 +119,54 @@
             "elevation_gain_m": { "type": "number" }
           }
         },
+        "trust": { "type": "object" },
         "signature": {
           "oneOf": [
             { "type": "null" },
             { "$ref": "#/definitions/Signature" }
           ]
         }
+      },
+      "additionalProperties": false
+    },
+    "PlanApprovalRequest": {
+      "type": "object",
+      "required": ["route_id", "route", "device_signature"],
+      "properties": {
+        "route_id": { "type": "string", "minLength": 1 },
+        "route": { "type": "object" },
+        "waypoints": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Waypoint" },
+          "default": []
+        },
+        "device_signature": { "$ref": "#/definitions/Signature" },
+        "operator_key_id": {
+          "type": "string",
+          "minLength": 3,
+          "default": "operator-demo-001"
+        },
+        "approved_by": {
+          "oneOf": [{ "type": "null" }, { "type": "string" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanApprovalResponse": {
+      "type": "object",
+      "required": [
+        "route_id",
+        "approval_state",
+        "route_hash",
+        "device_signature",
+        "operator_signature"
+      ],
+      "properties": {
+        "route_id": { "type": "string", "minLength": 1 },
+        "approval_state": { "type": "string", "const": "operator_committed" },
+        "route_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "device_signature": { "$ref": "#/definitions/Signature" },
+        "operator_signature": { "$ref": "#/definitions/OperatorSignature" }
       },
       "additionalProperties": false
     },

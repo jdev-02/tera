@@ -15,9 +15,15 @@ from typing import Any
 import structlog
 from fastapi import FastAPI, HTTPException
 
-from agent.orchestrator import PlanBlockedError
+from agent.orchestrator import PlanBlockedError, approve_plan
 from agent.orchestrator import plan as orchestrate_plan
-from agent.schemas import PlanBlocked, PlanRequest, PlanResponse
+from agent.schemas import (
+    PlanApprovalRequest,
+    PlanApprovalResponse,
+    PlanBlocked,
+    PlanRequest,
+    PlanResponse,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -63,4 +69,13 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     except RuntimeError as e:
         # LLM provider failed, security module failed to import, etc.
         log.exception("plan_failed", error=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.post("/plan/approve", response_model=PlanApprovalResponse)
+async def plan_approve_endpoint(req: PlanApprovalRequest) -> PlanApprovalResponse:
+    try:
+        return approve_plan(req)
+    except RuntimeError as e:
+        log.exception("plan_approval_failed", error=str(e))
         raise HTTPException(status_code=503, detail=str(e)) from e
