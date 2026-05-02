@@ -5,7 +5,7 @@ Map-centric local LLM workspace kept entirely inside `llm_dev_kmh`.
 ## What it does
 
 - serves a Cesium-based map view with imagery and terrain streaming
-- exposes an operator sidebar inspired by the RFSim map shell pattern
+- exposes an operator sidebar tailored for TERA map and source-planning workflows
 - lists locally installed Ollama models
 - sends prompt requests to local Ollama via `/api/prompt`
 - lets the operator click terrain to include a pinned map point in prompt context

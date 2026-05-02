@@ -1,4 +1,4 @@
-# RF Sim — Slash Commands (AI Preset Prompts)
+# TERA — Slash Commands (AI Preset Prompts)
 
 These slash commands are pre-built prompts that users can trigger via `/command` syntax in the AI chat.
 Each command injects a full expert prompt into the chat input, which the AI then executes against the current scenario state.
@@ -175,7 +175,7 @@ Generate an After-Action Report (AAR) for the current scenario. Include classifi
 
 ## Simulation Commands
 
-### `/rf-simulate` — Full Scenario Simulation
+### `/tera-simulate` — Full Scenario Simulation
 **Category:** Simulation
 ```
 Run a full RF scenario simulation across all placed assets. Describe end-to-end communication performance, identify failure points and single points of failure, provide timeline-based outcomes for a representative mission sequence, and give what-if comparisons for alternate configurations or terrain conditions.
@@ -231,6 +231,6 @@ Generate an exportable RF plan document for the current scenario. Produce a comp
 | `/pace` | Generate PACE Plan | Planning |
 | `/soi` | Generate SOI/CEOI | Planning |
 | `/aar` | Generate AAR | Planning |
-| `/rf-simulate` | Full Scenario Simulation | Simulation |
+| `/tera-simulate` | Full Scenario Simulation | Simulation |
 | `/rf-debug` | RF Diagnostics | Diagnostics |
 | `/rf-export` | Export RF Plan | Export |
