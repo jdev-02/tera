@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Dev KMH</title>
+  <style>
+    :root {
+      --sand: #efe3cf;
+      --clay: #c5703b;
+      --pine: #21352d;
+      --fog: #f7f4ef;
+      --ink: #152019;
+      --line: rgba(21, 32, 25, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(197, 112, 59, 0.3), transparent 28%),
+        linear-gradient(135deg, #f9f5ed 0%, #e7dcc7 48%, #d9cab1 100%);
+    }
+
+    main {
+      width: min(960px, calc(100% - 32px));
+      margin: 32px auto;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(247, 244, 239, 0.88);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 20px 80px rgba(33, 53, 45, 0.12);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+    }
+
+    p {
+      margin: 0;
+      color: rgba(21, 32, 25, 0.8);
+    }
+
+    .grid {
+      display: grid;
+      gap: 20px;
+      margin-top: 28px;
+    }
+
+    .panel {
+      padding: 18px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(21, 32, 25, 0.08);
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+
+    textarea,
+    input,
+    select {
+      width: 100%;
+      border: 1px solid rgba(21, 32, 25, 0.14);
+      border-radius: 14px;
+      padding: 14px 16px;
+      font: inherit;
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 160px;
+      resize: vertical;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 14px 20px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      color: var(--fog);
+      background: linear-gradient(135deg, var(--pine), #305447);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+      box-shadow: 0 12px 24px rgba(33, 53, 45, 0.18);
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+      transform: none;
+    }
+
+    .status {
+      min-height: 24px;
+      font-size: 0.92rem;
+      color: rgba(21, 32, 25, 0.74);
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: "IBM Plex Mono", Consolas, monospace;
+      font-size: 0.95rem;
+      line-height: 1.55;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(197, 112, 59, 0.12);
+      color: #7a3a17;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
+    .meta {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .compact-label {
+      margin-bottom: 4px;
+    }
+
+    .top-gap {
+      margin-top: 16px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+
+    .mini {
+      font-size: 0.88rem;
+      color: rgba(21, 32, 25, 0.72);
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+      color: rgba(21, 32, 25, 0.84);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="pill">Local-only prompt bridge for Ollama</div>
+    <h1>LLM Dev KMH</h1>
+    <p>Send prompt requests from any device on your network to the Ollama instance running on this machine.</p>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="meta">
+          <div>
+            <label for="installed-models" class="compact-label">Installed models</label>
+            <div id="models-status" class="mini">Checking Ollama...</div>
+          </div>
+        </div>
+
+        <form id="prompt-form">
+          <label for="prompt">Prompt</label>
+          <textarea id="prompt" name="prompt" placeholder="Ask your local model something tactical, operational, or exploratory." required></textarea>
+
+          <div class="row top-gap">
+            <div>
+              <label for="model">Installed model</label>
+              <select id="model" name="model">
+                <option value="">Loading models...</option>
+              </select>
+            </div>
+            <div>
+              <label for="system">System instruction</label>
+              <input id="system" name="system" placeholder="Optional system prompt" />
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="submit" type="submit">Send To Ollama</button>
+            <div id="status" class="status"></div>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <label>Available on this Ollama host</label>
+        <ul id="models-list">
+          <li>Loading models...</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <label>Response</label>
+        <pre id="response">No response yet.</pre>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const form = document.getElementById("prompt-form");
+    const submitButton = document.getElementById("submit");
+    const statusNode = document.getElementById("status");
+    const responseNode = document.getElementById("response");
+    const modelSelect = document.getElementById("model");
+    const modelsList = document.getElementById("models-list");
+    const modelsStatusNode = document.getElementById("models-status");
+
+    async function loadModels() {
+      modelsStatusNode.textContent = "Checking Ollama...";
+
+      try {
+        const response = await fetch("/api/models");
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "Could not load models.");
+        }
+
+        modelSelect.innerHTML = "";
+        modelsList.innerHTML = "";
+
+        const models = Array.isArray(data.models) ? data.models : [];
+        if (models.length === 0) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = `No installed models found. Default is ${data.default_model}`;
+          modelSelect.appendChild(option);
+
+          const item = document.createElement("li");
+          item.textContent = "No models reported by this Ollama instance.";
+          modelsList.appendChild(item);
+
+          modelsStatusNode.textContent = `Default model: ${data.default_model}`;
+          return;
+        }
+
+        for (const model of models) {
+          const option = document.createElement("option");
+          option.value = model;
+          option.textContent = model;
+          if (model === data.default_model) {
+            option.selected = true;
+          }
+          modelSelect.appendChild(option);
+
+          const item = document.createElement("li");
+          item.textContent = model;
+          modelsList.appendChild(item);
+        }
+
+        if (!models.includes(data.default_model)) {
+          const fallback = document.createElement("option");
+          fallback.value = data.default_model;
+          fallback.textContent = `${data.default_model} (default, not installed)`;
+          fallback.selected = true;
+          modelSelect.appendChild(fallback);
+        }
+
+        modelsStatusNode.textContent = `Found ${models.length} model${models.length === 1 ? "" : "s"}. Default: ${data.default_model}`;
+      } catch (error) {
+        modelSelect.innerHTML = "<option value=''>Could not load models</option>";
+        modelsList.innerHTML = "";
+
+        const item = document.createElement("li");
+        item.textContent = error instanceof Error ? error.message : String(error);
+        modelsList.appendChild(item);
+        modelsStatusNode.textContent = "Model lookup failed.";
+      }
+    }
+
+    loadModels();
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submitButton.disabled = true;
+      statusNode.textContent = "Waiting for local model...";
+      responseNode.textContent = "";
+
+      const formData = new FormData(form);
+      const payload = {
+        prompt: String(formData.get("prompt") || "").trim(),
+        model: String(formData.get("model") || "").trim() || null,
+        system: String(formData.get("system") || "").trim() || null,
+      };
+
+      try {
+        const response = await fetch("/api/prompt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "Prompt request failed.");
+        }
+
+        statusNode.textContent = `Model: ${data.model}`;
+        responseNode.textContent = data.response;
+      } catch (error) {
+        statusNode.textContent = "Request failed.";
+        responseNode.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
