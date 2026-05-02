@@ -1,0 +1,1193 @@
+Geo-Query Tool Data Sources and Integration Instructions
+========================================================
+
+Scope
+-----
+
+This document lists the data sources, derived layers, backend services, and
+integration steps needed to build a deterministic geo-query tool for survival,
+SAR, hiking, field logistics, emergency routing, and terrain-aware navigation.
+
+The tool should use Cesium or another 3D/2D map client for visualization, but
+the deterministic routing and geo-query logic should run against analysis-grade
+local or cached geospatial datasets.
+
+Current Context Limitation
+--------------------------
+
+This document is based on the prompt/routing requirements discussed so far.
+It does not assume full knowledge of the app's existing architecture, database,
+API conventions, auth model, deployment target, or frontend framework.
+
+Before implementation, inspect the app for:
+
+- frontend map library and state management
+- backend language/framework
+- database choice
+- existing geospatial models
+- existing API route conventions
+- existing auth/tenant boundaries
+- existing data ingestion jobs
+- offline/edge deployment requirements
+- target operating regions
+- expected licensing constraints
+
+
+1. Recommended System Architecture
+==================================
+
+High-Level Architecture
+-----------------------
+
+Frontend:
+
+- CesiumJS or existing map frontend
+- route visualization
+- terrain/imagery visualization
+- hazard overlays
+- query form / prompt interface
+- route alternatives panel
+- source/confidence display
+
+Backend:
+
+- geo-query API
+- deterministic intent parser
+- routing orchestration service
+- spatial database queries
+- raster cost-surface engine
+- graph routing engine
+- hazard/weather update jobs
+- data provenance and confidence scoring
+
+Storage:
+
+- PostGIS for vector data
+- pgRouting for graph routing
+- raster store for DEM, slope, land cover, cost surfaces
+- object storage or local filesystem for source rasters and tiles
+- cache database for live feeds
+- tile server for local offline visualization
+
+Core Principle:
+
+Use streamed Cesium/imagery layers for display, but use local or cached
+analysis layers for deterministic route computation.
+
+
+2. Primary Data Sources
+=======================
+
+2.1 Elevation / Terrain
+-----------------------
+
+Required for:
+
+- slope
+- aspect
+- roughness
+- viewshed
+- least-cost routing
+- avalanche/flood/cliff screening
+- descent/ascent cost
+- signal and line-of-sight estimation
+
+Sources:
+
+- USGS 3DEP
+  - Best U.S. default.
+  - Use 1 m lidar DEM where available.
+  - Use 10 m DEM for broad coverage.
+
+- OpenTopography
+  - Useful aggregator for lidar and global/regional DEMs.
+
+- Copernicus DEM
+  - Good global DEM option.
+
+- SRTM
+  - Global fallback DEM.
+
+- ArcticDEM / REMA
+  - Use for polar regions.
+
+Derived layers to generate:
+
+- slope_degrees
+- slope_percent
+- aspect
+- roughness / terrain ruggedness index
+- curvature
+- topographic position index
+- flow direction
+- flow accumulation
+- watersheds
+- ridges/valleys
+- contours
+- hillshade
+- viewshed surfaces for candidate signal points
+
+Suggested storage:
+
+- keep raw DEM tiles in object storage or filesystem
+- store derived rasters as Cloud Optimized GeoTIFFs
+- optionally tile derived rasters for display
+- index tile footprints in PostGIS
+
+
+2.2 Land Cover / Surface Friction
+---------------------------------
+
+Required for:
+
+- off-road travel friction
+- shelter detection
+- brush/dense vegetation avoidance
+- wetland avoidance
+- snow/desert/forest movement models
+- campsite suitability
+
+Sources:
+
+- USGS Annual NLCD
+  - Best U.S. default.
+
+- ESA WorldCover
+  - Good global 10 m land cover baseline.
+
+- Dynamic World
+  - Useful for more current global land cover probabilities.
+
+- LANDFIRE
+  - Useful for U.S. vegetation/fuels/wildfire behavior context.
+
+- Copernicus Global Land Service
+  - Global land cover and vegetation products.
+
+Derived layers:
+
+- landcover_class
+- vegetation_density_proxy
+- canopy_or_tree_cover
+- wetland_mask
+- open_ground_mask
+- surface_friction_multiplier
+- shelter_suitability_score
+- campsite_suitability_score
+
+Example friction classes:
+
+- road/trail: 0.3 to 0.8
+- grass/open: 1.0
+- sparse shrub: 1.2
+- forest: 1.4
+- dense brush: 2.0 to 4.0
+- wetland/bog: 4.0 to no-go
+- open water: no-go except boat mode
+- cliff/rock: high cost or no-go depending on slope
+
+
+2.3 Roads, Trails, Paths, POIs
+------------------------------
+
+Required for:
+
+- route to road/trail/town/trailhead
+- evacuation routing
+- nearest facility lookup
+- hybrid on-road/off-road routing
+- SAR access planning
+
+Sources:
+
+- OpenStreetMap / Overpass API
+  - Primary global source for roads, paths, trails, waterways, huts,
+    buildings, POIs, and barriers.
+
+- Overture Maps
+  - Useful open base data for transportation, buildings, places, and divisions.
+
+- U.S. Census TIGER/Line roads
+  - U.S. road baseline.
+
+- USFS roads and trails
+  - Important for national forests.
+
+- BLM roads, trails, and land status
+  - Important for western U.S. public land.
+
+- National Park Service roads, trails, facilities, and closures
+  - Important for parks.
+
+- State/county GIS portals
+  - Often best for official roads, trails, closures, parcels, and emergency
+    services.
+
+- Microsoft Global ML Building Footprints
+  - Useful when OSM buildings are sparse.
+
+Vector layers to ingest:
+
+- roads
+- trails
+- tracks
+- paths
+- trailheads
+- bridges
+- tunnels
+- gates
+- barriers
+- buildings
+- shelters/huts/cabins
+- hospitals/clinics
+- ranger stations
+- fire stations
+- police/sheriff stations
+- towers/masts/lookouts
+- campgrounds
+- parking/access points
+
+Graph attributes to preserve:
+
+- access
+- surface
+- tracktype
+- smoothness
+- sac_scale
+- trail_visibility
+- highway/path class
+- bridge/tunnel
+- ford
+- gate/barrier
+- seasonal status
+- private/restricted flags
+- one-way status
+- max vehicle type if available
+
+
+2.4 Hydrography / Water
+-----------------------
+
+Required for:
+
+- nearest water routing
+- downstream/upstream reasoning
+- flood/wash avoidance
+- river crossing risk
+- contamination screening
+- campsites near water but outside flood risk
+
+Sources:
+
+- USGS 3D Hydrography Program
+  - Best current U.S. hydrography direction.
+
+- National Hydrography Dataset / NHDPlus HR
+  - Still useful where available.
+
+- Watershed Boundary Dataset
+  - Watershed and drainage reasoning.
+
+- USGS NWIS
+  - Stream gauges and observed water conditions.
+
+- NOAA National Water Prediction Service
+  - River forecasts and flood status.
+
+- HydroSHEDS / HydroRIVERS / HydroLAKES
+  - Global hydrography products.
+
+- Global Surface Water
+  - Historic and seasonal surface water occurrence.
+
+Layers to ingest:
+
+- flowlines
+- waterbodies
+- springs
+- wells
+- tanks/troughs
+- wetlands
+- watersheds
+- stream gauges
+- flood forecast points
+
+Derived layers:
+
+- water_candidate_points
+- reliable_water_score
+- seasonal_water_score
+- river_crossing_risk
+- floodplain_mask
+- downstream_contamination_flag
+
+
+2.5 Imagery
+-----------
+
+Required for:
+
+- visual map context
+- water detection
+- burn scar detection
+- snow detection
+- vegetation condition
+- recent change detection
+- road/clearing/building detection supplements
+
+Sources:
+
+- Sentinel-2
+  - Multispectral, global, useful for NDVI/NDWI/NBR/NDSI.
+
+- Landsat Collection 2
+  - Long historical archive.
+
+- NAIP
+  - High-resolution U.S. aerial imagery.
+
+- Sentinel-1 SAR
+  - Useful for flood/water detection through cloud cover.
+
+- MODIS / VIIRS
+  - Broad-area fire, snow, vegetation, and thermal products.
+
+- Commercial imagery
+  - Planet/Maxar/etc. if licensed.
+
+Derived indices:
+
+- NDVI: vegetation.
+- NDWI/MNDWI: water.
+- NBR/dNBR: burn scar and burn severity.
+- NDSI: snow/ice.
+- cloud/shadow masks.
+- change detection layers.
+
+
+2.6 Weather, Fire, Flood, Snow, Avalanche, and Hazards
+-----------------------------------------------------
+
+Required for:
+
+- route safety
+- stay/move recommendations
+- wildfire avoidance
+- flood/wash avoidance
+- avalanche avoidance
+- heat/cold exposure
+- river crossing risk
+- daylight/weather-window logic
+
+Sources:
+
+- NOAA/NWS alerts API
+- NOAA nowCOAST
+- NOAA weather radar
+- NOAA National Water Prediction Service
+- NASA FIRMS active fire detections
+- MODIS/VIIRS active fire products
+- FEMA flood maps
+- state wildfire perimeters
+- state DOT closures
+- USGS landslide feeds
+- SNOTEL snowpack telemetry
+- regional avalanche center bulletins
+- NOAA tides and currents for coastal use
+
+Ingested layers:
+
+- active fire points
+- fire perimeters
+- smoke where available
+- weather alerts
+- flood alerts
+- floodplains
+- stream gauge status
+- avalanche danger polygons where available
+- snow depth/SWE points or grids
+- road closures
+- trail closures
+- landslide reports
+
+Derived layers:
+
+- active_fire_no_go_mask
+- wildfire_buffer_mask
+- flood_no_go_mask
+- flash_flood_risk_mask
+- avalanche_risk_mask
+- heat_exposure_score
+- cold_exposure_score
+- wind_exposure_score
+- storm_window_score
+
+
+2.7 Boundaries, Access, and Restrictions
+----------------------------------------
+
+Required for:
+
+- legal access routing
+- private land avoidance
+- seasonal closure avoidance
+- park/forest/admin context
+- restricted land avoidance
+
+Sources:
+
+- PAD-US
+- Protected Planet
+- BLM surface management agency data
+- USFS administrative boundaries
+- NPS boundaries and closures
+- state land ownership
+- county parcel data where available
+- tribal lands
+- military/restricted areas where publicly available
+- wildlife closures
+- fire closure orders
+
+Layers:
+
+- public_land
+- private_land
+- restricted_land
+- tribal_land
+- park_boundary
+- forest_boundary
+- seasonal_closure
+- fire_closure
+- wildlife_closure
+- legal_access_corridor
+
+
+2.8 Communications and Signal
+-----------------------------
+
+Required for:
+
+- route to cell signal
+- route to radio relay point
+- satellite messenger open-sky confidence
+- aircraft visibility/signaling
+
+Sources:
+
+- FCC tower datasets
+- OSM towers/masts/lookouts
+- DEM-derived viewshed
+- public safety repeater datasets where available
+- OpenCellID or licensed signal observation data
+- local agency radio coverage maps if available
+
+Derived layers:
+
+- high_points
+- ridgelines
+- tower_line_of_sight
+- settlement_line_of_sight
+- open_sky_score
+- aircraft_visibility_score
+- estimated_signal_probability
+
+
+3. Data Ingestion Pipeline
+==========================
+
+Step 1: Define Operating Areas
+------------------------------
+
+Do not start by mirroring global data. Define:
+
+- test AOI
+- county/region AOI
+- state AOI
+- offline field package AOI
+
+Store each AOI as a polygon in PostGIS.
+
+Step 2: Fetch Source Data
+-------------------------
+
+For each AOI:
+
+- download DEM
+- download land cover
+- download OSM/Overture roads, trails, buildings, POIs
+- download hydrography
+- download boundaries/restrictions
+- download imagery or imagery-derived products
+- configure live hazard feed fetchers
+
+Step 3: Normalize Data
+----------------------
+
+For all data:
+
+- reproject to local metric CRS
+- clip to AOI plus buffer
+- validate geometry
+- simplify only for display, not analysis
+- preserve source metadata
+- create spatial indexes
+- record ingest timestamp
+
+Step 4: Build Derived Terrain Layers
+------------------------------------
+
+Generate:
+
+- slope
+- aspect
+- roughness
+- curvature
+- flow direction
+- flow accumulation
+- watershed/drainage products
+- hillshade
+- contours
+- no-go terrain masks
+
+Step 5: Build Movement Cost Surfaces
+------------------------------------
+
+Create mode-specific cost rasters:
+
+- walking_normal
+- walking_injured
+- litter_team
+- loaded_responder
+- night_foot
+- snow_foot
+- desert_heat
+- vehicle_offroad where appropriate
+
+Cost surface inputs:
+
+- slope
+- roughness
+- land cover
+- vegetation density
+- wetland/open water
+- snow/ice
+- fire/flood/avalanche masks
+- legal access masks
+- uncertainty
+
+Step 6: Build Routable Graphs
+-----------------------------
+
+Create graph tables for:
+
+- roads
+- trails
+- combined roads/trails
+- vehicle-capable routes
+- foot-accessible routes
+- rescue vehicle routes
+
+Each edge should include:
+
+- length_m
+- travel_time_s
+- surface
+- grade
+- access class
+- hazard penalty
+- confidence
+- source
+
+Step 7: Build Candidate Indexes
+-------------------------------
+
+Precompute candidate tables:
+
+- water_candidates
+- shelter_candidates
+- signal_candidates
+- lz_candidates
+- rescue_pickup_candidates
+- trail_access_candidates
+- road_access_candidates
+- medical_facility_candidates
+- staging_area_candidates
+
+Each candidate should include:
+
+- geometry
+- type
+- source
+- reliability
+- seasonal flag
+- confidence
+- nearest graph node if applicable
+- last_verified_at
+
+Step 8: Build Tile Services
+---------------------------
+
+For visualization:
+
+- terrain tiles
+- imagery tiles
+- land cover tiles
+- hazard overlay tiles
+- route output layers
+- search sector layers
+- candidate point layers
+
+For Cesium:
+
+- stream Cesium ion terrain/imagery when online
+- stream local terrain/imagery tiles for offline mode
+- display computed routes as GeoJSON, CZML, or 3D Tiles
+- display raster overlays as tiled imagery layers
+
+
+4. Geo-Query API Design
+=======================
+
+Core Endpoint
+-------------
+
+POST /api/geo/query
+
+Request:
+
+{
+  "origin": {
+    "lat": 0,
+    "lon": 0
+  },
+  "prompt": "Find the safest route to the nearest fresh water source",
+  "mode": "walking_normal",
+  "constraints": {
+    "avoid_private_land": true,
+    "avoid_water_crossings": true,
+    "max_slope_degrees": 25
+  },
+  "context": {
+    "daylight_minutes_remaining": 90,
+    "user_condition": "tired",
+    "weather_policy": "avoid_alerts"
+  },
+  "output": {
+    "alternatives": 3,
+    "include_explanation": true,
+    "include_debug_layers": false
+  }
+}
+
+Response:
+
+{
+  "query_id": "uuid",
+  "intent": {
+    "target_type": "water",
+    "objective": "safest",
+    "mode": "walking_normal"
+  },
+  "recommendation": "move" | "stay_put" | "no_safe_route_found",
+  "routes": [
+    {
+      "id": "route_1",
+      "label": "Safest",
+      "geometry": "GeoJSON LineString",
+      "distance_m": 0,
+      "eta_min": 0,
+      "eta_max": 0,
+      "elevation_gain_m": 0,
+      "elevation_loss_m": 0,
+      "risk_score": 0,
+      "confidence": 0,
+      "hazards_crossed": [],
+      "warnings": [],
+      "source_layers": []
+    }
+  ],
+  "targets": [],
+  "assumptions": [],
+  "data_freshness": [],
+  "map_layers": []
+}
+
+Supporting Endpoints
+--------------------
+
+GET /api/geo/layers
+  Return available analysis and display layers for the AOI.
+
+GET /api/geo/aoi
+  Return available operating areas and offline packages.
+
+POST /api/geo/route
+  Direct structured route request without natural-language prompt.
+
+POST /api/geo/reachable
+  Return reachable area / isochrone from origin.
+
+POST /api/geo/candidates
+  Return candidate targets by type.
+
+POST /api/geo/sar/probability
+  Generate SAR probability surface from last known position.
+
+POST /api/geo/sar/sectors
+  Generate search sectors for an AOI.
+
+POST /api/geo/debug/cost-surface
+  Return cost surface summary for QA.
+
+
+5. Intent Parser
+================
+
+The intent parser should convert natural language into a deterministic request.
+Start with a rules-first parser. Use an LLM only to propose structure, then
+validate against an allowlist schema.
+
+Target Type Keywords
+--------------------
+
+water:
+  water, stream, river, lake, spring, pond, snowmelt, creek, potable
+
+shelter:
+  shelter, cabin, hut, ranger station, tent site, bivy, tree cover, windbreak
+
+road/trail:
+  road, trail, trailhead, path, highway, track, access point
+
+medical:
+  hospital, clinic, aid station, EMS, ambulance, casualty, medevac
+
+signal:
+  signal, cell service, radio, satellite, line of sight, tower, high point
+
+rescue pickup:
+  pickup, helicopter, LZ, landing zone, clearing, evacuation
+
+settlement:
+  town, village, house, building, campground, ranger station
+
+Objective Keywords
+------------------
+
+fastest:
+  fastest, quickest, soonest, before dark
+
+safest:
+  safest, lowest risk, avoid hazards, conservative
+
+easiest:
+  easiest, least effort, least elevation, injured, exhausted
+
+nearest:
+  nearest, closest
+
+multi-objective:
+  balance, optimize, route to X then Y, water then shelter
+
+Constraint Keywords
+-------------------
+
+avoid:
+  avoid, stay away from, do not cross, bypass
+
+terrain:
+  cliffs, steep, avalanche, river crossing, wetland, dense brush, scree, talus
+
+legal:
+  private land, restricted, closed, legal access
+
+weather:
+  fire, flood, storm, lightning, snow, heat, smoke
+
+
+6. Routing Engine Behavior
+==========================
+
+Route Type Selection
+--------------------
+
+If destination is on road/trail network:
+  use graph routing.
+
+If origin or destination is off-network:
+  use hybrid graph + raster routing.
+
+If target is a class rather than a point:
+  find candidate targets first, then multi-source route.
+
+If no safe candidate exists:
+  return no_safe_route_found and nearest safer alternatives.
+
+If movement is more dangerous than staying:
+  return stay_put and signaling/shelter guidance.
+
+Algorithms
+----------
+
+Use:
+
+- Dijkstra for default graph routing.
+- A* for graph routing with admissible distance heuristic.
+- Multi-source Dijkstra for nearest target among many candidates.
+- Yen's k-shortest paths for alternatives.
+- Raster cost-distance for off-road routing.
+- Backtracking over cumulative cost raster for least-cost path.
+- Viewshed for signal/visibility.
+- Flow accumulation for drainage/water reasoning.
+- Isochrone generation for reachable areas.
+- Polygon partitioning for SAR sectors.
+
+Scoring
+-------
+
+Route score:
+
+score =
+  w_time * normalized_time
+  + w_energy * normalized_energy
+  + w_risk * hazard_exposure
+  + w_uncertainty * data_uncertainty
+  - w_resource * resource_value
+  - w_rescue * rescue_visibility
+
+Return separate fastest, safest, and easiest alternatives when they differ.
+
+
+7. Database Schema Sketch
+=========================
+
+Vector Tables
+-------------
+
+aoi
+  id
+  name
+  geom
+  default_crs
+
+source_dataset
+  id
+  name
+  provider
+  license
+  source_url
+  ingested_at
+  valid_time
+  resolution
+
+roads_edges
+  id
+  geom
+  source_dataset_id
+  class
+  surface
+  access
+  length_m
+  grade
+  travel_time_s
+  hazard_penalty
+  confidence
+
+trails_edges
+  same pattern as roads_edges
+
+buildings
+  id
+  geom
+  type
+  source_dataset_id
+  confidence
+
+water_features
+  id
+  geom
+  type
+  perennial
+  reliability_score
+  source_dataset_id
+  confidence
+
+hazards
+  id
+  geom
+  hazard_type
+  severity
+  valid_from
+  valid_to
+  source_dataset_id
+  confidence
+
+restricted_areas
+  id
+  geom
+  restriction_type
+  access_policy
+  valid_from
+  valid_to
+  source_dataset_id
+
+candidates
+  id
+  geom
+  candidate_type
+  subtype
+  suitability_score
+  reliability_score
+  confidence
+  source_dataset_id
+  nearest_graph_node
+
+Raster Catalog Tables
+---------------------
+
+raster_layer
+  id
+  aoi_id
+  name
+  layer_type
+  path
+  resolution_m
+  crs
+  source_dataset_id
+  generated_at
+  valid_time
+
+Useful raster_layer names:
+
+- dem
+- slope_degrees
+- aspect
+- roughness
+- flow_accumulation
+- landcover
+- vegetation_density
+- water_likelihood
+- fire_mask
+- flood_mask
+- avalanche_mask
+- walking_cost
+- injured_walking_cost
+- litter_team_cost
+
+
+8. Cesium Integration
+=====================
+
+Use Cesium for:
+
+- 3D globe/terrain visualization
+- imagery base map
+- terrain context
+- route display
+- hazard overlays
+- candidate markers
+- SAR sector polygons
+- reachable area polygons
+- viewshed overlays
+
+Do not rely on Cesium ion alone for:
+
+- full analytical DEM access
+- routable OSM graph
+- land-cover cost modeling
+- hydrography network reasoning
+- legal access constraints
+- live hazards
+- offline emergency routing
+
+Cesium frontend layer types:
+
+- TerrainProvider for terrain display
+- ImageryLayer for imagery and raster overlays
+- GeoJSONDataSource for route lines, points, sectors, and polygons
+- CZMLDataSource for time-aware routes or moving assets
+- 3D Tiles for buildings, point clouds, and tiled analytical outputs
+
+Frontend map workflow:
+
+1. User enters prompt or structured route request.
+2. Frontend captures current map location or user coordinate.
+3. Frontend sends request to /api/geo/query.
+4. Backend returns routes, candidates, warnings, and display layers.
+5. Frontend renders:
+   - selected route
+   - route alternatives
+   - target point
+   - avoided hazards
+   - reachable area if applicable
+   - confidence and source metadata
+6. User can toggle:
+   - terrain
+   - imagery
+   - land cover
+   - slope
+   - water
+   - hazards
+   - public/private land
+   - roads/trails
+
+
+9. Offline / Local Mode
+=======================
+
+Offline field packages should include:
+
+- local terrain tiles for display
+- local imagery tiles for display
+- local DEM rasters for analysis
+- derived slope/aspect/roughness rasters
+- land-cover rasters
+- hydrography vectors
+- roads/trails graph
+- buildings/POIs
+- boundaries/restrictions
+- cached hazards with timestamps
+- cached weather/alerts if available before disconnect
+- prebuilt candidate tables
+- prebuilt cost surfaces
+
+Package by AOI:
+
+offline_packages/
+  region_name/
+    metadata.json
+    tiles/
+    rasters/
+    vectors/
+    graph/
+    candidates/
+    hazards/
+
+Offline package metadata:
+
+- region name
+- bounding polygon
+- generated_at
+- data source versions
+- expiration warnings
+- available route modes
+- limitations
+
+
+10. Implementation Order
+========================
+
+Phase 1: Minimal Regional Prototype
+-----------------------------------
+
+1. Pick one AOI.
+2. Ingest DEM, OSM roads/trails, land cover, and hydrography.
+3. Build slope raster.
+4. Build simple walking cost raster.
+5. Build road/trail graph.
+6. Build water candidates.
+7. Implement structured route API.
+8. Implement nearest-water and nearest-road routing.
+9. Render route in Cesium.
+10. Return ETA, distance, slope, and confidence.
+
+Phase 2: Safety and Hazards
+---------------------------
+
+1. Add private/restricted land.
+2. Add flood/fire/closure overlays.
+3. Add no-go masks.
+4. Add route alternatives.
+5. Add stay-put/no-safe-route logic.
+6. Add source freshness display.
+
+Phase 3: SAR and Survival Features
+----------------------------------
+
+1. Add shelter candidates.
+2. Add signal candidates and viewshed.
+3. Add LZ/clearing candidates.
+4. Add isochrones.
+5. Add SAR probability areas.
+6. Add search sector generation.
+7. Add evacuation route profiles.
+
+Phase 4: Offline Packaging
+--------------------------
+
+1. Generate local tile packages.
+2. Bundle rasters/vectors/graphs per AOI.
+3. Add offline package selection.
+4. Add degraded-data warnings.
+5. Add sync/update workflow.
+
+
+11. Safety and QA Requirements
+==============================
+
+Every route response should include:
+
+- route geometry
+- distance
+- ETA range
+- elevation gain/loss
+- target confidence
+- route confidence
+- source layers used
+- source freshness
+- assumptions
+- hazards crossed
+- hazards avoided
+- legal/access warnings
+- daylight/weather warnings
+- no-go reasons when no route is found
+
+Do not output a route when:
+
+- it crosses active fire core
+- it crosses severe flood hazard without bridge/verified crossing
+- it crosses restricted land and legal access is required
+- it requires terrain above mode-specific slope threshold
+- required data is missing and uncertainty is too high
+- movement is clearly worse than staying put
+
+Testing checklist:
+
+- route to nearest water
+- route to nearest trail
+- route to nearest road
+- injured-person route
+- litter evacuation route
+- avoid private land route
+- avoid steep slopes route
+- avoid river crossings route
+- active fire no-go route
+- flood no-go route
+- no safe route result
+- offline package route
+- stale hazard data warning
+- Cesium route rendering
+- Cesium hazard overlay rendering
+
+
+12. Open Questions for App-Specific Integration
+===============================================
+
+Answer these after inspecting the app:
+
+1. What frontend framework is used?
+2. Is CesiumJS already installed?
+3. Is there already a map abstraction?
+4. What backend framework is used?
+5. Is PostGIS already available?
+6. Is there an existing job queue for ingestion?
+7. Where should large raster files be stored?
+8. Does the app need offline field deployment?
+9. What is the first target AOI?
+10. What route modes are required for v1?
+11. What licensing constraints apply?
+12. What live feeds are allowed in production?
+13. Does the app need multi-tenant data isolation?
+14. Does the app need audit logs for emergency recommendations?
+15. What confidence threshold blocks route output?
+
