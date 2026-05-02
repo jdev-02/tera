@@ -37,8 +37,8 @@ hardware/
     setup.sh         # idempotent setup script
 deploy/
   systemd/
-    tera-agent.service
-    tera-bridge.service
+    wayfinder-agent.service
+    wayfinder-bridge.service
   rsync.sh
   Makefile.deploy
 models/
@@ -71,7 +71,7 @@ This is the PS4 wow moment. P2 owns the signer; you own the hardware substrate (
 - **RFSim** — https://github.com/khicks1724/RFSim
   - Kyle's RF simulator project. Public repo.
   - **Hackathon rule interpretation:** "Tool Usage: any AI tools you'd like, as well as any other materials to build your project, provided that they're openly accessible and reasonably obtainable by all attendees." → RFSim is openly accessible, so we may **reference** it (read patterns, link to it in pitch as Kyle's prior credibility) or **depend on** it (import as a library if appropriately licensed).
-  - **Hackathon rule constraint:** "All projects must be started from scratch during the hackathon with no previous work." → We do NOT copy-paste source from RFSim into TERA. The TERA repo is new work.
+  - **Hackathon rule constraint:** "All projects must be started from scratch during the hackathon with no previous work." → We do NOT copy-paste source from RFSim into TruePoint. The TruePoint repo is new work.
   - **Most relevant to:** mesh stretch (#23 — RF substrate patterns), parsing-verification (#22 — if RFSim has anomaly detection patterns for RF transmissions, those inform how the parsing-verification layer flags anomalous RF tags).
   - **Action:** Kyle skims the repo at kickoff and tells the team in 30 sec what's reusable.
 

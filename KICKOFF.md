@@ -44,7 +44,7 @@ Read aloud: *"24 hours. PRD locks 95% of decisions. We vote on 5 things in 90 se
 
 | # | Item | Default | Alternatives |
 |---|---|---|---|
-| 1 | Codename | TERA | LODESTAR, PATHFNDR, BLACKMAP, COMPASS ROSE |
+| 1 | Codename | WAYFINDER | LODESTAR, PATHFNDR, BLACKMAP, COMPASS ROSE |
 | 2 | Austere AO | Donetsk steppe | N. Luzon, Korean DMZ, Hindu Kush, Sierra Nevada proxy |
 | 3 | Hero scenario | A: freshwater | B: covered foot, C: vehicle |
 | 4 | OSM extract size | County (SF) | State, city-only |
@@ -69,8 +69,8 @@ cd ~/hackathon-scaffold
 # Just verify before pushing:
 grep -c "TODO_" CODEOWNERS    # should print 0
 
-# 3. Create the public repo under Jon's account (codename: TERA — locked pre-kickoff)
-gh repo create jdev-02/tera --public --source=. --remote=origin --description="National Security Hackathon 2026 — TERA: Tactical Edge Route Agent (offline AI route planning for ATAK)"
+# 3. Create the public repo under Jon's account (codename: TruePoint — locked pre-kickoff)
+gh repo create jdev-02/truepoint --public --source=. --remote=origin --description="National Security Hackathon 2026 — TruePoint: Tactical Edge Route Agent (offline AI route planning for ATAK)"
 
 # 4. First commit (do NOT commit KICKOFF.md — add to .gitignore first)
 echo "KICKOFF.md" >> .gitignore

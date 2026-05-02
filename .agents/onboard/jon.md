@@ -111,7 +111,7 @@ After code lands, run `make ci` (you must run this; do not assume it passes). If
 
 ## LANE-SPECIFIC GOTCHAS
 
-1. The frontier-vs-local LLM swap MUST be a config flag (`TERA_PHASE`). Do not hardcode `openai` imports in `agent/orchestrator.py`. Use the `LLMClient` Protocol.
+1. The frontier-vs-local LLM swap MUST be a config flag (`WAYFINDER_PHASE`). Do not hardcode `openai` imports in `agent/orchestrator.py`. Use the `LLMClient` Protocol.
 2. Tool-call args MUST be `jsonschema.validate()`-d before invocation. A schema-invalid call is a 400-class error; do not retry; do not loosen the schema without paired sign-off from Ben.
 3. Whisper model loads ONCE at startup, not per request. Cache the loaded model.
 4. Piper runs on CPU only. Do not put it on the same CUDA stream as Gemma; they will fight for memory.
