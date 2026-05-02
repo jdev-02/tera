@@ -129,9 +129,15 @@ def _expand_mgrs_grids(text: str) -> str:
     """Match MGRS grids like '11SMS1234 5678' or '11SMS12345678'.
 
     Pattern: 1-2 digits (zone), 1-3 letters (band+square), then digits in
-    pairs of 2/4/6/8/10 (precision). Example: '11SMS1234 5678'.
+    pairs of 2/4/6/8/10 (precision). Examples:
+      '11SMS1234 5678'   -- 8-digit precision, halves separated by space
+      '11SMS12345678'    -- 8-digit precision, no space
+      '11SMS1234'        -- 4-digit precision
+      '18TWL8412 9023'   -- different zone/letters, same shape
 
-    Speak as: 'one one Sierra Mike Sierra one two three four, five six seven eight'.
+    Speak as: 'one one sierra mike sierra one two three four, five six seven eight'.
+    For the no-space form, split the digit run in half so the comma still
+    falls between the easting and northing.
     """
 
     def repl(m: re.Match[str]) -> str:
@@ -139,6 +145,12 @@ def _expand_mgrs_grids(text: str) -> str:
         letters = m.group("letters")
         digits1 = m.group("digits1")
         digits2 = m.group("digits2") or ""
+
+        # No-space form ('11SMS12345678'): digits1 is the full run. Split in
+        # half so easting/northing each get their own beat.
+        if not digits2 and len(digits1) >= 4 and len(digits1) % 2 == 0:
+            half = len(digits1) // 2
+            digits1, digits2 = digits1[:half], digits1[half:]
 
         zone_words = _digits_spoken(zone)
         letter_words = " ".join(_MGRS_PHONETIC.get(c, c) for c in letters.upper())
@@ -151,8 +163,9 @@ def _expand_mgrs_grids(text: str) -> str:
             parts.append(d2_words)
         return " ".join(p for p in parts if p)
 
+    # digits1 allows up to 10 digits (5+5 max precision in a single run).
     pattern = re.compile(
-        r"\b(?P<zone>\d{1,2})(?P<letters>[A-Z]{1,3})(?P<digits1>\d{2,5})(?:\s+(?P<digits2>\d{2,5}))?\b",
+        r"\b(?P<zone>\d{1,2})(?P<letters>[A-Z]{1,3})(?P<digits1>\d{2,10})(?:\s+(?P<digits2>\d{2,5}))?\b",
     )
     return pattern.sub(repl, text)
 

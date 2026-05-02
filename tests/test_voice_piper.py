@@ -32,8 +32,11 @@ def _fake_piper_voice(sample_rate: int = 22050) -> MagicMock:
     voice.config = MagicMock(sample_rate=sample_rate)
 
     # synthesize_wav writes silent PCM frames into the wave file so the wrapper's
-    # io.BytesIO ends up with a structurally-valid WAV.
-    def _synth_wav(text: str, wav_writer: wave.Wave_write) -> None:
+    # io.BytesIO ends up with a structurally-valid WAV. Accepts syn_config kwarg
+    # because piper-tts >=1.3 wrapper passes one in.
+    def _synth_wav(
+        text: str, wav_writer: wave.Wave_write, syn_config: object = None
+    ) -> None:
         n_frames = max(1000, len(text) * 100)
         wav_writer.writeframes(b"\x00\x00" * n_frames)
 
@@ -93,7 +96,9 @@ def test_synthesize_wav_tries_legacy_method_name(tmp_path: Path) -> None:
     # Drop the new-style method so the wrapper falls back to old style.
     del voice.synthesize_wav
 
-    def _legacy_synth(text: str, wav_writer: wave.Wave_write) -> None:
+    def _legacy_synth(
+        text: str, wav_writer: wave.Wave_write, syn_config: object = None
+    ) -> None:
         wav_writer.writeframes(b"\x00\x00" * 100)
 
     voice.synthesize = MagicMock(side_effect=_legacy_synth)

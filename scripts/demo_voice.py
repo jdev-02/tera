@@ -1,49 +1,234 @@
-"""Quick voice-out demo. Writes a WAV of the canonical PRD rationale to disk
-and prints a one-liner to play it on macOS. For Jon's pre-demo smoke test.
+"""Voice-out listen-test harness.
 
-    python scripts/demo_voice.py
-    afplay /tmp/tera_demo.wav
+Run interactively to evaluate Piper TTS quality across the phrase corpus
+in voice/phrases.py. Plays each phrase, prints the cadence-transformed
+input + a checklist of what to listen for, and lets you advance / repeat
+/ adjust pace.
+
+Usage
+-----
+
+  # Default: walk through every phrase, ops cadence (length_scale=1.15).
+  python scripts/demo_voice.py
+
+  # One phrase by id.
+  python scripts/demo_voice.py --id prd-A
+
+  # All phrases in one category.
+  python scripts/demo_voice.py --category mgrs
+
+  # Custom phrase from CLI.
+  python scripts/demo_voice.py --text "Heading 030 for 2.5 kilometers."
+
+  # Adjust pace. Higher = slower. 1.0 = piper default, 1.15 = ops, 1.3 = slow.
+  python scripts/demo_voice.py --rate 1.25
+
+  # Print-only (no audio) to dry-run the cadence transform.
+  python scripts/demo_voice.py --dry-run
+
+In interactive mode (default), at each phrase prompt:
+  [Enter]  -> next phrase
+  r        -> replay current phrase
+  s        -> slow down (length_scale +0.05)
+  f        -> speed up (length_scale -0.05)
+  q        -> quit
+
+Listen-for checklist (printed once at start):
+- clarity, pace, comma pause, sentence pause
+- number disambiguation (5/9, 3/free, 2/to, 4/for)
+- phonetic precision on MGRS letters
+- stress on critical tokens (DANGER CLOSE, BREAK, BE ADVISED)
+- compound cardinal smoothness (north-northeast)
+- end-of-utterance clean stop, no clipping
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
+import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from voice.piper_client import get_piper
+from voice.phrases import PHRASES, by_category, by_id, categories
+from voice.piper_client import get_piper, reset_piper
 from voice.rationale import to_operator_cadence
 from voice.tts import synthesize_rationale_b64
 
+CHECKLIST = """
+Listen-for checklist (operator-radio):
+  [pace]      cadence slow enough to copy on the fly?
+  [pause]     comma -> beat between MGRS halves; period -> sentence gap
+  [numbers]   five vs nine, three vs free, two vs to, four vs for
+  [phonetic]  sierra/mike/foxtrot crisp, not slurred
+  [stress]    DANGER CLOSE / BREAK / BE ADVISED land with weight?
+  [cardinal]  'north-northeast' smooth or weird?
+  [end]       clean final stop, no clipped phoneme
+  [volume]    no clipping on long phrases
+"""
 
-def main() -> int:
-    rationale = (
-        "Routed to Lobos Creek, distance 2.1 kilometers, "
-        "ETA 38 minutes on foot covered."
-    )
-    if len(sys.argv) > 1:
-        rationale = " ".join(sys.argv[1:])
 
-    print(f"input:    {rationale}")
-    print(f"cadence:  {to_operator_cadence(rationale)}")
+def _play(wav_path: Path) -> None:
+    """Play a WAV file using whatever's on PATH. Cross-platform best effort.
 
+    S603/S607 are suppressed because the args are fixed strings and we
+    require the executable to exist on PATH (shutil.which check above).
+    """
+    cmd: list[str] | None = None
+    if shutil.which("afplay"):  # macOS
+        cmd = ["afplay", str(wav_path)]
+    elif shutil.which("aplay"):  # linux
+        cmd = ["aplay", "-q", str(wav_path)]
+    elif shutil.which("ffplay"):  # ffmpeg
+        cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(wav_path)]
+    if cmd is None:
+        print(f"  (no audio player on PATH; play manually: {wav_path})")
+        return
+    subprocess.run(cmd, check=False)  # noqa: S603
+
+
+def _synth_to_tempfile(text: str, length_scale: float) -> Path | None:
+    """Synthesize text and return path to a temp WAV. None if synth failed."""
+    audio_b64 = synthesize_rationale_b64(text, length_scale=length_scale)
+    if audio_b64 is None:
+        return None
+    out = Path(tempfile.mkstemp(prefix="tera_demo_", suffix=".wav")[1])
+    out.write_bytes(base64.b64decode(audio_b64))
+    return out
+
+
+def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
+    pid, cat, text, listen_for = phrase
+    print(f"\n[{pid}] ({cat})")
+    print(f"  text:    {text}")
+    print(f"  cadence: {to_operator_cadence(text)}")
+    print(f"  listen:  {listen_for}")
+
+
+def _interactive_loop(
+    phrases: list[tuple[str, str, str, str]], length_scale: float
+) -> int:
+    """Walk through phrases. Returns exit code."""
     client = get_piper()
     if not client.is_available():
-        print("ERROR: Piper not available. Run `make install-voice` and download the voice model.")
+        print(
+            "ERROR: Piper not available. Run `make install-voice` and "
+            "ensure models/piper/en_US-libritts_r-medium.onnx exists."
+        )
         return 1
 
-    audio_b64 = synthesize_rationale_b64(rationale)
-    if audio_b64 is None:
-        print("ERROR: synthesis returned None.")
-        return 1
+    print(CHECKLIST)
+    print(f"phrases: {len(phrases)}, starting length_scale={length_scale:.2f}")
+    print("controls: [Enter]=next  r=replay  s=slower  f=faster  q=quit\n")
 
-    out = Path(tempfile.gettempdir()) / "tera_demo.wav"
-    out.write_bytes(base64.b64decode(audio_b64))
-    print(f"wrote:    {out} ({out.stat().st_size:,} bytes)")
-    print(f"play:     afplay {out}  # macOS")
+    i = 0
+    while i < len(phrases):
+        phrase = phrases[i]
+        _show_phrase(phrase)
+
+        wav = _synth_to_tempfile(phrase[2], length_scale)
+        if wav is None:
+            print("  ! synth failed, skipping")
+            i += 1
+            continue
+
+        _play(wav)
+        wav.unlink(missing_ok=True)
+
+        try:
+            cmd = input(
+                f"  [{i + 1}/{len(phrases)}] length_scale={length_scale:.2f} > "
+            ).strip().lower()
+        except EOFError:
+            print()
+            return 0
+
+        if cmd == "q":
+            return 0
+        if cmd == "r":
+            continue  # replay same phrase
+        if cmd == "s":
+            length_scale = min(2.0, length_scale + 0.05)
+            # Rebuild client with new length_scale default and play again.
+            reset_piper()
+            from voice import piper_client
+
+            piper_client._client = piper_client.PiperClient(length_scale=length_scale)
+            print(f"  -> length_scale {length_scale:.2f} (slower)")
+            continue
+        if cmd == "f":
+            length_scale = max(0.5, length_scale - 0.05)
+            reset_piper()
+            from voice import piper_client
+
+            piper_client._client = piper_client.PiperClient(length_scale=length_scale)
+            print(f"  -> length_scale {length_scale:.2f} (faster)")
+            continue
+        # Anything else (including blank Enter) -> next phrase
+        i += 1
+
+    print("\nEnd of corpus. Take notes on which phrases need cadence rule fixes.")
     return 0
 
 
+def main() -> int:
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--id", help="run a single phrase by id (e.g. 'prd-A')")
+    p.add_argument(
+        "--category",
+        choices=categories(),
+        help="run all phrases in one category",
+    )
+    p.add_argument("--text", help="custom phrase to synthesize (skips corpus)")
+    p.add_argument(
+        "--rate",
+        type=float,
+        default=1.15,
+        help="length_scale (default 1.15 = ops cadence; 1.0 = piper default)",
+    )
+    p.add_argument("--dry-run", action="store_true", help="print cadence transform only, no audio")
+    p.add_argument("--list", action="store_true", help="list phrases and exit")
+    args = p.parse_args()
+
+    if args.list:
+        for pid, cat, text, _ in PHRASES:
+            print(f"  {pid:12s} ({cat:10s}) {text}")
+        return 0
+
+    # Set the global length_scale for this session.
+    reset_piper()
+    from voice import piper_client
+
+    piper_client._client = piper_client.PiperClient(length_scale=args.rate)
+
+    if args.text:
+        phrases = [("custom", "custom", args.text, "your phrase")]
+    elif args.id:
+        hit = by_id(args.id)
+        if hit is None:
+            print(f"unknown phrase id: {args.id}")
+            print("Use --list to see all ids.")
+            return 1
+        phrases = [hit]
+    elif args.category:
+        phrases = by_category(args.category)
+    else:
+        phrases = list(PHRASES)
+
+    if args.dry_run:
+        for pid, cat, text, _ in phrases:
+            print(f"[{pid}] ({cat})")
+            print(f"  text:    {text}")
+            print(f"  cadence: {to_operator_cadence(text)}")
+        return 0
+
+    return _interactive_loop(phrases, args.rate)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
