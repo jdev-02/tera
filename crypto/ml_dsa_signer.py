@@ -18,26 +18,34 @@ import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 # --- Attempt to import liboqs (post-quantum) -----------------------------------
 try:
     import oqs  # pip install liboqs-python
+
     _PQC_AVAILABLE = True
-    _ALGORITHM = "Dilithium3"   # ML-DSA-65 (NIST FIPS 204 level 3)
+    _ALGORITHM = "Dilithium3"  # ML-DSA-65 (NIST FIPS 204 level 3)
 except ImportError:
     _PQC_AVAILABLE = False
 
 # --- Classical fallback (Ed25519 via cryptography lib) -------------------------
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-        Ed25519PrivateKey, Ed25519PublicKey
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
     )
     from cryptography.hazmat.primitives.serialization import (
-        Encoding, PublicFormat, PrivateFormat, NoEncryption,
-        load_pem_private_key, load_pem_public_key
+        Encoding,
+        PublicFormat,
+        PrivateFormat,
+        NoEncryption,
+        load_pem_private_key,
+        load_pem_public_key,
     )
+
     _CLASSICAL_AVAILABLE = True
 except ImportError:
     _CLASSICAL_AVAILABLE = False
@@ -49,12 +57,13 @@ _KEY_DIR = Path(os.environ.get("WAYFINDER_KEY_DIR", Path(__file__).parent / "key
 @dataclass
 class SignedPayload:
     """Signed wrapper around any serializable payload."""
+
     payload: dict
-    signature: str          # hex-encoded signature bytes
-    key_id: str             # identifies which key signed this
-    algorithm: str          # "ML-DSA-65" or "Ed25519-fallback"
-    timestamp: float        # Unix epoch at signing time
-    payload_hash: str       # SHA-256 of canonical payload JSON
+    signature: str  # hex-encoded signature bytes
+    key_id: str  # identifies which key signed this
+    algorithm: str  # "ML-DSA-65" or "Ed25519-fallback"
+    timestamp: float  # Unix epoch at signing time
+    payload_hash: str  # SHA-256 of canonical payload JSON
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +92,7 @@ def _sha256(data: bytes) -> str:
 # -------------------------------------------------------------------------------
 # PQC path (liboqs ML-DSA)
 # -------------------------------------------------------------------------------
+
 
 class MLDSASigner:
     """ML-DSA-65 (Dilithium3) signer — NIST FIPS 204."""
@@ -120,6 +130,7 @@ class MLDSASigner:
 
     @property
     def public_key_bytes(self) -> bytes:
+        assert self._pk is not None
         return self._pk
 
     def sign(self, payload: dict) -> SignedPayload:
@@ -135,7 +146,9 @@ class MLDSASigner:
             payload_hash=_sha256(canonical),
         )
 
-    def verify(self, signed: SignedPayload, public_key_bytes: bytes | None = None) -> bool:
+    def verify(
+        self, signed: SignedPayload, public_key_bytes: bytes | None = None
+    ) -> bool:
         pk = public_key_bytes or self._pk
         canonical = _canonical_json(signed.payload)
         # Verify payload hash first (fast check)
@@ -151,6 +164,7 @@ class MLDSASigner:
 # -------------------------------------------------------------------------------
 # Classical fallback (Ed25519) — for dev machines without liboqs
 # -------------------------------------------------------------------------------
+
 
 class FallbackSigner:
     """Ed25519 fallback signer — use only in development. NOT post-quantum."""
@@ -178,7 +192,9 @@ class FallbackSigner:
             self._sk = Ed25519PrivateKey.generate()
             self._pk = self._sk.public_key()
             self._sk_path.write_bytes(
-                self._sk.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+                self._sk.private_bytes(
+                    Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+                )
             )
             self._pk_path.write_bytes(
                 self._pk.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
@@ -190,10 +206,12 @@ class FallbackSigner:
 
     @property
     def public_key_pem(self) -> bytes:
+        assert self._pk is not None
         return self._pk.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
 
     def sign(self, payload: dict) -> SignedPayload:
         canonical = _canonical_json(payload)
+        assert self._sk is not None
         sig_bytes = self._sk.sign(canonical)
         return SignedPayload(
             payload=payload,
@@ -204,13 +222,15 @@ class FallbackSigner:
             payload_hash=_sha256(canonical),
         )
 
-    def verify(self, signed: SignedPayload, public_key_pem: bytes | None = None) -> bool:
+    def verify(
+        self, signed: SignedPayload, public_key_pem: bytes | None = None
+    ) -> bool:
         canonical = _canonical_json(signed.payload)
         if _sha256(canonical) != signed.payload_hash:
             return False
         try:
             pk_bytes = public_key_pem or self.public_key_pem
-            pk = load_pem_public_key(pk_bytes)
+            pk = cast(Ed25519PublicKey, load_pem_public_key(pk_bytes))
             pk.verify(bytes.fromhex(signed.signature), canonical)
             return True
         except Exception:
@@ -220,6 +240,7 @@ class FallbackSigner:
 # -------------------------------------------------------------------------------
 # Unified factory — callers use this, not the classes directly
 # -------------------------------------------------------------------------------
+
 
 def create_signer(key_id: str | None = None) -> MLDSASigner | FallbackSigner:
     if key_id is None:
@@ -232,7 +253,9 @@ def create_signer(key_id: str | None = None) -> MLDSASigner | FallbackSigner:
         print(f"[crypto] ML-DSA-65 signer active (liboqs) — key_id={key_id}")
         return MLDSASigner(key_id=key_id)
     else:
-        print(f"[crypto] WARNING: liboqs not available — using Ed25519 fallback — key_id={key_id}")
+        print(
+            f"[crypto] WARNING: liboqs not available — using Ed25519 fallback — key_id={key_id}"
+        )
         return FallbackSigner(key_id=key_id)
 
 

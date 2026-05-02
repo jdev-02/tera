@@ -2,25 +2,25 @@
 # Single source of truth for local + CI. GitHub Actions calls `make ci`.
 # PRD §14.4: "make ci is the single source of truth."
 
-.PHONY: fmt lint test ci clean
+.PHONY: fmt lint security-scan test ci clean
 
 # ---- Format ----------------------------------------------------------------
 fmt:
-	ruff format .
+	python -m ruff format .
 
 # ---- Lint ------------------------------------------------------------------
 lint:
-	ruff check .
-	mypy security/ crypto/ --ignore-missing-imports --no-error-summary || true
+	python -m ruff check .
+	python -m mypy security/ crypto/ --ignore-missing-imports --no-error-summary
 
 # ---- Security static analysis ----------------------------------------------
 security-scan:
-	bandit -r security/ crypto/ -ll -q || true
-	pip-audit --desc --fix --dry-run || true
+	python -m bandit -r security/ crypto/ -ll -q
+	python -m pip_audit -r requirements-ci.txt --desc --fix --dry-run
 
 # ---- Tests -----------------------------------------------------------------
 test:
-	pytest security/ crypto/ -v --tb=short
+	python -m pytest security/ crypto/ -v --tb=short
 
 # ---- CI (mirrors GitHub Actions exactly) -----------------------------------
 ci: fmt lint security-scan test

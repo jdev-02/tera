@@ -1,0 +1,5 @@
+cryptography>=46.0.7
+defusedxml>=0.7.1
+jsonschema>=4.25.1
+pytest>=9.0.3
+safety-agent>=0.1.5

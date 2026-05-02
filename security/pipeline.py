@@ -15,9 +15,8 @@ Run:  python cyber/pipeline.py
 from __future__ import annotations
 
 import asyncio
-import json
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -31,6 +30,7 @@ from route_trust_score import compute_route_trust, atak_label
 # -------------------------------------------------------------------------------
 # Pipeline result
 # -------------------------------------------------------------------------------
+
 
 class PipelineResult:
     def __init__(self):
@@ -62,6 +62,7 @@ class PipelineResult:
 # -------------------------------------------------------------------------------
 # Core pipeline function
 # -------------------------------------------------------------------------------
+
 
 async def run_pipeline(
     raw_text: str,
@@ -101,7 +102,7 @@ async def run_pipeline(
             "violation_types": guard.violation_types,
             "cwe_codes": guard.cwe_codes,
             "guard_source": guard.source,
-        }
+        },
     )
     if guard.blocked:
         result.atak_display = "BLOCKED — Prompt Injection Detected"
@@ -119,7 +120,7 @@ async def run_pipeline(
             "redacted_length": len(redacted.redacted),
             "findings": redacted.findings,
             "redact_source": redacted.source,
-        }
+        },
     )
     clean_text = redacted.redacted
 
@@ -137,7 +138,7 @@ async def run_pipeline(
             "trusted_as_instruction": tagged["trusted_as_instruction"],
             "routing_forward_safe": forward_check["safe"],
             "reason": forward_check["reason"],
-        }
+        },
     )
     if not forward_check["safe"]:
         result.atak_display = "BLOCKED — Low-Trust Input Source"
@@ -153,7 +154,7 @@ async def run_pipeline(
         detail={
             "valid": validation["valid"],
             "errors": validation["errors"],
-        }
+        },
     )
     result.final_query = structured_query if validation["valid"] else None
     if not validation["valid"]:
@@ -172,7 +173,7 @@ async def run_pipeline(
             "operation": operation,
             "allowed": gate["allowed"],
             "reason": gate["reason"],
-        }
+        },
     )
     if not gate["allowed"]:
         result.atak_display = "BLOCKED — Policy Violation"
@@ -182,10 +183,10 @@ async def run_pipeline(
     # Stage 6: Route trust score → ATAK display label
     # ------------------------------------------------------------------
     route_artifact = {
-        "schema_valid":          validation["valid"],
-        "policy_valid":          gate["allowed"],
-        "operator_approved":     context.get("operator_approved", False),
-        "signature_valid":       context.get("signature_valid", False),
+        "schema_valid": validation["valid"],
+        "policy_valid": gate["allowed"],
+        "operator_approved": context.get("operator_approved", False),
+        "signature_valid": context.get("signature_valid", False),
         "untrusted_inputs_used": tagged["authority_level"] < 80,
         "superagent_guard_passed": not guard.blocked,
     }
@@ -193,7 +194,7 @@ async def run_pipeline(
     result.add_stage(
         name="route_trust_score",
         passed=trust["trust_status"] != "untrusted",
-        detail=trust
+        detail=trust,
     )
     result.trust_result = trust
     result.atak_display = atak_label(trust)
@@ -218,12 +219,16 @@ SCENARIOS = [
             "max_distance_km": 5,
             "constraints": ["avoid_ridgelines", "prefer_cover"],
             "allowed_data_layers": ["terrain", "trails", "hydrography"],
-            "authority_context": {"user_role": "operator", "requires_approval": True}
+            "authority_context": {"user_role": "operator", "requires_approval": True},
         },
         "agent": "RoutingAgent",
         "operation": "ComputeRoute",
-        "context": {"operator_approved": True, "policy_valid": True,
-                    "schema_valid": True, "signature_valid": True},
+        "context": {
+            "operator_approved": True,
+            "policy_valid": True,
+            "schema_valid": True,
+            "signature_valid": True,
+        },
     },
     {
         "name": "Map label prompt injection attempt",
@@ -236,11 +241,15 @@ SCENARIOS = [
             "max_distance_km": 5,
             "constraints": [],
             "allowed_data_layers": ["terrain"],
-            "authority_context": {"user_role": "operator", "requires_approval": False}
+            "authority_context": {"user_role": "operator", "requires_approval": False},
         },
         "agent": "RoutingAgent",
         "operation": "ComputeRoute",
-        "context": {"operator_approved": True, "policy_valid": True, "schema_valid": True},
+        "context": {
+            "operator_approved": True,
+            "policy_valid": True,
+            "schema_valid": True,
+        },
     },
     {
         "name": "IntentAgent unauthorized signing attempt",
@@ -253,11 +262,15 @@ SCENARIOS = [
             "max_distance_km": 3,
             "constraints": [],
             "allowed_data_layers": ["terrain"],
-            "authority_context": {"user_role": "operator", "requires_approval": True}
+            "authority_context": {"user_role": "operator", "requires_approval": True},
         },
         "agent": "IntentAgent",
         "operation": "SignApprovedRoute",
-        "context": {"operator_approved": True, "policy_valid": True, "schema_valid": True},
+        "context": {
+            "operator_approved": True,
+            "policy_valid": True,
+            "schema_valid": True,
+        },
     },
     {
         "name": "Valid query — missing approval and signature",
@@ -271,12 +284,16 @@ SCENARIOS = [
             "max_distance_km": 8,
             "constraints": ["avoid_steep_terrain"],
             "allowed_data_layers": ["terrain", "roads", "safe_zones"],
-            "authority_context": {"user_role": "team_lead", "requires_approval": True}
+            "authority_context": {"user_role": "team_lead", "requires_approval": True},
         },
         "agent": "RoutingAgent",
         "operation": "ComputeRoute",
-        "context": {"operator_approved": False, "policy_valid": True,
-                    "schema_valid": True, "signature_valid": False},
+        "context": {
+            "operator_approved": False,
+            "policy_valid": True,
+            "schema_valid": True,
+            "signature_valid": False,
+        },
     },
     {
         "name": "Operator input containing PII — redacted before processing",
@@ -290,12 +307,16 @@ SCENARIOS = [
             "max_distance_km": 5,
             "constraints": [],
             "allowed_data_layers": ["terrain", "safe_zones"],
-            "authority_context": {"user_role": "operator", "requires_approval": True}
+            "authority_context": {"user_role": "operator", "requires_approval": True},
         },
         "agent": "RoutingAgent",
         "operation": "ComputeRoute",
-        "context": {"operator_approved": True, "policy_valid": True,
-                    "schema_valid": True, "signature_valid": True},
+        "context": {
+            "operator_approved": True,
+            "policy_valid": True,
+            "schema_valid": True,
+            "signature_valid": True,
+        },
     },
 ]
 
@@ -340,7 +361,9 @@ async def main():
             elif stage["stage"] == "superagent_redact" and stage.get("findings"):
                 print(f"      PII redacted: {stage['findings']}")
             elif stage["stage"] == "route_trust_score":
-                print(f"      score={stage.get('trust_score')} status={stage.get('trust_status')}")
+                print(
+                    f"      score={stage.get('trust_score')} status={stage.get('trust_status')}"
+                )
                 if stage.get("reasons"):
                     print(f"      reasons: {stage['reasons']}")
 

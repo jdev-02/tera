@@ -3,11 +3,19 @@ Validates structured route queries produced by the LLM.
 The LLM output must pass this gate before reaching the routing engine.
 """
 
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
+
+from jsonschema import Draft7Validator
+
 ALLOWED_OBJECTIVES = {
     "fastest_route",
     "fastest_covered_route",
     "nearest_water",
-    "priority_search_area"
+    "priority_search_area",
 }
 
 ALLOWED_CONSTRAINTS = {
@@ -15,7 +23,7 @@ ALLOWED_CONSTRAINTS = {
     "prefer_cover",
     "avoid_high_comms_risk",
     "avoid_steep_terrain",
-    "stay_on_trails"
+    "stay_on_trails",
 }
 
 ALLOWED_DATA_LAYERS = {
@@ -24,22 +32,26 @@ ALLOWED_DATA_LAYERS = {
     "hydrography",
     "roads",
     "safe_zones",
-    "comms_risk"
+    "comms_risk",
 }
 
 ALLOWED_MISSION_TYPES = {
     "search_and_rescue",
     "tactical_route",
-    "evacuation_route"
+    "evacuation_route",
 }
 
 ALLOWED_USER_ROLES = {
     "operator",
     "team_lead",
-    "viewer"
+    "viewer",
 }
 
-# Prompt injection / instruction override patterns
+SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent / "docs" / "route_query.schema.json"
+)
+
+# Prompt injection / instruction override patterns.
 FORBIDDEN_TERMS = [
     "ignore previous instructions",
     "override policy",
@@ -56,8 +68,22 @@ FORBIDDEN_TERMS = [
     "sudo",
     "os.system",
     "subprocess",
-    "__import__"
+    "__import__",
 ]
+
+
+@lru_cache(maxsize=1)
+def _schema_validator() -> Draft7Validator:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft7Validator.check_schema(schema)
+    return Draft7Validator(schema)
+
+
+def _schema_error_message(error) -> str:
+    path = ".".join(str(part) for part in error.absolute_path)
+    if path:
+        return f"{path}: {error.message}"
+    return error.message
 
 
 def validate_route_query(query: dict) -> dict:
@@ -65,69 +91,30 @@ def validate_route_query(query: dict) -> dict:
     Returns {"valid": bool, "errors": list[str]}.
     A query is only valid if errors is empty.
     """
-    errors = []
-
     if not isinstance(query, dict):
         return {"valid": False, "errors": ["Query must be a JSON object"]}
 
-    # Required fields
-    required = ["mission_type", "objective", "max_distance_km", "constraints",
-                "allowed_data_layers", "authority_context"]
-    for field in required:
-        if field not in query:
-            errors.append(f"Missing required field: {field}")
+    errors = [
+        _schema_error_message(error)
+        for error in sorted(
+            _schema_validator().iter_errors(query),
+            key=lambda err: list(err.absolute_path),
+        )
+    ]
 
-    if errors:
-        return {"valid": False, "errors": errors}
-
-    # mission_type
-    if query.get("mission_type") not in ALLOWED_MISSION_TYPES:
-        errors.append(f"mission_type not allowed: {query.get('mission_type')}")
-
-    # objective
-    if query.get("objective") not in ALLOWED_OBJECTIVES:
-        errors.append(f"Objective not allowed: {query.get('objective')}")
-
-    # max_distance_km
-    dist = query.get("max_distance_km", 0)
-    if not isinstance(dist, (int, float)) or dist < 0 or dist > 10:
-        errors.append("max_distance_km must be a number between 0 and 10")
-
-    # constraints
-    for constraint in query.get("constraints", []):
-        if constraint not in ALLOWED_CONSTRAINTS:
-            errors.append(f"Constraint not allowed: {constraint}")
-
-    # data layers
-    for layer in query.get("allowed_data_layers", []):
-        if layer not in ALLOWED_DATA_LAYERS:
-            errors.append(f"Data layer not allowed: {layer}")
-
-    # authority_context
-    auth = query.get("authority_context", {})
-    if not isinstance(auth, dict):
-        errors.append("authority_context must be an object")
-    else:
-        if auth.get("user_role") not in ALLOWED_USER_ROLES:
-            errors.append(f"user_role not allowed: {auth.get('user_role')}")
-        if not isinstance(auth.get("requires_approval"), bool):
-            errors.append("requires_approval must be a boolean")
-
-    # Prompt injection scan — check entire serialized query
-    raw_text = str(query).lower()
+    raw_text = json.dumps(query, sort_keys=True, default=str).lower()
+    normalized_text = raw_text.replace("_", " ").replace("-", " ")
     for term in FORBIDDEN_TERMS:
-        if term in raw_text:
+        if term in raw_text or term in normalized_text:
             errors.append(f"Forbidden instruction detected: '{term}'")
 
     return {
         "valid": len(errors) == 0,
-        "errors": errors
+        "errors": errors,
     }
 
 
 if __name__ == "__main__":
-    import json
-
     sample_query = {
         "mission_type": "search_and_rescue",
         "objective": "fastest_covered_route",
@@ -137,14 +124,13 @@ if __name__ == "__main__":
         "allowed_data_layers": ["terrain", "trails", "hydrography"],
         "authority_context": {
             "user_role": "operator",
-            "requires_approval": True
-        }
+            "requires_approval": True,
+        },
     }
 
     result = validate_route_query(sample_query)
     print(json.dumps(result, indent=2))
 
-    # Injection attempt example
     print("\n--- Injection attempt ---")
     injected = {
         "mission_type": "tactical_route",
@@ -154,7 +140,7 @@ if __name__ == "__main__":
         "allowed_data_layers": ["terrain"],
         "authority_context": {
             "user_role": "operator",
-            "requires_approval": False
-        }
+            "requires_approval": False,
+        },
     }
     print(json.dumps(validate_route_query(injected), indent=2))

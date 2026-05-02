@@ -23,10 +23,10 @@ def compute_route_trust(route_artifact: dict) -> dict:
     reasons = []
 
     checks = [
-        ("schema_valid",            30, "Structured query schema invalid"),
-        ("policy_valid",            30, "Policy validation failed"),
-        ("operator_approved",       20, "Operator approval missing"),
-        ("signature_valid",         30, "Route signature missing or invalid"),
+        ("schema_valid", 30, "Structured query schema invalid"),
+        ("policy_valid", 30, "Policy validation failed"),
+        ("operator_approved", 20, "Operator approval missing"),
+        ("signature_valid", 30, "Route signature missing or invalid"),
     ]
 
     for key, penalty, message in checks:
@@ -54,17 +54,13 @@ def compute_route_trust(route_artifact: dict) -> dict:
     else:
         status = "untrusted"
 
-    return {
-        "trust_score": score,
-        "trust_status": status,
-        "reasons": reasons
-    }
+    return {"trust_score": score, "trust_status": status, "reasons": reasons}
 
 
 ATAK_DISPLAY_MAP = {
-    "trusted":      "Trusted Route",
+    "trusted": "Trusted Route",
     "needs_review": "Suggested Route – Needs Review",
-    "untrusted":    "Untrusted – Do Not Execute"
+    "untrusted": "Untrusted – Do Not Execute",
 }
 
 
@@ -74,8 +70,9 @@ def atak_label(trust_result: dict) -> str:
 
 if __name__ == "__main__":
     import json
+    from typing import Any
 
-    scenarios = [
+    scenarios: list[dict[str, Any]] = [
         {
             "name": "Fully trusted route (SuperAgent guard passed)",
             "artifact": {
@@ -85,7 +82,7 @@ if __name__ == "__main__":
                 "signature_valid": True,
                 "untrusted_inputs_used": False,
                 "superagent_guard_passed": True,
-            }
+            },
         },
         {
             "name": "Missing approval and signature",
@@ -96,7 +93,7 @@ if __name__ == "__main__":
                 "signature_valid": False,
                 "untrusted_inputs_used": False,
                 "superagent_guard_passed": True,
-            }
+            },
         },
         {
             "name": "Injection detected by SuperAgent Guard",
@@ -107,7 +104,7 @@ if __name__ == "__main__":
                 "signature_valid": True,
                 "untrusted_inputs_used": False,
                 "superagent_guard_passed": False,
-            }
+            },
         },
         {
             "name": "Multiple failures (no guard key = legacy mode)",
@@ -117,8 +114,8 @@ if __name__ == "__main__":
                 "operator_approved": False,
                 "signature_valid": False,
                 "untrusted_inputs_used": True,
-            }
-        }
+            },
+        },
     ]
 
     for s in scenarios:
