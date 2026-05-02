@@ -1,5 +1,8 @@
 # Cyber Trust Boundary
 
+For the paper and pitch framing of this contribution, see
+`docs/cyber_mitigation_contribution.md`.
+
 ## Core Principles
 
 1. Intent is not authority.

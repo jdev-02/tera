@@ -80,6 +80,21 @@ class Signature(BaseModel):
     signed_at: str
 
 
+class OperatorSignature(BaseModel):
+    """Operator commit signature for ADR-003 two-signature approval."""
+
+    scheme: str
+    key_id: str
+    value_b64: str
+    signed_at: str
+    approves_route_hash: str
+    payload_hash: str
+    # Canonical approval payload JSON (sort_keys, no spaces).
+    # Required for self-contained verification in atak/bridge.py - same
+    # pattern as <payload_json> in CoT XML (cot_signer.py).
+    payload_json: str
+
+
 class PlanResponse(BaseModel):
     """Returned from POST /plan. The route + rationale + trust + signature."""
 
@@ -99,3 +114,24 @@ class PlanBlocked(BaseModel):
     blocked_at: str
     reason: str
     stages: list[dict[str, Any]]
+
+
+class PlanApprovalRequest(BaseModel):
+    """Stage-3 operator approval request from ADR-003."""
+
+    route_id: str = Field(..., min_length=1)
+    route: dict[str, Any]
+    waypoints: list[Waypoint] = Field(default_factory=list)
+    device_signature: Signature
+    operator_key_id: str = Field(default="operator-demo-001", min_length=3)
+    approved_by: str | None = None
+
+
+class PlanApprovalResponse(BaseModel):
+    """Returned from POST /plan/approve when the operator commits a route."""
+
+    route_id: str
+    approval_state: Literal["operator_committed"] = "operator_committed"
+    route_hash: str
+    device_signature: Signature
+    operator_signature: OperatorSignature
