@@ -1,0 +1,851 @@
+Navigation, Survival, SAR, and Terrain-Aware Routing Prompt Catalog
+===================================================================
+
+Scope
+-----
+
+This file contains a broad prompt catalog and deterministic algorithm design for
+navigation, survival, SAR, hiking, outdoors, humanitarian response, defensive
+logistics, and emergency field routing use cases.
+
+The defense/military examples are framed around safety, evacuation, logistics,
+medical response, SAR, and humanitarian operations. They are not intended for
+targeting, evasion, ambush planning, or offensive tactical use.
+
+
+PART 1: PROMPT CATALOG
+======================
+
+Emergency Survival Routing
+--------------------------
+
+1. Find the safest route to the nearest reliable fresh water source.
+2. Find the fastest route to potable water while avoiding steep terrain.
+3. Route me to the nearest stream, river, lake, spring, or snowmelt source.
+4. Find water sources downhill from my current location.
+5. Find a route to water that avoids cliffs, avalanche zones, and dense brush.
+6. Find the most energy-efficient route to water for an injured hiker.
+7. Find a route to water that stays near cover from wind and exposure.
+8. Route me to the nearest water source with likely places to camp nearby.
+9. Find the nearest water source that is not downstream of roads, farms, or settlements.
+10. Find a water route that avoids private land and restricted areas.
+
+Shelter And Exposure
+--------------------
+
+11. Find the fastest route to natural shelter from wind, rain, or snow.
+12. Route me to the nearest cabin, hut, ranger station, or maintained shelter.
+13. Find a route to lower elevation to reduce exposure.
+14. Find a route to tree cover for emergency shelter.
+15. Find the nearest area suitable for setting up a bivy or tent.
+16. Route me away from ridgelines and exposed terrain before nightfall.
+17. Find a sheltered location within one hour of walking.
+18. Find a campsite near water but outside flood risk.
+19. Find a route to terrain protected from prevailing winds.
+20. Find a route to an area with dry ground and minimal rockfall risk.
+
+Medical And Rescue
+------------------
+
+21. Find the fastest route to the nearest hospital, clinic, or aid station.
+22. Find the safest evacuation route for a person with a leg injury.
+23. Route me to the nearest road accessible by ambulance.
+24. Find the shortest path to a trailhead for emergency pickup.
+25. Find a route to a helicopter landing zone or open clearing.
+26. Find the nearest location suitable for air evacuation.
+27. Route rescuers from the nearest road to my coordinates.
+28. Find a route to meet SAR teams halfway.
+29. Find the safest route for carrying a litter or stretcher.
+30. Find a route with the least elevation gain for casualty evacuation.
+31. Identify the best evacuation route before weather worsens.
+32. Find a route to the nearest location with cell service for emergency contact.
+33. Find a route to the nearest ranger station or park office.
+34. Find the nearest place where a vehicle could reach me.
+35. Find a route suitable for an ATV, snowmobile, or rescue vehicle.
+
+Communication And Signaling
+---------------------------
+
+36. Route me to the nearest high point likely to have cell signal.
+37. Find a route to a ridgeline with line-of-sight to a town or road.
+38. Find the closest open area where I can signal aircraft.
+39. Route me to the nearest fire lookout, radio tower, or communications site.
+40. Find a location with clear sky view for satellite messenger use.
+41. Find the safest route to high ground for emergency communications.
+42. Find a route to a clearing visible from the air.
+43. Find the nearest place where emergency lights or signal panels would be visible.
+44. Find a route to a location with both shelter and communication potential.
+45. Identify nearby landmarks I can use to describe my location to rescuers.
+
+Navigation Back To Safety
+-------------------------
+
+46. Find the safest route back to my starting point.
+47. Find the shortest route back to the trailhead.
+48. Find the easiest route back to a marked trail.
+49. Route me to the nearest maintained trail.
+50. Find the safest route to the nearest road.
+51. Find a route to the closest inhabited structure.
+52. Find the nearest town, campground, or ranger station and route me there.
+53. Find the route with the least elevation change to civilization.
+54. Route me around impassable terrain back to the trail.
+55. Find the safest descent route to a valley.
+56. Find a route that avoids crossing rivers or streams.
+57. Find a route that avoids snowfields and glaciers.
+58. Find a route that avoids scrambling, cliffs, and exposed slopes.
+59. Find a route suitable for hiking in darkness with a headlamp.
+60. Find a route that follows natural handrails like rivers, ridges, or valleys.
+
+Terrain-Aware Routing
+---------------------
+
+61. Find the most efficient route considering slope, elevation, vegetation, and obstacles.
+62. Find a route that avoids slopes steeper than 20 degrees.
+63. Find a route that minimizes elevation gain.
+64. Find a route that minimizes total distance.
+65. Find a route that minimizes travel time instead of distance.
+66. Find a route that avoids dense forest or heavy brush.
+67. Find a route that avoids marshes, wetlands, and bogs.
+68. Find a route that avoids talus, scree, and loose rock.
+69. Find a route that avoids avalanche-prone slopes.
+70. Find a route that avoids floodplains and washes.
+71. Find a route that avoids wildfire burn scars.
+72. Find a route that follows ridgelines.
+73. Find a route that follows valleys.
+74. Find a route that uses roads and trails as much as possible.
+75. Find a route that avoids unmarked terrain.
+76. Find a route suitable for snow travel.
+77. Find a route suitable for desert travel.
+78. Find a route suitable for jungle or dense woodland travel.
+79. Find a route suitable for mountainous terrain.
+80. Find a route suitable for night movement by civilians or rescue teams.
+
+Weather And Environmental Risk
+------------------------------
+
+81. Find a route that avoids areas at risk of flash flooding.
+82. Find a route to higher ground before heavy rain arrives.
+83. Find a route away from wildfire smoke or active fire areas.
+84. Find a route that avoids lightning-exposed ridges.
+85. Find a route that avoids avalanche terrain after snowfall.
+86. Find a route to shelter before sunset.
+87. Find a route that accounts for current wind direction and wind chill.
+88. Find a route that avoids heat-exposed terrain during midday.
+89. Find a shaded route to the nearest water source.
+90. Find a route that minimizes snow travel.
+91. Find a route that avoids river crossings after rainfall.
+92. Find a route to safety before freezing temperatures arrive.
+93. Find a route with the best chance of staying dry.
+94. Find a route that avoids unstable slopes after heavy rain.
+95. Find a route that accounts for daylight remaining.
+
+Food, Fire, And Sustenance
+--------------------------
+
+96. Find a route to an area likely to have edible plants or berries.
+97. Find a route to the nearest fishing-accessible water.
+98. Find a route to a safe place to collect firewood.
+99. Find a route to dry wood or sheltered fuel sources.
+100. Find a route to an area with both water and firewood.
+101. Find a route to lower elevation where forage may be more available.
+102. Find a route to a campsite with fuel, water, and wind protection.
+103. Find a route to an area where emergency trapping or fishing is legally permitted.
+104. Find a route to a nearby cabin, cache, or supply point.
+105. Find the nearest place likely to contain emergency supplies.
+
+Search And Rescue Planning
+--------------------------
+
+106. Generate likely travel corridors from the last known position.
+107. Identify the most probable routes a lost hiker may have taken.
+108. Find high-probability search areas based on terrain and human behavior.
+109. Route SAR teams to cover trails, drainages, and ridgelines efficiently.
+110. Divide this area into search sectors based on terrain difficulty.
+111. Find the fastest route for ground teams to reach a clue location.
+112. Find safe access routes for SAR teams carrying rescue equipment.
+113. Identify terrain traps where a missing person may be stuck.
+114. Find routes from the last known point to water sources.
+115. Find routes from the last known point to shelter opportunities.
+116. Find all roads, trails, and drainages reachable within 6 hours from the last known position.
+117. Estimate how far a missing person could travel given age, condition, terrain, and weather.
+118. Recommend search routes for dog teams.
+119. Recommend search routes for drone teams.
+120. Identify safe drone launch points near the search area.
+121. Find a route for rescuers that avoids unnecessary elevation gain.
+122. Find an evacuation path from the subject location to the nearest road.
+123. Identify possible signal locations visible from the air.
+124. Create a route plan for a hasty search team.
+125. Create a route plan for a grid search team.
+
+Hiking And Outdoor Navigation
+-----------------------------
+
+126. Plan a day hike route with water access and bailout options.
+127. Find a scenic route that avoids technical terrain.
+128. Find a loop route under a specified distance and elevation gain.
+129. Find a route suitable for beginners.
+130. Find a route suitable for children or older hikers.
+131. Find a route suitable for a hiker with limited mobility.
+132. Find a route with reliable landmarks for navigation.
+133. Find a route that stays on public land.
+134. Find a route that avoids private property.
+135. Find a route that avoids hunting areas or seasonal closures.
+136. Find a route with multiple exit points.
+137. Find a route with campsites spaced every few miles.
+138. Find a multi-day route with water every day.
+139. Find a route that avoids river fords.
+140. Find a route that avoids snow above a certain elevation.
+141. Find a route that keeps me within two miles of a road.
+142. Find a route with the best balance of scenery and safety.
+143. Find an alternate route if the main trail is closed.
+144. Find a route that avoids exposed scrambling.
+145. Find a route that is navigable with map and compass only.
+
+Marine, River, And Coastal Survival
+-----------------------------------
+
+146. Find the nearest safe landing point along the coast.
+147. Route me to the nearest freshwater source from the shoreline.
+148. Find a route inland from a beach to shelter.
+149. Find a route away from tidal zones before high tide.
+150. Find the nearest safe river crossing.
+151. Find a route downstream to the nearest settlement.
+152. Find a route that avoids dangerous rapids or waterfalls.
+153. Find a portage route around an obstacle.
+154. Find a route to higher ground from a floodplain.
+155. Find a route to a visible signal point near the shoreline.
+
+Desert Survival
+---------------
+
+156. Find the shortest route to shade.
+157. Find the nearest likely water source in desert terrain.
+158. Find a route that minimizes sun exposure.
+159. Find a route best traveled during cooler hours.
+160. Find a route that avoids dry washes during storm risk.
+161. Find a route to high ground for orientation.
+162. Find the nearest road or powerline corridor.
+163. Find a route to a known well, spring, tank, or cattle trough.
+164. Find a route that conserves energy and avoids sand travel.
+165. Find a route to shelter from wind and sun.
+
+Winter And Alpine Survival
+--------------------------
+
+166. Find a route that avoids avalanche terrain.
+167. Find a route below treeline for shelter.
+168. Find a route to the nearest hut or warming shelter.
+169. Find a route that avoids cornices and exposed ridges.
+170. Find a route with the lowest avalanche exposure.
+171. Find a route to descend safely from alpine terrain.
+172. Find a route to avoid crevasse fields.
+173. Find a route that stays on low-angle slopes.
+174. Find a route to wind-protected camping.
+175. Find a route to a rescue-accessible clearing.
+
+Defense, Military, And Disaster Response Logistics
+--------------------------------------------------
+
+176. Find the safest route for moving medical supplies to a field clinic.
+177. Find a route for evacuating civilians from a flood zone.
+178. Find a route for humanitarian convoy movement avoiding damaged bridges.
+179. Find a route from base camp to a casualty collection point.
+180. Find the fastest non-combat route to an evacuation zone.
+181. Find a route for ground teams to reach stranded civilians.
+182. Find routes that avoid restricted airspace or closed roads.
+183. Find a route to resupply a remote observation or weather station.
+184. Find a route to establish a temporary communications relay.
+185. Find a route to move emergency water supplies to an isolated community.
+186. Find alternate routes if the primary road is blocked.
+187. Find a route that supports heavy vehicles and avoids weak bridges.
+188. Find routes suitable for foot teams, vehicles, and aircraft coordination.
+189. Find a route to a safe staging area for responders.
+190. Find the nearest defensible shelter location for civilians during disaster conditions.
+191. Find a route that keeps teams clear of hazardous industrial sites.
+192. Find a route to distribute aid across multiple remote locations.
+193. Find the best sequence for visiting multiple rescue sites.
+194. Find a route to relocate personnel away from wildfire or flood risk.
+195. Find a low-risk route for night evacuation of noncombatants.
+
+Multi-Objective Route Prompts
+-----------------------------
+
+196. Find the best route to water, then shelter, then a signal location.
+197. Find a route that balances speed, safety, elevation, and water access.
+198. Find a route to the nearest road while passing potential shelter sites.
+199. Find a route to evacuation that avoids hazards and maximizes cell coverage.
+200. Find a route to a rescue pickup point with the least physical effort.
+201. Find a route that passes through likely water sources and avoids steep slopes.
+202. Find a route that gets me below treeline before dark and near water by morning.
+203. Find the best route for a group with mixed fitness levels.
+204. Find a route for someone carrying a heavy pack.
+205. Find a route for someone dehydrated and moving slowly.
+206. Find a route that includes bailout options every few miles.
+207. Find a route that avoids all known hazards and restricted areas.
+208. Find a route optimized for survival priorities: safety, water, shelter, rescue.
+209. Find three route options: fastest, safest, and easiest.
+210. Find the best route if I can only travel two miles per hour.
+
+Situational Awareness And Decision Support
+------------------------------------------
+
+211. What is the safest direction to travel from my current location?
+212. Should I stay put or move based on nearby roads, water, weather, and terrain?
+213. What landmarks should I use to navigate to safety?
+214. What hazards exist between me and the nearest trailhead?
+215. What is the nearest reachable safety point before sunset?
+216. What route gives rescuers the best chance of finding me?
+217. What nearby features could help confirm my position?
+218. What route should I take if my GPS battery is low?
+219. What route can I follow using only a compass bearing?
+220. What natural handrails can guide me toward safety?
+221. Which nearby drainage leads toward roads or settlements?
+222. Which nearby ridge provides the best orientation point?
+223. Which route is safest if visibility drops?
+224. Which route should I avoid due to terrain or weather?
+225. What is the safest fallback route if my planned route fails?
+
+Prompt Templates
+----------------
+
+226. Find the safest route from [current location] to [destination], accounting for terrain, weather, daylight, obstacles, and my physical condition.
+227. Find the fastest route to the nearest [resource] while avoiding [hazards].
+228. Find the lowest-effort route to [destination] for someone who is [injured/dehydrated/exhausted].
+229. Find three routes to [destination]: fastest, safest, and easiest.
+230. Find a route to [destination] that stays within [distance] of roads or trails.
+231. Find a route to [destination] that avoids slopes over [degree threshold].
+232. Find a route to [destination] using only public land and legal access.
+233. Find a route from [last known position] to likely [water/shelter/road/signal] locations.
+234. Find a route for [team type] carrying [equipment] through [terrain type].
+235. Find an evacuation route from [incident location] to [pickup point] that supports [walking/litter/vehicle/air rescue].
+
+
+PART 2: DETERMINISTIC ALGORITHM DESIGN
+======================================
+
+Core Architecture
+-----------------
+
+The system should be a deterministic GIS/routing engine with a structured
+intent parser, not a free-form generative router. The user prompt should be
+converted into a structured query:
+
+origin: point, last-known-position, line, polygon, or known route
+target_type: water, road, trail, shelter, hospital, signal, LZ, high ground, settlement
+mode: foot, injured foot, litter carry, vehicle, ATV, boat, snow, drone team
+objective: fastest, safest, easiest, lowest energy, nearest, multi-stop, balanced
+constraints: avoid cliffs, private land, rivers, wildfire, avalanche, dense brush, slope > X
+time_context: daylight remaining, weather window, tide, flood/fire/avalanche status
+output: route, alternates, reachable area, confidence, hazards, ETA
+
+Data Normalization
+------------------
+
+All data layers must be normalized before routing:
+
+1. Clip to a bounded area of interest.
+2. Reproject to a local metric coordinate reference system.
+3. Resample rasters to a common resolution.
+4. Rasterize vector constraints where needed.
+5. Normalize costs into comparable units.
+6. Preserve source, timestamp, resolution, and confidence metadata.
+7. Flag nodata, stale, or conflicting data.
+
+Core GIS operations:
+
+- Reprojection
+- Rasterization
+- Vector buffering
+- Raster proximity surfaces
+- Slope/aspect/roughness derivation
+- Flow accumulation and drainage extraction
+- Viewshed and line-of-sight
+- Cost surface creation
+- Graph construction
+- Shortest path and least-cost path solving
+
+Candidate Target Extraction
+---------------------------
+
+For "nearest X" prompts, first derive possible target candidates, then route to
+them. Do not assume the geometrically nearest candidate is the best reachable
+candidate.
+
+Water candidates:
+
+- NHD/3DHP flowlines
+- NHD/3DHP waterbodies
+- OSM water polygons and waterways
+- Springs, wells, tanks, troughs, cisterns
+- Flow accumulation channels
+- NDWI/MNDWI water detections from imagery
+- Snowmelt candidates
+
+Shelter candidates:
+
+- Buildings
+- Cabins
+- Ranger stations
+- Huts
+- Fire lookouts
+- Bridges and overhangs where mapped
+- Tree cover
+- Lee-side terrain from wind direction and aspect
+- Low-exposure campsites
+
+Signal candidates:
+
+- High points
+- Ridgelines
+- Fire lookouts
+- Radio/cell towers
+- Clearings
+- Open-sky areas
+- Areas with line-of-sight to roads, towns, towers, or aircraft corridors
+
+Rescue pickup candidates:
+
+- Trailheads
+- Roads
+- Open clearings
+- Low-slope fields
+- Gravel bars where safe
+- Existing helipads
+- Parking lots
+- Staging areas
+- Accessible road shoulders
+
+Hazard candidates:
+
+- Fire perimeter and active heat detections
+- Flood zones
+- Washes and floodplains
+- Avalanche terrain
+- Cliffs and steep slopes
+- Rockfall paths
+- Wetlands, bogs, marshes
+- Swift water crossings
+- Snowfields, glaciers, crevasse zones
+- Restricted or closed land
+
+Network Routing
+---------------
+
+For road, track, trail, and path routing, create a weighted graph:
+
+nodes = intersections, trail junctions, road endpoints, access points
+edges = roads, trails, paths, tracks, stairs, service roads, legal connectors
+
+Recommended algorithms:
+
+- Dijkstra: default for non-negative weighted routing.
+- Bidirectional Dijkstra: efficient point-to-point road/trail routing.
+- A*: efficient point-to-point routing when the heuristic is admissible.
+- Multi-source Dijkstra: nearest target among many possible targets.
+- Multi-target Dijkstra: route from origin to many candidate endpoints.
+- Yen's k-shortest paths: alternate routes.
+- Breadth-first search: unweighted hop-based graph routing.
+- Bellman-Ford: only if negative weights are ever introduced, which should generally be avoided.
+
+Network edge cost examples:
+
+edge_cost = distance / speed
+edge_cost = travel_time + hazard_penalty
+edge_cost = travel_time + closure_penalty + surface_penalty
+edge_cost = energy_cost + injury_penalty
+
+Road/trail graph attributes:
+
+- length
+- surface
+- grade
+- access
+- legal mode
+- trail difficulty
+- road class
+- bridge/tunnel status
+- one-way status
+- seasonal closure
+- max vehicle class
+- known damage or blockage
+
+Off-Road Least-Cost Routing
+---------------------------
+
+For terrain routing, build a raster cost surface and use cost-distance plus
+backtracking.
+
+Each raster cell receives a traversal cost:
+
+cell_cost =
+  base_distance_cost
+  * slope_multiplier
+  * landcover_multiplier
+  * surface_multiplier
+  * vegetation_multiplier
+  * snow_or_mud_multiplier
+  * weather_multiplier
+  * user_condition_multiplier
+  + hazard_penalty
+  + uncertainty_penalty
+
+Hard barriers should be set to infinity or nodata:
+
+- cliffs
+- active fire core
+- closed or restricted areas
+- impassable water
+- unsafe river crossings
+- avalanche red zones
+- crevasse zones
+- slopes above mode-specific threshold
+- known landslides
+- hazardous industrial sites
+
+Useful movement models:
+
+- Tobler hiking function for slope-aware walking speed.
+- Naismith's rule for simple hiking time estimates.
+- Langmuir corrections for steep descents.
+- Pandolf equation for load carriage and metabolic cost.
+- Custom SAR profiles for children, elderly subjects, injured subjects, litter teams, and loaded responders.
+
+Hybrid Routing
+--------------
+
+Most realistic requests require hybrid road/trail/off-road routing.
+
+Example:
+
+1. Compute least-cost route from origin to nearest viable trail/road access.
+2. Route along the trail/road graph.
+3. Compute least-cost route from graph exit to target.
+4. Compare complete alternatives.
+
+Implementation pattern:
+
+supergraph nodes =
+  road/trail graph nodes
+  raster access nodes
+  target candidates
+  origin candidates
+
+supergraph edges =
+  road/trail edges
+  off-road least-cost connectors
+  legal access connectors
+  rescue staging connectors
+
+Then solve the supergraph with Dijkstra, A*, k-shortest paths, or multi-source
+Dijkstra depending on the query.
+
+Multi-Objective Ranking
+-----------------------
+
+Do not collapse every route into raw distance. Generate and expose route
+variants:
+
+- Fastest: minimize travel time.
+- Safest: minimize hazard exposure and uncertainty.
+- Easiest: minimize effort, slope, roughness, and technical terrain.
+- Most reliable: prefer high-confidence data and mapped features.
+- Survival optimized: balance water, shelter, rescue visibility, time, and exposure.
+
+Example deterministic score:
+
+score =
+  w_time * normalized_time
+  + w_energy * normalized_energy
+  + w_risk * hazard_exposure
+  + w_uncertainty * data_uncertainty
+  - w_resource * resource_value
+  - w_rescue * rescue_visibility
+
+Always preserve Pareto-optimal alternatives when tradeoffs matter.
+
+Terrain Algorithms
+------------------
+
+Required DEM-derived products:
+
+- Slope: grade, slope degrees, slope threshold masks.
+- Aspect: wind exposure, solar exposure, snow persistence.
+- Curvature: concavity/convexity and terrain form.
+- Roughness / TRI: travel difficulty and ankle-injury risk.
+- TPI: ridges, valleys, terrain position.
+- Flow direction: drainage routing.
+- Flow accumulation: likely water channels and flood paths.
+- Watersheds: upstream/downstream reasoning.
+- Viewshed: signal, aircraft visibility, lookout potential.
+- Hillshade and contours: explainability and map display.
+
+Imagery-Derived Deterministic Layers
+------------------------------------
+
+Use imagery to derive features, but do not route directly on raw RGB pixels.
+
+Useful indices and products:
+
+- NDWI: water likelihood.
+- MNDWI: improved open-water detection in some contexts.
+- NDVI: vegetation density and brush penalty.
+- EVI: vegetation condition.
+- NBR/dNBR: fire scars and burn severity.
+- NDSI: snow/ice likelihood.
+- Bare-soil indices: desert exposure and loose-surface penalties.
+- Cloud/shadow masks: confidence suppression.
+- Change detection: flooding, landslides, fire scars, washouts.
+
+Computer vision features can supplement, but should be confidence-weighted:
+
+- Road/track detection
+- Building detection
+- Clearing detection
+- Water edge detection
+- Landslide scar detection
+- Obstacle detection
+
+SAR Algorithms
+--------------
+
+SAR-specific deterministic workflows:
+
+1. Reachability isochrones from last known position.
+2. Mobility envelope by age, condition, terrain, weather, and daylight.
+3. Attractor modeling toward trails, roads, drainages, lights, water, and structures.
+4. Terrain trap detection for cliffs, ravines, dense brush, water barriers, and snowfields.
+5. Probability surface combining priors, terrain friction, and attractors.
+6. Search sectorization using ridges, streams, roads, trails, and equalized effort.
+7. Coverage accounting from team GPS tracks and sensor sweep width.
+8. Clue routing and probability update after a clue is found.
+9. Evacuation route generation from subject location.
+10. Rescue staging and access routing.
+
+Prompt-to-Algorithm Mapping
+---------------------------
+
+Nearest water:
+  candidate extraction + multi-source least-cost routing
+
+Fastest route to road:
+  raster cost path + road graph snapping
+
+Safest descent:
+  slope/aspect/hazard masks + least-cost descent
+
+Avoid cliffs/rivers/private land:
+  hard constraint masks
+
+Route for injured person:
+  lower speed profile + steeper slope penalties + no scramble terrain
+
+Route for litter evacuation:
+  high slope/roughness penalties + strong preference for roads/trails
+
+Find signal:
+  DEM viewshed + ridgeline/high-point ranking
+
+Find shelter:
+  POI/building candidates + landcover + wind/aspect exposure
+
+Find LZ or clearing:
+  slope threshold + obstacle buffer + landcover openness + access route
+
+SAR probable area:
+  isochrone + terrain friction + lost-person behavior priors
+
+Search sectors:
+  watershed/ridge/trail boundaries + equalized effort partitioning
+
+Multi-stop survival route:
+  ordered resource targets + TSP or shortest path over candidate graph
+
+Stay or move decision:
+  compare rescue visibility, water/shelter proximity, hazards, reachable exits, and condition
+
+Output Requirements
+-------------------
+
+Every emergency-grade output should include:
+
+- Route geometry
+- Turn/segment instructions
+- ETA range
+- Distance
+- Elevation gain/loss
+- Hazards crossed
+- Avoided hazards
+- Route confidence
+- Data age
+- Data sources used
+- Known assumptions
+- Alternative routes
+- Bailout points
+- Nearest safe stopping points
+- "Stay put" recommendation when movement increases immediate danger
+
+
+PART 3: DATA RESOURCES BESIDES ESRI IMAGERY, ESRI TERRAIN, ESRI LAND COVER, AND ESRI OSM
+========================================================================================
+
+Elevation / Terrain
+-------------------
+
+- USGS 3DEP: U.S. elevation, lidar-derived DEMs, 1 m where available, 10 m national products.
+- OpenTopography: high-resolution topography and global/regional DEM access.
+- Copernicus DEM: global DEM.
+- SRTM: global DEM baseline.
+- ASTER GDEM: global DEM alternative.
+- ArcticDEM: Arctic high-resolution elevation.
+- REMA: Reference Elevation Model of Antarctica.
+- NOAA coastal lidar and bathymetry products.
+
+Land Cover
+----------
+
+- USGS Annual NLCD: U.S. annual land cover and land change.
+- NLCD 2021 and earlier NLCD products.
+- ESA WorldCover: global 10 m land cover.
+- Dynamic World: near-real-time global land cover probabilities.
+- Copernicus Global Land Service.
+- MODIS land cover.
+- LANDFIRE vegetation and fuels.
+- State land cover datasets.
+
+Hydrography / Water
+-------------------
+
+- USGS 3D Hydrography Program (3DHP).
+- National Hydrography Dataset (NHD), noting it is retired but still available.
+- NHDPlus High Resolution.
+- Watershed Boundary Dataset (WBD).
+- USGS NWIS stream gauges.
+- NOAA National Water Prediction Service.
+- HydroSHEDS.
+- HydroRIVERS.
+- HydroLAKES.
+- Global Surface Water.
+- Local/state water source datasets.
+
+Roads, Trails, Paths, POIs
+--------------------------
+
+- OpenStreetMap / Overpass API.
+- OSMnx for OSM extraction, graph construction, and routing.
+- Overture Maps transportation, places, buildings, divisions, and base layers.
+- U.S. Census TIGER/Line roads.
+- USFS roads and trails.
+- BLM roads, trails, land status, and recreation datasets.
+- National Park Service roads, trails, facilities, and closures.
+- State GIS portals.
+- County GIS roads and parcels.
+- Microsoft Global ML Building Footprints.
+- OpenAddresses.
+- Local trail authority data.
+
+Weather And Hazards
+-------------------
+
+- NOAA/NWS alerts API.
+- NOAA nowCOAST for coastal and marine conditions.
+- NOAA weather radar.
+- NOAA National Water Prediction Service.
+- NASA FIRMS active fire detections.
+- MODIS and VIIRS active fire products.
+- FEMA flood maps.
+- USGS landslide feeds and hazard layers.
+- State DOT closures.
+- State wildfire perimeters.
+- Incident command fire perimeters where available.
+- Avalanche center bulletins.
+- Snowpack telemetry / SNOTEL.
+- Tide and current data for coastal routing.
+
+Boundaries And Restrictions
+---------------------------
+
+- PAD-US protected areas.
+- Protected Planet.
+- BLM surface management agency data.
+- USFS administrative boundaries.
+- NPS boundaries and closures.
+- State land ownership.
+- County parcels where available.
+- Tribal lands datasets.
+- Military/restricted areas where publicly available.
+- Wildlife closures.
+- Seasonal road and trail closures.
+- Fire closure orders.
+
+Communications / Visibility
+---------------------------
+
+- DEM-derived viewsheds.
+- FCC tower datasets.
+- OSM towers, masts, peaks, lookouts.
+- Fire lookout datasets.
+- OpenCellID or equivalent licensed cell observation data.
+- Known public safety repeater datasets where available.
+- Satellite messenger open-sky masks from terrain and canopy.
+
+Imagery Sources
+---------------
+
+- Sentinel-2 multispectral imagery.
+- Landsat Collection 2.
+- NAIP aerial imagery for the U.S.
+- Sentinel-1 SAR for cloud-penetrating flood and surface change detection.
+- MODIS for broad-area fire, snow, and vegetation monitoring.
+- Planet or Maxar if licensed.
+- State aerial imagery programs.
+
+Software And Libraries
+----------------------
+
+- GDAL/OGR for raster and vector processing.
+- Rasterio for Python raster workflows.
+- GeoPandas and Shapely for vector analysis.
+- PyProj for CRS transformations.
+- PostGIS for spatial database operations.
+- pgRouting for database-backed graph routing.
+- GRASS GIS for cost-distance, hydrology, terrain, and raster analysis.
+- WhiteboxTools for terrain and hydrologic analysis.
+- OSMnx for OpenStreetMap extraction and routing.
+- NetworkX for graph algorithms.
+- Valhalla, OSRM, GraphHopper, or OpenTripPlanner for production routing engines.
+- QGIS for manual inspection and QA.
+
+Minimum Viable Deterministic Engine
+-----------------------------------
+
+The smallest serious implementation stack:
+
+- PostGIS + pgRouting
+- GDAL/Rasterio
+- GRASS GIS r.cost/r.path or equivalent custom raster Dijkstra
+- OSMnx/NetworkX
+- DEM derivatives: slope, aspect, roughness, flow accumulation, viewshed
+- Hydrography
+- Land cover
+- Roads and trails
+- Live hazard feeds
+- Rule-based intent parser
+- Route scorer with explainable weights
+- Confidence and uncertainty layer
+
+Recommended Safety Logic
+------------------------
+
+Emergency routing should never blindly recommend movement. Add deterministic
+guardrails:
+
+- If current location is safe and movement crosses severe hazards, recommend staying put.
+- If daylight remaining is insufficient for the route, generate nearest safe stopping point.
+- If route crosses flood/fire/avalanche hazard, generate alternate or no-go result.
+- If confidence is low, mark the route provisional.
+- If water source reliability is uncertain, rank it lower.
+- If a route uses private/restricted land, flag legal/access risk.
+- If medical condition implies immobility, prioritize signaling and rescue access.
+- If weather window is closing, shorten routes and prefer shelter.
+- If no safe route exists, explicitly say no safe deterministic route was found.
+
