@@ -10,7 +10,7 @@ We sign the **full CoT XML message** (canonicalized) with ML-DSA-65. The signatu
 ## XML shape
 
 ```xml
-<event version="2.0" uid="TERA-2026-05-02-0001"
+<event version="2.0" uid="WAYFINDER-2026-05-02-0001"
        type="b-m-r" how="m-g"
        time="2026-05-02T19:30:00Z"
        start="2026-05-02T19:30:00Z"

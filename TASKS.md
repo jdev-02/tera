@@ -37,7 +37,7 @@
 
 ### #4 [agent] Wire frontier LLM client behind LLMClient interface
 - **Lane:** agent · **Owner:** P1 (Jon) · **Priority:** P0 · **Phase:** P1
-- **Acceptance:** `agent/llm.py` defines `LLMClient` Protocol with `FrontierClient` (OpenAI/Anthropic) and `OllamaClient` impls. Selected via `TERA_PHASE` env var.
+- **Acceptance:** `agent/llm.py` defines `LLMClient` Protocol with `FrontierClient` (OpenAI/Anthropic) and `OllamaClient` impls. Selected via `WAYFINDER_PHASE` env var.
 - **Files:** `agent/llm.py`, `agent/orchestrator.py`
 
 ### #5 [agent] Implement /plan orchestrator with tool-calling loop
@@ -91,7 +91,7 @@
 
 ### #14 [deploy] systemd unit for agent + bridge on Jetson
 - **Lane:** deploy · **Owner:** P3 · **Priority:** P1 · **Phase:** P2
-- **Acceptance:** `tera-agent.service` + `tera-bridge.service` start on boot, restart on failure, log to journald.
+- **Acceptance:** `wayfinder-agent.service` + `wayfinder-bridge.service` start on boot, restart on failure, log to journald.
 - **Files:** `deploy/systemd/`, `deploy/rsync.sh`
 
 ### #15 [security] tcpdump capture window for demo + audit log scroll
@@ -110,7 +110,7 @@
 
 ### #17 [agent] Wire ollama (Gemma) as Phase 3 LLM
 - **Lane:** agent · **Owner:** P1 · **Priority:** P0 · **Phase:** P3
-- **Acceptance:** `OllamaClient` works against local ollama; `TERA_PHASE=3` flips the orchestrator without code change. Tool-calling works (structured-output prompting if Gemma doesn't natively support tools).
+- **Acceptance:** `OllamaClient` works against local ollama; `WAYFINDER_PHASE=3` flips the orchestrator without code change. Tool-calling works (structured-output prompting if Gemma doesn't natively support tools).
 - **Files:** `agent/llm.py`, `agent/orchestrator.py`
 
 ### #18 [voice] Whisper-tiny push-to-talk endpoint (voice IN)
@@ -125,7 +125,7 @@
   - `agent/static/index.html` loads CesiumJS, reads `CESIUM_ION_TOKEN` from a server-side `/config` endpoint (never expose token to client beyond what Cesium SDK requires).
   - User clicks point on globe → POSTs to `/plan` → CesiumJS renders the returned route as a polyline draped on terrain.
   - Camera fly-to on route generation; 3D terrain visible.
-- **Files:** `agent/static/index.html`, `agent/static/tera.js`, `agent/app.py` (add `/config` endpoint scoped to `CESIUM_ION_TOKEN`).
+- **Files:** `agent/static/index.html`, `agent/static/wayfinder.js`, `agent/app.py` (add `/config` endpoint scoped to `CESIUM_ION_TOKEN`).
 - **Dependency:** Cesium Ion token in `.env` (Kyle provisioned).
 - **Decision point Sat 1400:** if CesiumJS is too heavy or has integration friction, fall back to Leaflet.
 
@@ -155,7 +155,7 @@
 
 ### #19 [infra] Egress firewall: default-deny outbound for Phase 3
 - **Lane:** infra · **Owner:** P2 · **Priority:** P0 · **Phase:** P3
-- **Acceptance:** When `TERA_PHASE=3`, `infra/jetson_harden.sh` activates iptables ruleset that drops all outbound except loopback + multicast group. Verified by `make tcpdump-demo` showing zero packets.
+- **Acceptance:** When `WAYFINDER_PHASE=3`, `infra/jetson_harden.sh` activates iptables ruleset that drops all outbound except loopback + multicast group. Verified by `make tcpdump-demo` showing zero packets.
 - **Files:** `infra/jetson_harden.sh`, `infra/egress.iptables`
 
 ### #20 [routing] Slope + ridgeline-prominence cost extension

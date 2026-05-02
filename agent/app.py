@@ -20,10 +20,10 @@ from pydantic import BaseModel, Field
 
 log = structlog.get_logger(__name__)
 
-PHASE = os.getenv("TERA_PHASE", "1")
+PHASE = os.getenv("WAYFINDER_PHASE", "1")
 
 app = FastAPI(
-    title="TERA Agent",
+    title="Wayfinder Agent",
     version="0.0.1",
     description="Tactical edge route agent. PRD: /docs/PRD.md",
 )

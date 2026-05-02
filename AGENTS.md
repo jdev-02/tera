@@ -113,6 +113,18 @@ For the overnight grind (Sat 2200 – Sun 0700), when stuck:
 2. Paste the problem into your AI agent (Codex / Cursor / Claude Code) — explain what you tried, what you expected, what happened.
 3. **Only then** ping a teammate. A teammate's flow state at 0300 is more expensive than a 30-second AI round-trip.
 
+## 9.1. Resuming work after a break (sleep, lunch, demo dry-run)
+
+Before you write a single line of code after any break:
+
+```
+make catchup
+```
+
+This pulls main, refreshes deps if `pyproject.toml`/`Makefile` changed, summarizes recent commits, **flags contract changes** that may affect your in-flight work, and lists your open issues. Paste the output into your AI agent and ask it to flag anything you should know before resuming.
+
+If a contract under `/docs/contracts/` changed while you were away, STOP coding and re-read it before continuing — your half-written code may be stale. The integrator-on-shift announces contract changes in Signal `#wayfinder` thread, but `make catchup` is your machine-side check.
+
 ## 10. The five non-negotiables
 
 Verbatim from PRD §14.11. If we drop everything else, we keep these:

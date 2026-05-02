@@ -1,7 +1,7 @@
 # PRD Review — Read This Before Kickoff
 
 > **Deadline:** Sat 1145 kickoff. Anything you don't push back on by then is locked.
-> **Time required:** 10 minutes. Read your assigned sections + the shared sections. Reply in Signal `#tera` thread with `+1` or specific concerns.
+> **Time required:** 10 minutes. Read your assigned sections + the shared sections. Reply in Signal `#wayfinder` thread with `+1` or specific concerns.
 
 The full PRD is **here:** `<gist-url-goes-here-after-jon-runs-gh-gist-create>` (or `docs/PRD.md` after the repo lands).
 
