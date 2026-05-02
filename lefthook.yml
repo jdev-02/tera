@@ -1,0 +1,33 @@
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.{py}"
+      run: .venv/bin/ruff format --check {staged_files} || (.venv/bin/ruff format {staged_files} && echo "Files reformatted; please re-stage and re-commit." && exit 1)
+    lint:
+      glob: "*.{py}"
+      run: .venv/bin/ruff check {staged_files}
+    gitleaks:
+      run: which gitleaks > /dev/null && gitleaks protect --staged --redact --no-banner || true
+
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        msg=$(head -1 "$1")
+        if echo "$msg" | grep -Eq '^(feat|fix|chore|refactor|test|docs|ci|perf|style)(\([a-z0-9-]+\))?: .{3,}'; then
+          exit 0
+        fi
+        echo ""
+        echo "  Commit message must follow Conventional Commits:"
+        echo "    <type>(<scope>): <description>"
+        echo "  Types: feat fix chore refactor test docs ci perf style"
+        echo "  Scopes: agent ontology eval voice atak routing data hardware deploy models mesh security crypto infra docs ci"
+        echo "  Got: $msg"
+        echo ""
+        exit 1
+
+pre-push:
+  commands:
+    ci:
+      run: make ci
