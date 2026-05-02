@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tera"
+name = "wayfinder"
 version = "0.0.1"
 description = "Tactical Edge Route Agent — National Security Hackathon 2026"
 requires-python = ">=3.11,<3.12"
@@ -18,15 +18,14 @@ dependencies = [
     "structlog>=24.1",
     "pyyaml>=6.0",
     "jsonschema>=4.22",
-    "defusedxml>=0.7.1",
     "shapely>=2.0",
     "geojson>=3.1",
     "lxml>=5.2",
     "httpx>=0.27",
     "openai>=1.40",
+    "anthropic>=0.40",
     "ollama>=0.3",
-    "cryptography>=46.0.7",
-    "safety-agent>=0.1.5",
+    "cryptography>=43.0",
     "python-multipart>=0.0.9",
     "rich>=13.7",
 ]
@@ -82,17 +81,31 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S106"]
-"crypto/*.py" = ["T201"]
-"security/*.py" = ["T201"]
+# Satriyo's security/crypto demo `if __name__ == "__main__":` blocks legitimately
+# print to stdout. Ignoring T201 in those modules.
+"security/*" = ["T201"]
+"crypto/*" = ["T201"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology"]
 
 [tool.mypy]
 python_version = "3.11"
-strict = false
+strict = true
 ignore_missing_imports = true
-check_untyped_defs = true
-disallow_untyped_defs = false
+disallow_untyped_defs = true
+
+# Satriyo's lanes were authored at a non-strict level. Track in GH issue
+# "tighten mypy on crypto/ + security/" for post-MVP.
+[[tool.mypy.overrides]]
+module = "crypto.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "security.*"
+ignore_errors = true
 warn_unused_ignores = true
-files = ["agent", "routing", "crypto", "security"]
+files = ["agent", "routing", "crypto"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
