@@ -48,9 +48,16 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/plan", response_model=PlanResponse, responses={403: {"model": PlanBlocked}})
-async def plan_endpoint(req: PlanRequest) -> PlanResponse:
+async def plan_endpoint(req: PlanRequest, tts: bool = False) -> PlanResponse:
+    """POST /plan with optional TTS.
+
+    `?tts=true` makes the orchestrator synthesize the rationale via Piper
+    and return it base64-encoded in `audio_b64`. Defaults to False so the
+    web frontend can keep doing what it does without surprise audio payloads.
+    The hero demo (PRD §6) sets `?tts=true`.
+    """
     try:
-        return await orchestrate_plan(req)
+        return await orchestrate_plan(req, with_tts=tts)
     except PlanBlockedError as e:
         # 403 with structured detail so operator UI can show *which* stage
         # blocked and why -- transparency over opacity.

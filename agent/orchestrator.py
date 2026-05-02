@@ -154,7 +154,9 @@ def _dispatch_tools(query: dict[str, Any], origin: Coord) -> dict[str, Any]:
     )
 
     # Step 3: build waypoints + rationale.
-    waypoints = [{"lat": dest_coord["lat"], "lon": dest_coord["lon"], "label": dest_label}]
+    waypoints = [
+        {"lat": dest_coord["lat"], "lon": dest_coord["lon"], "label": dest_label}
+    ]
     rationale = _build_rationale(
         dest_label=dest_label,
         cost=route_result["cost_breakdown"],
@@ -191,7 +193,9 @@ def _build_rationale(
     """
     distance_km = cost.get("distance_m", 0.0) / 1000.0
     time_min = cost.get("time_s", 0.0) / 60.0
-    avoid_str = f" Avoiding {', '.join(a.replace('_', ' ') for a in avoid)}." if avoid else ""
+    avoid_str = (
+        f" Avoiding {', '.join(a.replace('_', ' ') for a in avoid)}." if avoid else ""
+    )
     return (
         f"Routed to {dest_label}, distance {distance_km:.1f} kilometers, "
         f"ETA {time_min:.0f} minutes on {profile.replace('_', ' ')}.{avoid_str}"
@@ -277,13 +281,19 @@ class PlanBlockedError(Exception):
         self.reason = reason
 
 
-async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
+async def plan(
+    req: PlanRequest, mode: ModeOrAuto = "auto", with_tts: bool = False
+) -> PlanResponse:
     """End-to-end /plan handler.
 
     Args:
         req: validated PlanRequest from the HTTP layer.
         mode: which LLM mode to use ("auto" -> profile default).
               In this PR `mode` is server-controlled (not yet on PlanRequest).
+        with_tts: if True, synthesize the operator-cadence rationale via
+              Piper TTS and embed it in PlanResponse.audio_b64. Defaults to
+              False so existing callers see no behavior change. Hands-free
+              path (#21) sets this from the `?tts=true` query param.
               That contract change goes through Ben + Satriyo signoff at the
               Sat 1500 freeze and lands in a follow-up PR.
     """
@@ -411,7 +421,20 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
             key_id=signature.key_id,
         )
 
-    # 6. Build response.
+    # 6. Optional TTS (hands-free path). Synthesize the rationale into a
+    #    base64-encoded WAV in operator cadence. Lazy-imported so machines
+    #    without piper-tts installed (e.g. CI without the [voice] extra) don't
+    #    even load the module.
+    audio_b64: str | None = None
+    if with_tts:
+        try:
+            from voice.tts import synthesize_rationale_b64
+
+            audio_b64 = synthesize_rationale_b64(dispatch["rationale"])
+        except Exception as e:  # noqa: BLE001 -- TTS failure must not fail /plan
+            logger.warning("tts_synth_failed", error=str(e))
+
+    # 7. Build response.
     response = PlanResponse(
         request_id=request_id,
         route=dispatch["feature"],
@@ -420,11 +443,13 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
         cost_breakdown=dispatch["cost_breakdown"],
         trust=pipeline_result.get("trust_result") or {},
         signature=signature,
+        audio_b64=audio_b64,
     )
     logger.info(
         "plan_response",
         provider=client.name,
         signed=signature is not None,
+        spoken=audio_b64 is not None,
         trust_status=(pipeline_result.get("trust_result") or {}).get("trust_status"),
     )
     audit_event(
