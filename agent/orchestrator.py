@@ -19,7 +19,11 @@ If the signer is unavailable -> emit unsigned with warning (never fail open).
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -28,6 +32,9 @@ from agent.llm import LLMClient, ModeOrAuto, get_registry
 from agent.schemas import (
     Coord,
     Message,
+    OperatorSignature,
+    PlanApprovalRequest,
+    PlanApprovalResponse,
     PlanRequest,
     PlanResponse,
     Signature,
@@ -37,6 +44,24 @@ from agent.tools import find_pois, route
 from ontology import build_system_prompt, load_route_query_schema
 
 log = structlog.get_logger(__name__)
+
+
+def _canonical_json(obj: dict[str, Any]) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _timestamp_to_iso(value: Any) -> str:
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(float(value), UTC).isoformat().replace("+00:00", "Z")
+    return str(value)
+
+
+def _hex_to_b64(value: str) -> str:
+    return base64.b64encode(bytes.fromhex(value)).decode("ascii")
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +249,8 @@ def _sign_response(
         return Signature(
             scheme="ML-DSA-65",  # Satriyo's signer uses ML-DSA-65 (Dilithium3)
             key_id=signed["key_id"],
-            value_b64=signed["signature"],
-            signed_at=signed["timestamp"],
+            value_b64=_hex_to_b64(signed["signature"]),
+            signed_at=_timestamp_to_iso(signed["timestamp"]),
         )
     except (ImportError, RuntimeError) as e:
         log.warning("signer_unavailable", error=str(e))
@@ -302,7 +327,7 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
         source=req.source,
         structured_query=structured_query,
     )
-    if not pipeline_result["passed"]:
+    if not _pipeline_passed(pipeline_result):
         logger.warning(
             "pipeline_blocked",
             blocked_at=pipeline_result["blocked_at"],
@@ -351,34 +376,101 @@ async def _run_security_pipeline(
     source: str,
     structured_query: dict[str, Any],
 ) -> dict[str, Any]:
-    """Thin wrapper around security.pipeline.run_pipeline.
+    """Thin wrapper around security.plan_guard.guard_plan_request.
 
-    Late import so an import error in the security lane doesn't crash the
-    whole agent at startup -- we degrade to a clear 503 instead.
+    Late import so an import error in the security lane doesn't crash the whole
+    agent at startup. Stage-1 /plan routes are provisional by design; operator
+    approval only happens through /plan/approve.
     """
     try:
-        from security.pipeline import run_pipeline
+        from security.plan_guard import guard_plan_request
     except ImportError as e:
         log.error("security_pipeline_import_failed", error=str(e))
         raise RuntimeError(
-            "security.pipeline import failed -- agent cannot serve requests safely"
+            "security.plan_guard import failed -- agent cannot serve requests safely"
         ) from e
 
-    result = await run_pipeline(
+    result = await guard_plan_request(
         raw_text=raw_text,
         source=source,
         source_type="operator-intent",
         structured_query=structured_query,
-        agent="RoutingAgent",
-        operation="GenerateRoute",
-        context={
-            # operator_approved + policy_valid: stub-true for MVP. In real deploy
-            # operator_approved is set by an out-of-band approval workflow, and
-            # policy_valid comes from an explicit policy lookup. See:
-            #   https://github.com/jdev-02/tera/issues -- "operator-approval flow"
-            "operator_approved": True,
-            "policy_valid": True,
-            "signature_valid": False,  # we sign AFTER the pipeline runs
-        },
+        target_agent="RoutingAgent",
+        operation="ComputeRoute",
+        operator_approved=False,
+        signature_valid=False,
     )
     return result.to_dict()
+
+
+def _pipeline_passed(result: dict[str, Any]) -> bool:
+    if "passed" in result:
+        return bool(result["passed"])
+    if "pipeline_passed" in result:
+        return bool(result["pipeline_passed"])
+    return bool(result.get("allowed", False))
+
+
+def _route_hash(route: dict[str, Any], waypoints: list[Waypoint]) -> str:
+    canonical = _canonical_json(
+        {
+            "route": route,
+            "waypoints": [w.model_dump(exclude_none=True) for w in waypoints],
+        }
+    )
+    return _sha256_hex(canonical)
+
+
+def _sign_operator_commit(
+    *,
+    route_id: str,
+    route_hash: str,
+    device_signature: Signature,
+    operator_key_id: str,
+    approved_by: str | None,
+) -> OperatorSignature:
+    """Create the operator's stage-3 approval signature.
+
+    Fails closed: if the signer cannot load, the route is not operator-committed.
+    """
+    try:
+        from crypto.ml_dsa_signer import create_signer
+    except ImportError as e:
+        raise RuntimeError("operator signer import failed") from e
+
+    payload = {
+        "route_id": route_id,
+        "approves_route_hash": route_hash,
+        "device_signature": device_signature.model_dump(),
+        "approved_by": approved_by,
+    }
+    signed = create_signer(operator_key_id).sign(payload)
+    envelope = signed.to_signature_dict(canonicalization="route-approval-json-v1")
+    canonical_payload_str = _canonical_json(payload).decode("utf-8")
+    return OperatorSignature(
+        scheme=str(envelope["scheme"]),
+        key_id=str(envelope["key_id"]),
+        value_b64=str(envelope["value_b64"]),
+        signed_at=_timestamp_to_iso(envelope["signed_at"]),
+        approves_route_hash=route_hash,
+        payload_hash=str(envelope["payload_hash"]),
+        payload_json=canonical_payload_str,
+    )
+
+
+def approve_plan(req: PlanApprovalRequest) -> PlanApprovalResponse:
+    """Commit a provisional device-signed route after operator review."""
+    route_hash = _route_hash(req.route, req.waypoints)
+    operator_signature = _sign_operator_commit(
+        route_id=req.route_id,
+        route_hash=route_hash,
+        device_signature=req.device_signature,
+        operator_key_id=req.operator_key_id,
+        approved_by=req.approved_by,
+    )
+    return PlanApprovalResponse(
+        route_id=req.route_id,
+        route_hash=route_hash,
+        device_signature=req.device_signature,
+        operator_signature=operator_signature,
+    )
