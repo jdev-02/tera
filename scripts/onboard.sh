@@ -24,7 +24,7 @@ err()   { printf "  ${RED}[xx]${RESET}   %s\n" "$*" >&2; }
 ask()   { printf "${BOLD}%s${RESET} " "$*"; }
 
 # --- Sanity ------------------------------------------------------------------
-title "TERA onboarding"
+title "Wayfinder onboarding"
 say "${DIM}reads team.yml; finds your lane; prints next steps + Codex prompt.${RESET}"
 
 if [[ ! -f team.yml ]]; then

@@ -1,5 +1,5 @@
-# CODEOWNERS - enforces lane ownership at PR review time.
-# See PRD section 13 for the lane split.
+# CODEOWNERS — enforces lane ownership at PR review time.
+# See PRD §13 for the lane split.
 
 # Handles locked pre-kickoff (2026-05-02). Source of truth: team.yml
 #   @jdev-02                    = Jon     (P1 - Navy CWO, AI/ontology, UI/UX)
@@ -11,25 +11,25 @@
 # Default fallback: full team review
 *                                @jdev-02 @aleens-labs @khicks1724 @kylemhicks @benschwierking
 
-# Lane: Agent / Ontology / Voice / Eval / Figma (P1 - Jon, owns UI/UX)
+# Lane: Agent / Ontology / Voice / Eval / Figma (P1 — Jon, owns UI/UX)
 /agent/                          @jdev-02
 /ontology/                       @jdev-02
 /voice/                          @jdev-02
 /eval/                           @jdev-02
 /figma/                          @jdev-02
 
-# Lane: ATAK / Routing / Data (P4 - Ben)
+# Lane: ATAK / Routing / Data (P4 — Ben)
 /atak/                           @benschwierking
 /routing/                        @benschwierking
 /data/                           @benschwierking
 
-# Lane: Hardware / Deploy / Models / Mesh (P3 - Kyle, dual handles)
+# Lane: Hardware / Deploy / Models / Mesh (P3 — Kyle, dual handles)
 /hardware/                       @khicks1724 @kylemhicks
 /deploy/                         @khicks1724 @kylemhicks
 /models/                         @khicks1724 @kylemhicks
 /mesh/                           @khicks1724 @kylemhicks
 
-# Lane: Security / Crypto / Infra / CI (P2 - Satriyo)
+# Lane: Security / Crypto / Infra / CI (P2 — Satriyo)
 /security/                       @aleens-labs
 /crypto/                         @aleens-labs
 /infra/                          @aleens-labs
@@ -38,7 +38,6 @@
 Makefile                         @aleens-labs
 lefthook.yml                     @aleens-labs
 pyproject.toml                   @aleens-labs
-requirements-ci.txt              @aleens-labs
 
 # Cross-cutting contracts: paired sign-off required
 /docs/contracts/agent_routing.schema.json   @jdev-02 @benschwierking

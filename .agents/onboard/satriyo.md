@@ -155,7 +155,7 @@ Kyle (P3) has a public RF simulator project:
 
 - **URL:** https://github.com/khicks1724/RFSim
 - This is **reference material only**. The hackathon rule is: "openly accessible materials are allowed; all projects must be started from scratch with no previous work."
-- For your work on issue #22 (parsing-verification): if RFSim has any anomaly-detection patterns for RF transmissions, those can inform how your parsing-verification layer flags anomalous tags or signal patterns. Read it for ideas. Do NOT copy code into TERA.
+- For your work on issue #22 (parsing-verification): if RFSim has any anomaly-detection patterns for RF transmissions, those can inform how your parsing-verification layer flags anomalous tags or signal patterns. Read it for ideas. Do NOT copy code into TruePoint.
 - Suggested first action: when you start #22, ask Kyle which 1-2 patterns are most relevant. Record in `security/REFERENCES.md` with attribution.
 
 ## DEFINITION OF DONE (every change must satisfy this)
