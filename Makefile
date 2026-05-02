@@ -66,7 +66,10 @@ security: install ## Bandit + pip-audit + optional gitleaks
 	$(BANDIT) -r agent routing atak voice security crypto -ll -q
 	$(PIPAUDIT) -r requirements-ci.txt --desc --fix --dry-run
 	@if which gitleaks > /dev/null 2>&1; then \
-		gitleaks detect --no-banner --redact --no-git; \
+		tmpdir="$$(mktemp -d)"; \
+		git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmpdir"; \
+		gitleaks detect --no-banner --redact --no-git --source "$$tmpdir"; \
+		rm -rf "$$tmpdir"; \
 	else \
 		echo "[security] gitleaks not installed locally; GitHub Action still runs gitleaks"; \
 	fi
