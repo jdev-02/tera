@@ -1,4 +1,4 @@
-.PHONY: help onboard install install-crypto install-voice fmt lint test security ci run demo eval clean
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run demo eval clean
 .DEFAULT_GOAL := help
 
 PY := python3.11
@@ -16,6 +16,9 @@ help: ## Show this help
 
 onboard: ## "I am Ben, get me ready to party." (interactive). Pass NAME=ben to skip prompt.
 	@bash scripts/onboard.sh $(NAME)
+
+catchup: ## Resume work after a sync break: pull main, refresh deps, summarize what changed
+	@bash scripts/catchup.sh
 
 $(VENV)/bin/activate: pyproject.toml requirements-ci.txt ## Create venv if missing
 	$(PY) -m venv $(VENV)
