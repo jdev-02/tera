@@ -40,10 +40,12 @@ def compute_route_trust(route_artifact: dict) -> dict:
         reasons.append("Route used low-trust input sources")
 
     # SuperAgent Guard bonus/penalty — only applied when key is present
-    if "superagent_guard_passed" in route_artifact:
-        if not route_artifact["superagent_guard_passed"]:
-            score -= 40
-            reasons.append("SuperAgent Guard detected prompt injection in input")
+    if (
+        "superagent_guard_passed" in route_artifact
+        and not route_artifact["superagent_guard_passed"]
+    ):
+        score -= 40
+        reasons.append("SuperAgent Guard detected prompt injection in input")
 
     score = max(0, score)
 

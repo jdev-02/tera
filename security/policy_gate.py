@@ -96,9 +96,7 @@ if __name__ == "__main__":
         )
     )
 
-    print(
-        "\n--- RoutingAgent computes route without schema validation (should be DENIED) ---"
-    )
+    print("\n--- RoutingAgent computes route without schema validation (should be DENIED) ---")
     print(
         json.dumps(
             allow(

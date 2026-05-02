@@ -8,20 +8,19 @@ Includes:
   - 4 SuperAgent Guard / Redact tests (local heuristic fallback, no API key needed)
 """
 
-import sys
-import os
-import json
 import asyncio
+import json
+import os
+import sys
 
 # Allow running from repo root or from cyber/ directory
 sys.path.insert(0, os.path.dirname(__file__))
 
-from data_provenance import tag_input, is_safe_to_forward
+from data_provenance import is_safe_to_forward, tag_input
 from policy_gate import allow
-from route_trust_score import compute_route_trust, atak_label
+from route_trust_score import atak_label, compute_route_trust
 from structured_query_validator import validate_route_query
 from superagent_integration import guard_input, redact_input
-
 
 # -------------------------------------------------------------------------------
 # SuperAgent tests (async, local fallback — no API key required)

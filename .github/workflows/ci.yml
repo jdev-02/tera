@@ -6,25 +6,56 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
+
+      - name: Install liboqs (system)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev
+          git clone --depth=1 --branch 0.10.0 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/liboqs/build --parallel
+          sudo cmake --install /tmp/liboqs/build
+          sudo ldconfig
+
+      - name: Install gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install -r requirements-ci.txt
-          pip install ruff mypy bandit pip-audit
-          # liboqs-python requires compiled binaries — skip in CI, fallback to Ed25519
-          pip install cryptography || true
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-ci.txt
+          .venv/bin/pip install -e ".[dev]"
 
-      - name: Run make ci
+      - name: Make CI
         run: make ci
+
+  ai-review:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: AI PR review (placeholder)
+        run: |
+          echo "AI PR review hook - wire to Codex CLI or GitHub-native review action."
+          echo "For hackathon, P2 manually runs codex review on each PR until automation is wired."
