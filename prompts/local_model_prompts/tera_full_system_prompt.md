@@ -1,7 +1,7 @@
-# RF Sim — Full System Prompt (Cloud Models + GenAI.mil Fallback)
+# TERA — Full System Prompt (Cloud Models + GenAI.mil Fallback)
 
 This is the complete system prompt used for Anthropic (Claude) and GenAI.mil (Gemini) providers.
-Local models receive a condensed version of this — see `rf_sim_local_model_system_prompt.md`.
+Local models receive a condensed version of this — see `tera_local_model_system_prompt.md`.
 
 ---
 

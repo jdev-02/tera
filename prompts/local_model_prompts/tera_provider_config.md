@@ -1,4 +1,4 @@
-# RF Sim — AI Provider Configuration & Local Model Setup
+# TERA — AI Provider Configuration & Local Model Setup
 
 ---
 

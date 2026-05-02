@@ -1,3 +1,85 @@
+const MISSION_DEFAULT_SOURCE_IDS = {
+  "terrain-routing": [
+    "esri_world_imagery",
+    "cesium_world_terrain",
+    "osm_basemap",
+    "osm_extract",
+    "usgs_3dep",
+    "nlcd",
+    "pad_us",
+  ],
+  "water-access": [
+    "esri_world_imagery",
+    "osm_basemap",
+    "osm_extract",
+    "usgs_3dep",
+    "usgs_3dhp",
+    "nhdplus_hr",
+    "nwis",
+    "sentinel_2",
+  ],
+  "sar-planning": [
+    "esri_world_imagery",
+    "cesium_world_terrain",
+    "osm_basemap",
+    "osm_extract",
+    "usgs_3dep",
+    "nlcd",
+    "usgs_3dhp",
+    "naip",
+    "noaa_alerts",
+    "pad_us",
+    "blm_usfs_nps",
+  ],
+  evacuation: [
+    "esri_world_imagery",
+    "osm_basemap",
+    "osm_extract",
+    "usgs_3dep",
+    "nlcd",
+    "noaa_alerts",
+    "fema_flood",
+    "pad_us",
+    "blm_usfs_nps",
+  ],
+  "signal-planning": [
+    "esri_world_imagery",
+    "cesium_world_terrain",
+    "osm_basemap",
+    "osm_extract",
+    "usgs_3dep",
+    "fcc_towers",
+    "osm_towers",
+    "viewshed_surfaces",
+  ],
+  "hazard-routing": [
+    "esri_world_imagery",
+    "osm_basemap",
+    "osm_extract",
+    "usgs_3dep",
+    "noaa_alerts",
+    "nasa_firms",
+    "fema_flood",
+    "sentinel_1_sar",
+  ],
+  "access-control": [
+    "esri_world_imagery",
+    "osm_basemap",
+    "osm_extract",
+    "pad_us",
+    "blm_usfs_nps",
+    "parcels_boundaries",
+  ],
+  "imagery-preview": [
+    "esri_world_imagery",
+    "cesium_world_terrain",
+    "osm_basemap",
+    "sentinel_2",
+    "landsat_collection_2",
+    "naip",
+  ],
+};
+
 const state = {
   config: null,
   viewer: null,
@@ -6,13 +88,17 @@ const state = {
   selectedPoint: null,
   markerEntity: null,
   cameraText: "",
-  chatCount: 1,
-  imageryMode: "ion-satellite",
+  chatCount: 0,
+  imageryMode: "esri",
   terrainMode: "cesium-world",
-  panelWidth: 420,
+  panelWidth: 520,
   panelCollapsed: false,
   dragState: null,
   handlersBound: false,
+  dataSources: [],
+  primarySourceIds: [],
+  selectedSourceIds: new Set(),
+  packagePlan: null,
 };
 
 const els = {
@@ -29,6 +115,7 @@ const els = {
   workspaceShell: document.querySelector(".workspace-shell"),
   agentPanel: document.getElementById("agentPanel"),
   mapStage: document.querySelector(".map-stage"),
+  previewStatus: document.getElementById("previewStatus"),
   promptForm: document.getElementById("promptForm"),
   promptInput: document.getElementById("promptInput"),
   modelSelect: document.getElementById("modelSelect"),
@@ -46,15 +133,26 @@ const els = {
   chatLog: document.getElementById("chatLog"),
   chatMeta: document.getElementById("chatMeta"),
   mapHint: document.getElementById("mapHint"),
+  sourceCount: document.getElementById("sourceCount"),
+  sourceList: document.getElementById("sourceList"),
+  missionFocusSelect: document.getElementById("missionFocusSelect"),
+  packageNameInput: document.getElementById("packageNameInput"),
+  selectRecommendedBtn: document.getElementById("selectRecommendedBtn"),
+  streamSelectedBtn: document.getElementById("streamSelectedBtn"),
+  buildPackageBtn: document.getElementById("buildPackageBtn"),
+  packageStatus: document.getElementById("packageStatus"),
+  packageManifest: document.getElementById("packageManifest"),
+  downloadManifestLink: document.getElementById("downloadManifestLink"),
 };
 
+window.__TERA_SOURCE_STATE = state;
 window.__LLM_DEV_STATE = state;
 
 const IMAGERY_FALLBACKS = {
   esri: {
     url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     credit: "Esri World Imagery",
-    label: "Esri World Imagery fallback",
+    label: "Esri World Imagery",
   },
   osm: {
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -358,6 +456,121 @@ function setSettingsMenuOpen(open) {
   els.settingsToggleBtn.setAttribute("aria-expanded", String(open));
 }
 
+function getSelectedSources() {
+  return state.dataSources.filter((source) => state.selectedSourceIds.has(source.id));
+}
+
+function formatSourceStatus(source) {
+  const stream = source.stream_status.replace(/-/g, " ");
+  const download = source.download_status.replace(/-/g, " ");
+  return `${stream} / ${download}`;
+}
+
+function updateSourceCount() {
+  const selectedCount = state.selectedSourceIds.size;
+  const total = state.dataSources.length;
+  els.sourceCount.textContent = `${selectedCount} selected of ${total} sources`;
+  els.buildPackageBtn.disabled = selectedCount === 0;
+  els.streamSelectedBtn.disabled = selectedCount === 0;
+}
+
+function renderSourceList() {
+  els.sourceList.replaceChildren();
+
+  if (!state.dataSources.length) {
+    const empty = document.createElement("div");
+    empty.className = "source-empty";
+    empty.textContent = "No source catalog loaded.";
+    els.sourceList.appendChild(empty);
+    updateSourceCount();
+    return;
+  }
+
+  for (const source of state.dataSources) {
+    const article = document.createElement("article");
+    article.className = "source-item";
+    article.dataset.selected = String(state.selectedSourceIds.has(source.id));
+
+    const header = document.createElement("label");
+    header.className = "source-item-header";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.selectedSourceIds.has(source.id);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        state.selectedSourceIds.add(source.id);
+      } else {
+        state.selectedSourceIds.delete(source.id);
+      }
+      state.packagePlan = null;
+      article.dataset.selected = String(checkbox.checked);
+      hidePackageOutput();
+      updateSourceCount();
+    });
+
+    const title = document.createElement("span");
+    title.className = "source-title";
+    title.textContent = source.name;
+
+    const category = document.createElement("span");
+    category.className = "source-category";
+    category.textContent = source.category;
+
+    header.append(checkbox, title, category);
+
+    const purpose = document.createElement("p");
+    purpose.className = "source-purpose";
+    purpose.textContent = source.purpose;
+
+    const meta = document.createElement("div");
+    meta.className = "source-meta";
+
+    const provider = document.createElement("span");
+    provider.textContent = source.provider;
+
+    const status = document.createElement("span");
+    status.textContent = formatSourceStatus(source);
+
+    meta.append(provider, status);
+    article.append(header, purpose, meta);
+    els.sourceList.appendChild(article);
+  }
+
+  updateSourceCount();
+}
+
+function selectRecommendedSources() {
+  const missionFocus = els.missionFocusSelect.value;
+  const defaults = MISSION_DEFAULT_SOURCE_IDS[missionFocus] || state.primarySourceIds;
+  state.selectedSourceIds = new Set(defaults);
+  state.packagePlan = null;
+  hidePackageOutput();
+  renderSourceList();
+  els.packageStatus.textContent = `Recommended sources selected for ${missionFocus}.`;
+}
+
+function hidePackageOutput() {
+  els.packageManifest.classList.add("hidden");
+  els.packageManifest.textContent = "";
+  els.downloadManifestLink.classList.add("hidden");
+  els.downloadManifestLink.removeAttribute("href");
+}
+
+async function loadDataSources() {
+  try {
+    const data = await fetchJson("/api/data-sources");
+    state.dataSources = Array.isArray(data.sources) ? data.sources : [];
+    state.primarySourceIds = Array.isArray(data.primary_streams) ? data.primary_streams : [];
+    selectRecommendedSources();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    state.dataSources = [];
+    els.packageStatus.textContent = `Source catalog failed: ${message}`;
+    renderSourceList();
+  }
+}
+
 function buildMapContext() {
   const context = {
     imagery_source: els.imageryStatus.textContent || null,
@@ -400,18 +613,33 @@ function buildMapContext() {
   return context;
 }
 
+function buildSourceContext() {
+  const selectedSources = getSelectedSources();
+  const sourceNames = selectedSources.map((source) => source.name);
+  const packageSummary = state.packagePlan
+    ? `${state.packagePlan.package_name}: ${sourceNames.length} sources, manifest ${state.packagePlan.package_id}`
+    : `${sourceNames.length} selected sources for ${els.missionFocusSelect.value}`;
+
+  return {
+    mission_focus: els.missionFocusSelect.value,
+    selected_source_ids: selectedSources.map((source) => source.id),
+    selected_source_names: sourceNames,
+    package_summary: packageSummary,
+  };
+}
+
 function clearChat() {
   els.chatLog.innerHTML = "";
   state.chatCount = 0;
   appendMessage(
     "assistant",
-    "Map workspace ready. Choose a model, click a point if you want location context, and send a prompt to your local Ollama host.",
+    "Source planner ready. Select mission focus and data sources, then ask what the server database needs for the mission.",
   );
 }
 
 function applyPanelState() {
   document.body.classList.toggle("panel-collapsed", state.panelCollapsed);
-  els.panelToggleBtn.textContent = state.panelCollapsed ? "Expand Panel" : "Collapse Panel";
+  els.panelToggleBtn.textContent = state.panelCollapsed ? "Expand Planner" : "Collapse Planner";
   els.panelToggleBtn.setAttribute("aria-expanded", String(!state.panelCollapsed));
   if (!state.panelCollapsed) {
     els.workspaceShell.style.setProperty("--panel-width", `${state.panelWidth}px`);
@@ -425,8 +653,8 @@ function applyPanelState() {
 }
 
 function clampPanelWidth(width) {
-  const maxWidth = Math.max(320, Math.min(window.innerWidth * 0.46, 620));
-  return Math.min(Math.max(width, 320), maxWidth);
+  const maxWidth = Math.max(380, Math.min(window.innerWidth * 0.5, 720));
+  return Math.min(Math.max(width, 380), maxWidth);
 }
 
 function formatPoint(lat, lon, height = null) {
@@ -466,7 +694,7 @@ async function loadRuntimeConfig() {
   const hasToken = Boolean(state.config.cesium_ion_token);
   setChip(els.tokenChip, hasToken ? "Cesium token detected" : "Cesium token missing", hasToken ? "good" : "warn");
   setChip(els.ollamaChip, `Default model: ${state.config.default_model}`, "good");
-  state.imageryMode = hasToken ? "ion-satellite" : "osm";
+  state.imageryMode = "esri";
   state.terrainMode = hasToken ? "cesium-world" : "ellipsoid";
   els.imagerySelect.value = state.imageryMode;
   els.terrainSelect.value = state.terrainMode;
@@ -528,7 +756,41 @@ function makeSelectedPointContext() {
   if (!els.includeMapPoint.checked || !state.selectedPoint) {
     return "";
   }
-  return `\n\nMap context:\nSelected point latitude ${state.selectedPoint.lat.toFixed(6)}, longitude ${state.selectedPoint.lon.toFixed(6)}, terrain height ${state.selectedPoint.heightM.toFixed(1)} meters.`;
+  return `\n\nAO context:\nSelected point latitude ${state.selectedPoint.lat.toFixed(6)}, longitude ${state.selectedPoint.lon.toFixed(6)}, terrain height ${state.selectedPoint.heightM.toFixed(1)} meters.`;
+}
+
+async function buildSourcePackage() {
+  const selectedSources = getSelectedSources();
+  const body = {
+    source_ids: selectedSources.map((source) => source.id),
+    mission_focus: els.missionFocusSelect.value,
+    package_name: els.packageNameInput.value.trim() || null,
+    map_context: buildMapContext(),
+  };
+
+  els.buildPackageBtn.disabled = true;
+  els.packageStatus.textContent = "Building manifest...";
+  hidePackageOutput();
+
+  try {
+    const data = await fetchJson("/api/source-package/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    state.packagePlan = data;
+    const warningText = data.warnings?.length ? ` Warnings: ${data.warnings.join(" ")}` : "";
+    els.packageStatus.textContent = `Manifest ${data.package_id} ready with ${data.sources.length} sources.${warningText}`;
+    els.packageManifest.textContent = JSON.stringify(data.manifest, null, 2);
+    els.packageManifest.classList.remove("hidden");
+    els.downloadManifestLink.href = data.download_url;
+    els.downloadManifestLink.download = `${data.package_name}.json`;
+    els.downloadManifestLink.classList.remove("hidden");
+  } catch (error) {
+    els.packageStatus.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    updateSourceCount();
+  }
 }
 
 async function submitPrompt(event) {
@@ -546,7 +808,8 @@ async function submitPrompt(event) {
   const model = els.modelSelect.value.trim();
   const agentProfile = els.agentProfileSelect.value;
   const finalPrompt = `${prompt}${makeSelectedPointContext()}`;
-  const mapContext = buildMapContext();
+  const mapContext = els.includeMapPoint.checked ? buildMapContext() : null;
+  const sourceContext = buildSourceContext();
 
   appendMessage(
     "user",
@@ -554,7 +817,8 @@ async function submitPrompt(event) {
     [
       model ? `model: ${model}` : "default model",
       `profile: ${agentProfile}`,
-      mapContext.view_bounds ? "view: active" : "view: unavailable",
+      `focus: ${sourceContext.mission_focus}`,
+      `${sourceContext.selected_source_ids.length} sources`,
     ].join(" | "),
   );
 
@@ -577,6 +841,7 @@ async function submitPrompt(event) {
         model: model || null,
         agent_profile: agentProfile,
         map_context: mapContext,
+        source_context: sourceContext,
       }),
     });
 
@@ -667,6 +932,13 @@ function makeUrlTemplateImageryProvider(source) {
 }
 
 async function resolveImageryProvider() {
+  if (state.imageryMode === "esri") {
+    return {
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
+      label: IMAGERY_FALLBACKS.esri.label,
+    };
+  }
+
   if (state.imageryMode === "osm") {
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.osm),
@@ -675,11 +947,11 @@ async function resolveImageryProvider() {
   }
 
   if (!state.config.cesium_ion_token) {
-    state.imageryMode = "osm";
-    els.imagerySelect.value = "osm";
+    state.imageryMode = "esri";
+    els.imagerySelect.value = "esri";
     return {
-      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.osm),
-      label: IMAGERY_FALLBACKS.osm.label,
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
+      label: IMAGERY_FALLBACKS.esri.label,
     };
   }
 
@@ -691,7 +963,9 @@ async function resolveImageryProvider() {
       label: "Cesium World Imagery",
     };
   } catch (error) {
-    console.warn("Cesium imagery failed; using URL-template fallback.", error);
+    console.warn("Cesium imagery failed; using Esri fallback.", error);
+    state.imageryMode = "esri";
+    els.imagerySelect.value = "esri";
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
       label: IMAGERY_FALLBACKS.esri.label,
@@ -737,8 +1011,8 @@ function setMarker(point) {
     position: Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.heightM + 12),
     point: {
       pixelSize: 12,
-      color: Cesium.Color.fromCssColorString("#edb979"),
-      outlineColor: Cesium.Color.fromCssColorString("#0b1216"),
+      color: Cesium.Color.fromCssColorString("#d6b06d"),
+      outlineColor: Cesium.Color.fromCssColorString("#111820"),
       outlineWidth: 2,
     },
   });
@@ -765,7 +1039,7 @@ function wireMapInteraction() {
     };
     setMarker(state.selectedPoint);
     updateSelectedPoint();
-    els.mapHint.textContent = "Selected point pinned. New prompts can include this location context.";
+    els.mapHint.textContent = "AO point pinned. Manifest and advisor prompts can include this context.";
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
   state.viewer.camera.changed.addEventListener(updateCameraText);
@@ -824,6 +1098,7 @@ async function buildViewer() {
 
   els.imageryStatus.textContent = imagery.label;
   els.terrainStatus.textContent = terrain.label;
+  els.previewStatus.textContent = `${imagery.label} with ${terrain.label.replace("Terrain: ", "")}`;
   installResizeHandling();
   state.viewer.resize();
   state.viewer.scene.requestRender();
@@ -915,6 +1190,27 @@ function onPromptInputKeyDown(event) {
   els.submitBtn.click();
 }
 
+async function streamSelectedSources() {
+  if (state.selectedSourceIds.has("esri_world_imagery")) {
+    state.imageryMode = "esri";
+  } else if (state.selectedSourceIds.has("cesium_world_imagery") && state.config?.cesium_ion_token) {
+    state.imageryMode = "ion-satellite";
+  } else if (state.selectedSourceIds.has("osm_basemap")) {
+    state.imageryMode = "osm";
+  }
+
+  state.terrainMode = state.selectedSourceIds.has("cesium_world_terrain")
+    && state.config?.cesium_ion_token
+    ? "cesium-world"
+    : "ellipsoid";
+
+  els.imagerySelect.value = state.imageryMode;
+  els.terrainSelect.value = state.terrainMode;
+  els.packageStatus.textContent = "Updating map stream preview...";
+  await buildViewer();
+  els.packageStatus.textContent = `Preview streaming ${els.imageryStatus.textContent}.`;
+}
+
 async function init() {
   clearChat();
   applyPanelState();
@@ -927,6 +1223,10 @@ async function init() {
     els.panelToggleBtn.addEventListener("click", togglePanel);
     els.settingsToggleBtn.addEventListener("click", toggleSettingsMenu);
     els.panelResizer.addEventListener("pointerdown", onResizerPointerDown);
+    els.selectRecommendedBtn.addEventListener("click", selectRecommendedSources);
+    els.streamSelectedBtn.addEventListener("click", streamSelectedSources);
+    els.buildPackageBtn.addEventListener("click", buildSourcePackage);
+    els.missionFocusSelect.addEventListener("change", selectRecommendedSources);
     els.imagerySelect.addEventListener("change", async (event) => {
       state.imageryMode = event.target.value;
       await buildViewer();
@@ -951,6 +1251,7 @@ async function init() {
 
   await loadRuntimeConfig();
   await loadModels();
+  await loadDataSources();
   await buildViewer();
 }
 

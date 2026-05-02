@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from textwrap import dedent
+from uuid import uuid4
 
 import httpx
 import structlog
@@ -16,6 +18,10 @@ from pydantic import BaseModel, Field
 log = structlog.get_logger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
+PROMPT_DIR = BASE_DIR.parent / "prompts" / "local_model_prompts"
+IMAGERY_SOURCING_PROMPT_FILE = (
+    PROMPT_DIR / "imagery_sourcing_local_model_system_prompt.md"
+)
 INDEX_FILE = BASE_DIR / "static" / "index.html"
 STATIC_DIR = BASE_DIR / "static"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
@@ -26,16 +32,24 @@ DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
 
-app = FastAPI(title="LLM Dev KMH MVP", version="0.1.0")
+app = FastAPI(title="TERA Source Planner", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+class SourceContext(BaseModel):
+    mission_focus: str | None = Field(default=None, max_length=120)
+    selected_source_ids: list[str] = Field(default_factory=list)
+    selected_source_names: list[str] = Field(default_factory=list)
+    package_summary: str | None = Field(default=None, max_length=2000)
 
 
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     system: str | None = Field(default=None, max_length=4000)
     model: str | None = Field(default=None, max_length=200)
-    agent_profile: str | None = Field(default="terrain-route", max_length=80)
+    agent_profile: str | None = Field(default="imagery-sourcing", max_length=80)
     map_context: "MapContext | None" = None
+    source_context: SourceContext | None = None
 
 
 class PromptResponse(BaseModel):
@@ -79,7 +93,565 @@ class MapContext(BaseModel):
     terrain_source: str | None = Field(default=None, max_length=200)
 
 
+class SourceOption(BaseModel):
+    id: str
+    name: str
+    provider: str
+    category: str
+    purpose: str
+    useful_for: list[str]
+    analysis_role: str
+    stream_status: str
+    download_status: str
+    stream_layer: str | None = None
+    required_for: list[str] = Field(default_factory=list)
+    recommended_for: list[str] = Field(default_factory=list)
+    derived_layers: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class SourceCatalogResponse(BaseModel):
+    primary_streams: list[str]
+    sources: list[SourceOption]
+
+
+class DownloadPlanRequest(BaseModel):
+    source_ids: list[str] = Field(default_factory=list)
+    mission_focus: str = Field(default="terrain-routing", max_length=120)
+    map_context: MapContext | None = None
+    package_name: str | None = Field(default=None, max_length=120)
+
+
+class DownloadPlanResponse(BaseModel):
+    package_id: str
+    package_name: str
+    mission_focus: str
+    sources: list[SourceOption]
+    manifest: dict[str, object]
+    warnings: list[str]
+    download_url: str
+
+
+def _extract_prompt_code_block(markdown: str) -> str:
+    match = re.search(r"```(?:\w+)?\n(?P<body>[\s\S]*?)\n```", markdown)
+    if match:
+        return match.group("body").strip()
+    return markdown.strip()
+
+
+def _load_imagery_sourcing_prompt() -> str:
+    fallback = dedent(
+        """
+        You are TERA's local imagery and geospatial data sourcing assistant.
+        Advise an intelligence planner which streamable and downloadable
+        geospatial sources are required, optional, or unnecessary for an offline
+        mission data package. Separate visual basemaps from analysis-grade
+        server-side datasets, and explain the purpose of each source.
+        """
+    ).strip()
+
+    try:
+        return _extract_prompt_code_block(
+            IMAGERY_SOURCING_PROMPT_FILE.read_text(encoding="utf-8")
+        )
+    except OSError:
+        return fallback
+
+
+SOURCE_CATALOG: list[SourceOption] = [
+    SourceOption(
+        id="esri_world_imagery",
+        name="Esri World Imagery",
+        provider="Esri ArcGIS Online",
+        category="imagery",
+        purpose="High-resolution visual basemap for AO inspection and imagery context.",
+        useful_for=[
+            "visual AO verification",
+            "roads and tracks visible in imagery",
+            "buildings and clearings",
+            "vegetation and water body sanity checks",
+        ],
+        analysis_role=(
+            "Display stream only in this app; cache tiles for offline visualization and "
+            "pair with analytical imagery or vector extracts for database queries."
+        ),
+        stream_status="streamable",
+        download_status="manifest-only",
+        stream_layer="esri",
+        required_for=["imagery-preview"],
+        recommended_for=["terrain-routing", "water-access", "sar-planning", "evacuation"],
+        derived_layers=["visual_aoi_reference"],
+        notes="Do not use the visual tile stream as the sole analytical source.",
+    ),
+    SourceOption(
+        id="cesium_world_imagery",
+        name="Cesium World Imagery",
+        provider="Cesium ion",
+        category="imagery",
+        purpose="Token-backed global imagery stream for Cesium preview.",
+        useful_for=["3D mission preview", "route visualization backdrop", "AO briefing"],
+        analysis_role="Display layer; pre-cache selected tiles for disconnected demos.",
+        stream_status="streamable-with-token",
+        download_status="cache-via-cesium-pipeline",
+        stream_layer="ion-satellite",
+        recommended_for=["imagery-preview", "terrain-routing"],
+        derived_layers=["cached_imagery_tiles"],
+        notes="Phase 3 runtime must read cached tiles rather than calling Cesium online.",
+    ),
+    SourceOption(
+        id="cesium_world_terrain",
+        name="Cesium World Terrain",
+        provider="Cesium ion",
+        category="terrain-display",
+        purpose="3D terrain visualization for operator and planner preview.",
+        useful_for=["3D landform awareness", "ridge/valley interpretation", "visual route review"],
+        analysis_role="Display terrain; use DEM sources for deterministic slope and viewshed.",
+        stream_status="streamable-with-token",
+        download_status="cache-via-cesium-pipeline",
+        stream_layer="cesium-world",
+        recommended_for=["terrain-routing", "signal-planning", "imagery-preview"],
+        derived_layers=["cached_terrain_tiles"],
+        notes="Good for visualization, not a substitute for indexed DEM rasters.",
+    ),
+    SourceOption(
+        id="osm_basemap",
+        name="OpenStreetMap Basemap",
+        provider="OpenStreetMap contributors",
+        category="basemap",
+        purpose="Visual street/trail/place-name map stream for planner orientation.",
+        useful_for=["orientation", "road and trail names", "POI discovery", "map sanity checks"],
+        analysis_role="Display layer; use OSM PBF extract for local server queries.",
+        stream_status="streamable",
+        download_status="manifest-only",
+        stream_layer="osm",
+        recommended_for=["terrain-routing", "evacuation", "water-access", "sar-planning"],
+        derived_layers=["visual_osm_reference"],
+        notes="Tile usage should respect OSM tile policies; package OSM PBF for analysis.",
+    ),
+    SourceOption(
+        id="osm_extract",
+        name="OpenStreetMap PBF Extract",
+        provider="OpenStreetMap / Geofabrik / regional extract",
+        category="vector",
+        purpose="Local vector extract for roads, trails, paths, waterways, buildings, POIs, and barriers.",
+        useful_for=[
+            "routable graph",
+            "nearest road or trail",
+            "waterway and POI lookup",
+            "barrier and bridge/crossing context",
+        ],
+        analysis_role="Primary local vector dataset for database-backed graph and feature queries.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        required_for=["terrain-routing", "water-access", "evacuation", "sar-planning"],
+        recommended_for=["access-control", "signal-planning"],
+        derived_layers=["routable_graph", "poi_index", "waterway_index", "barrier_index"],
+        notes="Clip tightly to AO and preserve source/version metadata.",
+    ),
+    SourceOption(
+        id="usgs_3dep",
+        name="USGS 3DEP DEM",
+        provider="USGS",
+        category="terrain",
+        purpose="Best U.S. default elevation dataset for slope, hydrology, viewshed, and cost surfaces.",
+        useful_for=["slope", "aspect", "roughness", "viewshed", "hydrology", "least-cost routing"],
+        analysis_role="Primary analysis DEM for U.S. AO packages.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        required_for=["terrain-routing", "signal-planning", "water-access"],
+        recommended_for=["sar-planning", "evacuation"],
+        derived_layers=[
+            "slope_degrees",
+            "aspect",
+            "roughness",
+            "contours",
+            "flow_accumulation",
+            "viewshed_surfaces",
+        ],
+        notes="Use 1 m lidar where available; 10 m DEM is a practical broad-coverage default.",
+    ),
+    SourceOption(
+        id="copernicus_dem",
+        name="Copernicus DEM",
+        provider="Copernicus",
+        category="terrain",
+        purpose="Strong global DEM when U.S. 3DEP is unavailable.",
+        useful_for=["global slope", "viewshed", "terrain cost", "AO outside U.S."],
+        analysis_role="Primary or fallback analysis DEM for non-U.S. mission areas.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        required_for=["terrain-routing", "signal-planning"],
+        recommended_for=["water-access", "sar-planning"],
+        derived_layers=["slope_degrees", "roughness", "flow_accumulation", "viewshed_surfaces"],
+        notes="Confirm coverage, license, and void handling for the AO before packaging.",
+    ),
+    SourceOption(
+        id="srtm",
+        name="SRTM DEM",
+        provider="NASA / USGS",
+        category="terrain",
+        purpose="Global fallback elevation source where higher-quality DEMs are not available.",
+        useful_for=["fallback slope", "broad terrain context", "rough least-cost surfaces"],
+        analysis_role="Fallback DEM for lower-resolution global packages.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["terrain-routing", "signal-planning"],
+        derived_layers=["fallback_slope", "fallback_hillshade"],
+        notes="Use only when better DEMs are unavailable or package size is highly constrained.",
+    ),
+    SourceOption(
+        id="nlcd",
+        name="USGS Annual NLCD",
+        provider="USGS",
+        category="land-cover",
+        purpose="U.S. land-cover baseline for surface friction and vegetation context.",
+        useful_for=["off-road friction", "forest/brush/wetland screening", "cover and concealment"],
+        analysis_role="Land-cover raster for friction and suitability layers in U.S. AOs.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        required_for=["terrain-routing", "sar-planning"],
+        recommended_for=["water-access", "evacuation"],
+        derived_layers=["surface_friction", "wetland_mask", "canopy_proxy", "cover_score"],
+        notes="Pair with DEM and OSM; land cover alone is not enough for routing.",
+    ),
+    SourceOption(
+        id="esa_worldcover",
+        name="ESA WorldCover",
+        provider="ESA",
+        category="land-cover",
+        purpose="Global 10 m land-cover baseline for non-U.S. AO surface friction.",
+        useful_for=["global surface friction", "wetland/open-ground screening", "vegetation context"],
+        analysis_role="Global land-cover raster for friction and cover layers.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["terrain-routing", "sar-planning", "water-access"],
+        derived_layers=["surface_friction", "wetland_mask", "open_ground_mask", "cover_score"],
+        notes="Use when NLCD is unavailable or the AO is outside the U.S.",
+    ),
+    SourceOption(
+        id="dynamic_world",
+        name="Dynamic World",
+        provider="Google / WRI",
+        category="land-cover",
+        purpose="More current global land-cover probabilities for recent surface changes.",
+        useful_for=["recent land-cover confidence", "burn/clearing/change context", "uncertainty scoring"],
+        analysis_role="Optional recency/confidence layer that complements baseline land cover.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["sar-planning", "imagery-preview"],
+        derived_layers=["landcover_confidence", "change_context"],
+        notes="Useful when stale land-cover products could mislead the route planner.",
+    ),
+    SourceOption(
+        id="usgs_3dhp",
+        name="USGS 3D Hydrography Program / NHD",
+        provider="USGS",
+        category="hydrography",
+        purpose="U.S. authoritative hydrography for streams, rivers, water bodies, and drainage.",
+        useful_for=["water-source lookup", "crossings", "drainage", "floodplain context"],
+        analysis_role="Primary U.S. hydrography layer for water and crossing queries.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        required_for=["water-access"],
+        recommended_for=["terrain-routing", "sar-planning", "evacuation"],
+        derived_layers=["water_source_index", "crossing_candidates", "drainage_lines"],
+        notes="Use with NWIS for observed flow and with DEM-derived flow accumulation.",
+    ),
+    SourceOption(
+        id="nhdplus_hr",
+        name="NHDPlus High Resolution",
+        provider="USGS",
+        category="hydrography",
+        purpose="Hydro network attributes and catchments for U.S. water analysis.",
+        useful_for=["networked water flow", "catchments", "downstream/upstream logic"],
+        analysis_role="Hydro network supplement for route constraints and water confidence.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["water-access", "flood-risk"],
+        derived_layers=["catchment_index", "hydro_network_graph"],
+        notes="Helpful when the mission depends on connected drainage rather than visual water alone.",
+    ),
+    SourceOption(
+        id="nwis",
+        name="USGS NWIS",
+        provider="USGS",
+        category="water-observation",
+        purpose="Observed gauge and water-condition data for U.S. streams and water bodies.",
+        useful_for=["flow condition", "gauge status", "water availability confidence"],
+        analysis_role="Optional live or cached observation feed for water confidence.",
+        stream_status="not-streamed",
+        download_status="cache-feed",
+        recommended_for=["water-access", "flood-risk"],
+        derived_layers=["water_observation_points", "flow_status"],
+        notes="Time-sensitive; cache timestamp and stale-data warnings.",
+    ),
+    SourceOption(
+        id="hydrosheds",
+        name="HydroSHEDS / HydroRIVERS / HydroLAKES",
+        provider="HydroSHEDS",
+        category="hydrography",
+        purpose="Global hydrography baseline for non-U.S. water and drainage queries.",
+        useful_for=["global water-source lookup", "drainage", "lakes and rivers"],
+        analysis_role="Global hydrography package when U.S. NHD is unavailable.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["water-access", "terrain-routing", "sar-planning"],
+        derived_layers=["global_water_index", "global_drainage_lines"],
+        notes="Pair with OSM waterways and DEM-derived drainage for confidence.",
+    ),
+    SourceOption(
+        id="sentinel_2",
+        name="Sentinel-2 Multispectral",
+        provider="ESA Copernicus",
+        category="imagery-analysis",
+        purpose="Multispectral imagery for vegetation, water, burn, and surface-condition indices.",
+        useful_for=["NDVI", "NDWI", "water detection", "vegetation condition", "recent surface context"],
+        analysis_role="Analysis imagery source for derived indices, not just visual backdrop.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["water-access", "sar-planning", "imagery-preview"],
+        derived_layers=["ndvi", "ndwi", "vegetation_condition", "water_detection"],
+        notes="Cloud cover and date filtering matter; preserve acquisition timestamp.",
+    ),
+    SourceOption(
+        id="landsat_collection_2",
+        name="Landsat Collection 2",
+        provider="USGS / NASA",
+        category="imagery-analysis",
+        purpose="Long-running multispectral record for historical change and broad surface context.",
+        useful_for=["historical change", "burn scars", "seasonal water", "broad land surface context"],
+        analysis_role="Optional historical/change-detection imagery source.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["sar-planning", "water-access"],
+        derived_layers=["historical_change", "seasonal_water_context"],
+        notes="Lower temporal/spatial immediacy than higher-resolution or current imagery.",
+    ),
+    SourceOption(
+        id="naip",
+        name="NAIP Aerial Imagery",
+        provider="USDA",
+        category="imagery-analysis",
+        purpose="High-resolution U.S. aerial imagery for detailed visual feature extraction.",
+        useful_for=["small roads/tracks", "buildings", "clearings", "agricultural features"],
+        analysis_role="Analysis imagery and offline basemap source for U.S. AO detail.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["imagery-preview", "sar-planning", "evacuation"],
+        derived_layers=["high_detail_aerial_reference", "feature_extraction_review"],
+        notes="Check acquisition date; may be stale for fast-changing environments.",
+    ),
+    SourceOption(
+        id="sentinel_1_sar",
+        name="Sentinel-1 SAR",
+        provider="ESA Copernicus",
+        category="imagery-analysis",
+        purpose="Radar imagery that can support cloud/night/flood surface observation.",
+        useful_for=["flood extent", "cloudy AO", "night/cloud independent context"],
+        analysis_role="Specialized analysis imagery for weather-obscured or flood missions.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["flood-risk", "sar-planning"],
+        derived_layers=["sar_water_extent", "flood_extent"],
+        notes="Requires SAR-specific processing before analyst use.",
+    ),
+    SourceOption(
+        id="nasa_firms",
+        name="NASA FIRMS",
+        provider="NASA",
+        category="hazards",
+        purpose="Active fire/hotspot feed for wildfire context.",
+        useful_for=["wildfire avoidance", "smoke/fire route risk", "current hazard context"],
+        analysis_role="Time-sensitive hazard overlay for route exclusion and warnings.",
+        stream_status="not-streamed",
+        download_status="cache-feed",
+        recommended_for=["hazard-routing", "evacuation", "sar-planning"],
+        derived_layers=["active_fire_points", "fire_exclusion_zones"],
+        notes="Cache timestamps and warn when stale.",
+    ),
+    SourceOption(
+        id="noaa_alerts",
+        name="NOAA / NWS Alerts",
+        provider="NOAA",
+        category="hazards",
+        purpose="Weather watches, warnings, advisories, and hazard alerts.",
+        useful_for=["storm risk", "heat/cold exposure", "flash flood warnings", "weather constraints"],
+        analysis_role="Time-sensitive alert feed for planner warnings and route risk flags.",
+        stream_status="not-streamed",
+        download_status="cache-feed",
+        recommended_for=["hazard-routing", "evacuation", "sar-planning", "water-access"],
+        derived_layers=["weather_alert_zones", "stale_weather_warning"],
+        notes="Offline package must record retrieval time and validity window.",
+    ),
+    SourceOption(
+        id="fema_flood",
+        name="FEMA Flood Products",
+        provider="FEMA",
+        category="hazards",
+        purpose="Flood hazard and floodplain layers for U.S. route risk.",
+        useful_for=["floodplain avoidance", "crossing risk", "evacuation constraints"],
+        analysis_role="Flood hazard layer for route exclusion or high-cost areas.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["flood-risk", "evacuation", "water-access"],
+        derived_layers=["floodplain_mask", "flood_hazard_cost"],
+        notes="Flood maps are hazard context, not real-time water levels.",
+    ),
+    SourceOption(
+        id="pad_us",
+        name="PAD-US Protected Areas",
+        provider="USGS",
+        category="boundaries-access",
+        purpose="U.S. protected area ownership and management boundaries.",
+        useful_for=["public/private access", "restricted movement", "land manager context"],
+        analysis_role="Access and authority layer for route legality and planner warnings.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["access-control", "terrain-routing", "sar-planning"],
+        derived_layers=["access_boundaries", "land_management_index"],
+        notes="Pair with local closures and parcels when legal access matters.",
+    ),
+    SourceOption(
+        id="blm_usfs_nps",
+        name="BLM / USFS / NPS Roads, Trails, Facilities, Closures",
+        provider="U.S. land-management agencies",
+        category="boundaries-access",
+        purpose="Authoritative federal public-land roads, trails, facilities, and closure context.",
+        useful_for=["public land movement", "trail authority", "closures", "rescue access"],
+        analysis_role="Authoritative supplement to OSM for managed lands.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["access-control", "evacuation", "sar-planning", "terrain-routing"],
+        derived_layers=["authoritative_trails", "closure_zones", "facility_index"],
+        notes="Useful when OSM coverage is incomplete or agency closures are decisive.",
+    ),
+    SourceOption(
+        id="parcels_boundaries",
+        name="Parcels / Local Boundaries",
+        provider="County or local GIS",
+        category="boundaries-access",
+        purpose="Local ownership and parcel boundaries for access constraints.",
+        useful_for=["private land avoidance", "permission planning", "access-control warnings"],
+        analysis_role="Local access-control layer where parcel movement matters.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["access-control", "evacuation"],
+        derived_layers=["parcel_access_mask", "ownership_index"],
+        notes="Availability and licensing vary by jurisdiction.",
+    ),
+    SourceOption(
+        id="fcc_towers",
+        name="FCC Antenna / Tower Data",
+        provider="FCC",
+        category="communications",
+        purpose="Tower locations for communications planning context.",
+        useful_for=["signal opportunity", "relay planning", "communications infrastructure context"],
+        analysis_role="Vector point layer for comms planning and line-of-sight checks.",
+        stream_status="not-streamed",
+        download_status="download-required",
+        recommended_for=["signal-planning"],
+        derived_layers=["tower_index", "candidate_comms_points"],
+        notes="Pair with DEM viewsheds; tower presence does not guarantee usable service.",
+    ),
+    SourceOption(
+        id="osm_towers",
+        name="OSM Towers, Peaks, Lookouts",
+        provider="OpenStreetMap",
+        category="communications",
+        purpose="Mapped towers, peaks, masts, lookouts, and high-ground features.",
+        useful_for=["field signal points", "lookout sites", "relay candidate discovery"],
+        analysis_role="Extracted feature subset from OSM for signal planning.",
+        stream_status="not-streamed",
+        download_status="derived-from-osm",
+        recommended_for=["signal-planning", "sar-planning"],
+        derived_layers=["signal_feature_index", "lookout_candidates"],
+        notes="Requires OSM PBF extract and tag filtering.",
+    ),
+    SourceOption(
+        id="viewshed_surfaces",
+        name="DEM-Derived Viewshed Surfaces",
+        provider="Derived from package DEM",
+        category="derived",
+        purpose="Line-of-sight and visibility products for communications and observation planning.",
+        useful_for=["radio line-of-sight", "open-sky checks", "observation points", "relay placement"],
+        analysis_role="Derived raster/vector layer generated after DEM ingest.",
+        stream_status="derived",
+        download_status="derived-after-ingest",
+        required_for=["signal-planning"],
+        recommended_for=["sar-planning", "terrain-routing"],
+        derived_layers=["viewshed_rasters", "visibility_score", "relay_candidate_scores"],
+        notes="Cannot be downloaded directly; generate from selected DEM and candidate points.",
+    ),
+]
+
+SOURCE_BY_ID: dict[str, SourceOption] = {source.id: source for source in SOURCE_CATALOG}
+PRIMARY_STREAM_SOURCE_IDS = ["esri_world_imagery", "cesium_world_terrain", "osm_basemap"]
+PACKAGE_MANIFESTS: dict[str, dict[str, object]] = {}
+
+
+def _get_source_options_by_ids(source_ids: list[str]) -> list[SourceOption]:
+    seen: set[str] = set()
+    sources: list[SourceOption] = []
+    for source_id in source_ids:
+        if source_id in seen:
+            continue
+        source = SOURCE_BY_ID.get(source_id)
+        if source:
+            sources.append(source)
+            seen.add(source_id)
+    return sources
+
+
+def _format_source_catalog_brief() -> str:
+    lines = []
+    for source in SOURCE_CATALOG:
+        lines.append(
+            "- "
+            f"{source.id}: {source.name} ({source.category}); "
+            f"stream={source.stream_status}; package={source.download_status}; "
+            f"use={source.purpose}"
+        )
+    return "\n".join(lines)
+
+
+def _format_source_context(source_context: SourceContext | None) -> str:
+    if source_context is None:
+        return "- Mission focus: not provided\n- Selected data sources: none selected"
+
+    names = source_context.selected_source_names
+    if not names and source_context.selected_source_ids:
+        names = [
+            SOURCE_BY_ID[source_id].name
+            for source_id in source_context.selected_source_ids
+            if source_id in SOURCE_BY_ID
+        ]
+
+    selected_sources = ", ".join(names) if names else "none selected"
+    lines = [
+        f"- Mission focus: {source_context.mission_focus or 'not provided'}",
+        f"- Selected data sources: {selected_sources}",
+    ]
+    if source_context.package_summary:
+        lines.append(f"- Package summary: {source_context.package_summary}")
+    return "\n".join(lines)
+
+
+def _format_manifest_bounds(map_context: MapContext | None) -> dict[str, float | None] | None:
+    bounds = map_context.view_bounds if map_context else None
+    if bounds is None:
+        return None
+    return {
+        "west": bounds.west,
+        "south": bounds.south,
+        "east": bounds.east,
+        "north": bounds.north,
+        "center_lat": bounds.center_lat,
+        "center_lon": bounds.center_lon,
+    }
+
+
 AGENT_PROFILE_PROMPTS: dict[str, str] = {
+    "imagery-sourcing": _load_imagery_sourcing_prompt(),
     "terrain-route": dedent(
         """
         You are TERA's local terrain-aware routing copilot.
@@ -535,8 +1107,10 @@ def _format_view_bounds(bounds: ViewBounds | None) -> str:
 
 
 def _build_system_prompt(request: PromptRequest) -> str:
-    profile = (request.agent_profile or "terrain-route").strip().lower()
-    profile_prompt = AGENT_PROFILE_PROMPTS.get(profile, AGENT_PROFILE_PROMPTS["terrain-route"])
+    profile = (request.agent_profile or "imagery-sourcing").strip().lower()
+    profile_prompt = AGENT_PROFILE_PROMPTS.get(
+        profile, AGENT_PROFILE_PROMPTS["imagery-sourcing"]
+    )
     map_context = request.map_context
     prompt_schema = _infer_prompt_schema(request.prompt)
     prompt_family = str(prompt_schema["family"])
@@ -571,11 +1145,18 @@ def _build_system_prompt(request: PromptRequest) -> str:
             ),
             f"Inferred request normalization:\n{chr(10).join(normalized_request_lines)}",
             f"Current map context:\n{chr(10).join(map_lines)}",
+            f"Current source package context:\n{_format_source_context(request.source_context)}",
+            f"Available data source catalog:\n{_format_source_catalog_brief()}",
             "\n".join(
                 [
                     "Rules:",
                     "- Keep the answer concise and operational.",
                     "- Mention visible terrain relationships before recommendations.",
+                    (
+                        "- For imagery-sourcing requests, separate display streams from "
+                        "analysis/download datasets and explain required, optional, and "
+                        "not-needed sources."
+                    ),
                     "- Do not invent exact trails, water, roads, hazards, or route geometry.",
                     (
                         "- For route-like requests, give assessment, recommended action, "
@@ -673,6 +1254,157 @@ async def list_ollama_models() -> ModelsResponse:
     return ModelsResponse(default_model=OLLAMA_MODEL, models=models)
 
 
+@app.get("/api/data-sources", response_model=SourceCatalogResponse)
+async def list_data_sources() -> SourceCatalogResponse:
+    return SourceCatalogResponse(
+        primary_streams=PRIMARY_STREAM_SOURCE_IDS,
+        sources=SOURCE_CATALOG,
+    )
+
+
+def _build_package_manifest(
+    *,
+    package_id: str,
+    package_name: str,
+    request: DownloadPlanRequest,
+    sources: list[SourceOption],
+) -> dict[str, object]:
+    selected_ids = [source.id for source in sources]
+    return {
+        "package_id": package_id,
+        "package_name": package_name,
+        "mission_focus": request.mission_focus,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "aoi": _format_manifest_bounds(request.map_context),
+        "selected_source_ids": selected_ids,
+        "sources": [
+            {
+                "id": source.id,
+                "name": source.name,
+                "provider": source.provider,
+                "category": source.category,
+                "purpose": source.purpose,
+                "stream_status": source.stream_status,
+                "download_status": source.download_status,
+                "stream_layer": source.stream_layer,
+                "analysis_role": source.analysis_role,
+                "derived_layers": source.derived_layers,
+                "notes": source.notes,
+            }
+            for source in sources
+        ],
+        "server_ingest_plan": {
+            "store_raw_sources": [
+                source.id
+                for source in sources
+                if source.download_status in {"download-required", "cache-feed"}
+            ],
+            "cache_display_tiles": [
+                source.id
+                for source in sources
+                if source.download_status == "cache-via-cesium-pipeline"
+                or source.stream_status.startswith("streamable")
+            ],
+            "generate_derived_layers": sorted(
+                {
+                    derived_layer
+                    for source in sources
+                    for derived_layer in source.derived_layers
+                }
+            ),
+            "load_vector_indexes": [
+                source.id
+                for source in sources
+                if source.category in {"vector", "hydrography", "boundaries-access", "communications"}
+            ],
+            "load_raster_indexes": [
+                source.id
+                for source in sources
+                if source.category
+                in {"terrain", "land-cover", "imagery-analysis", "hazards", "terrain-display"}
+            ],
+        },
+        "offline_metadata_required": [
+            "source_dataset_id",
+            "source_version_or_acquired_at",
+            "license_or_usage_constraint",
+            "aoi_bbox",
+            "native_resolution",
+            "processing_steps",
+            "sha256",
+        ],
+    }
+
+
+def _download_plan_warnings(
+    request: DownloadPlanRequest, sources: list[SourceOption]
+) -> list[str]:
+    warnings: list[str] = []
+    known_ids = set(SOURCE_BY_ID)
+    unknown_ids = [source_id for source_id in request.source_ids if source_id not in known_ids]
+    if unknown_ids:
+        warnings.append(f"Unknown source ids ignored: {', '.join(unknown_ids)}")
+    if not sources:
+        warnings.append("No sources selected; manifest has no server ingest work.")
+    if request.map_context is None or request.map_context.view_bounds is None:
+        warnings.append("No AO bounds were provided; downloads must be clipped before ingest.")
+    if not any(source.id == "osm_extract" for source in sources):
+        warnings.append("OSM PBF extract is not selected, so server-side routable graph work is blocked.")
+    if not any(source.category == "terrain" for source in sources):
+        warnings.append("No analysis DEM is selected; slope, hydrology, and viewshed queries are blocked.")
+    if any(source.stream_status.startswith("streamable") for source in sources):
+        warnings.append(
+            "Streamable layers still need cached tiles or analytical companions for disconnected use."
+        )
+    return warnings
+
+
+@app.post("/api/source-package/plan", response_model=DownloadPlanResponse)
+async def plan_source_package(request: DownloadPlanRequest) -> DownloadPlanResponse:
+    sources = _get_source_options_by_ids(request.source_ids)
+    package_id = uuid4().hex[:12]
+    package_name = (
+        request.package_name.strip()
+        if request.package_name and request.package_name.strip()
+        else f"tera-{request.mission_focus.strip().lower().replace(' ', '-')}-{package_id}"
+    )
+    manifest = _build_package_manifest(
+        package_id=package_id,
+        package_name=package_name,
+        request=request,
+        sources=sources,
+    )
+    PACKAGE_MANIFESTS[package_id] = manifest
+    return DownloadPlanResponse(
+        package_id=package_id,
+        package_name=package_name,
+        mission_focus=request.mission_focus,
+        sources=sources,
+        manifest=manifest,
+        warnings=_download_plan_warnings(request, sources),
+        download_url=f"/api/source-package/{package_id}/download",
+    )
+
+
+@app.get("/api/source-package/{package_id}/download")
+async def download_source_manifest(package_id: str) -> StreamingResponse:
+    manifest = PACKAGE_MANIFESTS.get(package_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+
+    payload = json.dumps(manifest, indent=2).encode("utf-8")
+    package_name = str(manifest.get("package_name", package_id))
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", package_name).strip("-") or package_id
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.json"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.post("/api/prompt", response_model=PromptResponse)
 async def prompt_ollama(request: PromptRequest) -> PromptResponse:
     model, payload = _build_ollama_payload(request, stream=False)
@@ -711,6 +1443,8 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
         raise HTTPException(status_code=502, detail="Ollama returned an empty response.")
 
     return PromptResponse(model=model, response=text)
+
+
 @app.post("/api/prompt/stream")
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
     model, payload = _build_ollama_payload(request, stream=True)

@@ -1,4 +1,4 @@
-# RF Sim — Local Model System Prompt (Condensed)
+# TERA — Local Model System Prompt (Condensed)
 
 This is the system prompt used for **local models** (Ollama / LM Studio / llama.cpp) in the RF Planner web app.
 Local models receive a tighter, example-driven prompt with JSON first to handle smaller context windows.

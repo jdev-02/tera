@@ -50,7 +50,7 @@ team:
     email: TODO_kyle_email
     resources_owned:
       - { name: "Cesium Ion token", scope: "NPS SF Hackathon, khicks1724", consumers: [jon, ben], stored_in: ".env -> CESIUM_ION_TOKEN" }
-      - { name: "RFSim repo (reference, not copy-paste)", url: "https://github.com/khicks1724/RFSim", note: "Kyle's prior RF simulator. Public + openly accessible per hackathon Tool Usage rule. Use as a REFERENCE for design patterns or as a dependency if licensed permissively. Do NOT copy-paste source into our repo (project must be 'new work only'). Most relevant to: mesh stretch (#23), parsing-verification on RF anomalies (#22)." }
+      - { name: "Prior reference material", url: "", note: "Kyle's prior planning reference. Public + openly accessible per hackathon Tool Usage rule. Use as a REFERENCE for design patterns or as a dependency if licensed permissively. Do NOT copy-paste source into our repo (project must be 'new work only'). Most relevant to: mesh stretch (#23), parsing-verification on RF anomalies (#22)." }
 
   - id: ben
     name: Ben

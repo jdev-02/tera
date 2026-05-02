@@ -723,7 +723,7 @@ Resolved during refinement; remaining items go to kickoff vote.
 - ✅ Kyle confirmed his lane (local LLM focus on Jetson) — kickoff review, 2026-05-02.
 - ✅ **Cesium Ion token** provisioned by Kyle (P3) — global terrain + imagery streaming. Phase 1 web frontend uses CesiumJS 3D globe (Jon); data pipeline pre-caches tiles for both AOs (Ben). Online-only; pre-cache before WiFi off (kickoff review, 2026-05-02).
 - ✅ **Codename: TruePoint** (locked pre-kickoff, 2026-05-02 ~11:10).
-- ✅ **RFSim reference repo** (Kyle's public RF simulator at https://github.com/khicks1724/RFSim) noted as reference material for mesh stretch (#23) and parsing-verification (#22). Reference only; not a copy-paste source — TruePoint is new work per hackathon rule.
+- ✅ **Prior reference material** noted for mesh stretch (#23) and parsing-verification (#22). Reference only; not a copy-paste source — TruePoint is new work per hackathon rule.
 
 **Open — to be voted at Sat 1145 kickoff (10 minutes, no relitigating):**
 
