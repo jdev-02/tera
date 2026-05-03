@@ -26,12 +26,18 @@ import com.atak.plugins.impl.PluginContextProvider;
 import com.atak.plugins.impl.PluginLayoutInflater;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.maps.Marker;
+import com.atakmap.android.maps.Polyline;
 import com.atakmap.coremap.maps.coords.GeoBounds;
 import com.atakmap.coremap.maps.coords.GeoPoint;
 import com.atakmap.coremap.maps.coords.GeoPointMetaData;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 import gov.tak.api.plugin.IPlugin;
 import gov.tak.api.plugin.IServiceController;
@@ -51,6 +57,8 @@ public class TERAPlugin implements IPlugin {
     Pane templatePane;
     Handler mainHandler = new Handler(Looper.getMainLooper());
     SpeechRecognizer speechRecognizer;
+    Polyline activeRoutePolyline;
+    final List<Marker> activeWaypointMarkers = new ArrayList<>();
 
     public TERAPlugin(IServiceController serviceController) {
         this.serviceController = serviceController;
@@ -104,6 +112,7 @@ public class TERAPlugin implements IPlugin {
             speechRecognizer = null;
         }
 
+        clearActiveRoute();
         uiService.removeToolbarItem(toolbarItem);
     }
 
@@ -184,19 +193,22 @@ public class TERAPlugin implements IPlugin {
                     endpoint,
                     message,
                     mapContext,
-                    new TeraPlanClient.Callback() {
+                    new TeraPlanClient.PlanCallback() {
                         @Override
-                        public void onComplete(boolean ok, String message) {
+                        public void onComplete(boolean ok, String msg, JSONObject planJson) {
                             mainHandler.post(() -> {
                                 sendMessage.setEnabled(true);
                                 connectionStatus.setText(ok
                                         ? pluginContext.getString(R.string.connection_online)
-                                        : (message.startsWith("Route signature invalid")
+                                        : (msg.startsWith("Route signature invalid")
                                                 ? "Route signature invalid - REJECTED"
                                                 : pluginContext.getString(R.string.connection_error)));
-                                appendChatLine(chatHistory, ok ? "Agent" : "Error", message);
+                                appendChatLine(chatHistory, ok ? "Agent" : "Error", msg);
                                 transcript.setText(chatHistory.toString());
                                 scrollChatToBottom(chatScroll);
+                                if (ok && planJson != null) {
+                                    drawRoute(planJson);
+                                }
                             });
                         }
                     });
@@ -457,6 +469,89 @@ public class TERAPlugin implements IPlugin {
             endpoint = endpoint + pluginContext.getString(R.string.endpoint_path);
         }
         return endpoint;
+    }
+
+    private void clearActiveRoute() {
+        MapView mapView = MapView.getMapView();
+        if (mapView == null) return;
+        if (activeRoutePolyline != null) {
+            mapView.getRootGroup().removeItem(activeRoutePolyline);
+            activeRoutePolyline = null;
+        }
+        for (Marker m : activeWaypointMarkers) {
+            mapView.getRootGroup().removeItem(m);
+        }
+        activeWaypointMarkers.clear();
+    }
+
+    private void drawRoute(JSONObject planJson) {
+        MapView mapView = MapView.getMapView();
+        if (mapView == null) return;
+
+        clearActiveRoute();
+
+        try {
+            // Extract LineString coordinates from route.geometry.coordinates
+            // GeoJSON format: [[lon, lat], [lon, lat], ...]
+            JSONObject route = planJson.optJSONObject("route");
+            if (route == null) {
+                Toast.makeText(pluginContext, "No route in response", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            JSONObject geometry = route.optJSONObject("geometry");
+            if (geometry == null) {
+                geometry = route; // some responses embed geometry directly
+            }
+            JSONArray coords = geometry.optJSONArray("coordinates");
+            if (coords == null || coords.length() < 2) {
+                Toast.makeText(pluginContext, "Route has no coordinates", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            GeoPoint[] points = new GeoPoint[coords.length()];
+            double sumLat = 0, sumLon = 0;
+            for (int i = 0; i < coords.length(); i++) {
+                JSONArray coord = coords.getJSONArray(i);
+                double lon = coord.getDouble(0);
+                double lat = coord.getDouble(1);
+                points[i] = new GeoPoint(lat, lon);
+                sumLat += lat;
+                sumLon += lon;
+            }
+
+            // Draw blue polyline
+            activeRoutePolyline = new Polyline(UUID.randomUUID().toString());
+            activeRoutePolyline.setPoints(points);
+            activeRoutePolyline.setColor(Color.argb(220, 0, 100, 255));
+            activeRoutePolyline.setStrokeWeight(4.0);
+            mapView.getRootGroup().addItem(activeRoutePolyline);
+
+            // Add waypoint markers from waypoints array
+            JSONArray waypoints = planJson.optJSONArray("waypoints");
+            if (waypoints != null) {
+                for (int i = 0; i < waypoints.length(); i++) {
+                    JSONObject wp = waypoints.getJSONObject(i);
+                    double lat = wp.getDouble("lat");
+                    double lon = wp.getDouble("lon");
+                    String name = wp.optString("name", "WP-" + (i + 1));
+                    GeoPoint gp = new GeoPoint(lat, lon);
+                    Marker marker = new Marker(gp, UUID.randomUUID().toString());
+                    marker.setTitle(name);
+                    marker.setType("a-f-G-U-C");
+                    mapView.getRootGroup().addItem(marker);
+                    activeWaypointMarkers.add(marker);
+                }
+            }
+
+            // Pan camera to route centre
+            double centerLat = sumLat / coords.length();
+            double centerLon = sumLon / coords.length();
+            mapView.getMapController().panTo(new GeoPoint(centerLat, centerLon), true);
+
+        } catch (JSONException e) {
+            Toast.makeText(pluginContext, "Route parse error: " + e.getMessage(),
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     private JSONObject buildMapContext() {
