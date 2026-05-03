@@ -6,6 +6,7 @@ require API keys, ollama, liboqs, or SuperAgent.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -223,6 +224,49 @@ async def test_plan_happy_path_returns_route(monkeypatch: pytest.MonkeyPatch) ->
     assert resp.signature is None
     # LLM was called exactly once with structured output.
     mock_client.complete_structured.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_plan_writes_security_audit_log(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("TERA_DEVICE_PROFILE", "austere")
+    audit_path = tmp_path / "security_audit.jsonl"
+    monkeypatch.setenv("WAYFINDER_AUDIT_LOG", str(audit_path))
+    mock_client = _make_mock_llm(VALID_FRESHWATER_QUERY)
+    signature = Signature(
+        scheme="ML-DSA-65",
+        key_id="wayfinder-device-001",
+        value_b64="c2ln",
+        signed_at="2026-05-02T22:30:00Z",
+    )
+
+    async def fake_guard(**kwargs: Any) -> Any:
+        result = MagicMock()
+        result.to_dict.return_value = _passing_pipeline_result(VALID_FRESHWATER_QUERY)
+        return result
+
+    with (
+        patch("agent.orchestrator.get_registry") as mock_reg,
+        patch("agent.orchestrator._sign_response", return_value=signature),
+        patch.dict(
+            "sys.modules",
+            {"security.plan_guard": MagicMock(guard_plan_request=fake_guard)},
+        ),
+    ):
+        mock_reg.return_value.get.return_value = mock_client
+        raw_prompt = "Route me to nearest freshwater within 5km on foot, covered terrain."
+        req = PlanRequest(
+            prompt=raw_prompt,
+            current=Coord(lat=37.7955, lon=-122.3937),
+        )
+        await plan(req)
+
+    audit_text = audit_path.read_text(encoding="utf-8")
+    events = [json.loads(line)["event"] for line in audit_text.splitlines()]
+    assert "prompt_received" in events
+    assert "tool_dispatch_completed" in events
+    assert "route_signed" in events
+    assert "plan_response_ready" in events
+    assert raw_prompt not in audit_text
 
 
 @pytest.mark.asyncio
