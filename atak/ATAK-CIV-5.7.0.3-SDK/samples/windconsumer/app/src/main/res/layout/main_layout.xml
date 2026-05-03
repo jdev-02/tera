@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical" >
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:weightSum="1"
+        android:orientation="horizontal" >
+
+
+        <com.atakmap.android.gui.PluginSpinner
+            android:id="@+id/spinner"
+            style="@style/darkButton"
+            android:layout_weight=".90"
+            android:layout_width="0dp"
+            android:layout_height="40dp" />
+
+        <Button
+            style="@style/darkButton"
+            android:id="@+id/refresh"
+            android:padding="6dp"
+            android:layout_weight=".05"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="Refresh" />
+        <Button
+            style="@style/darkButton"
+            android:id="@+id/pull"
+            android:padding="6dp"
+            android:layout_weight=".05"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="Pull" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/information"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:padding="2dp"/>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="10dp"
+        android:background="@android:color/darker_gray" />
+
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:weightSum="3"
+        android:orientation="horizontal" >
+
+        <TextView
+            android:text="Altitude"
+            android:layout_width="match_parent"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:padding="2dp"/>
+
+        <TextView
+            android:text="Meteorological Direction"
+            android:layout_width="match_parent"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:padding="2dp"/>
+
+        <TextView
+            android:text="Speed (Knots)"
+            android:layout_width="match_parent"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:padding="2dp"/>
+
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="10dp"
+        android:background="@android:color/darker_gray" />
+
+    <ListView
+        android:id="@+id/listview"
+        android:layout_width="match_parent"
+        android:fadeScrollbars="false"
+        android:layout_height="180dp"/>
+
+</LinearLayout>
+

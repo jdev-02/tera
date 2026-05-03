@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <style name="ATAKTheme" parent="@android:style/Theme.Holo">
+
+        <!--
+            Revert to old theme's buttons and spinner styles, since they match the colors and sizes
+            we use currently in the toolbar and in dropdowns better. 
+            (And because we have to use dialog mode spinners in dropdowns or they crash ATM)
+        -->
+        <item name="android:buttonStyle">@android:style/Widget.Button</item>
+        <item name="android:imageButtonStyle">@android:style/Widget.Button</item>
+        <item name="android:buttonStyleToggle">@android:style/Widget.Button</item>
+        <item name="android:spinnerStyle">@style/ATAKSpinner</item>
+        <item name="android:spinnerItemStyle">@style/ATAKSpinnerItem</item>
+        
+        <item name="android:editTextStyle">@style/ATAKEditText</item>
+        
+        
+        <!--
+              Use new widgets in dialogs though, since they match better there
+               ISSUE: this doesn't work! apparently android just pulls out a limited set of attributes from
+               these themes/styles, it does *NOT* actually apply them. so we can't change button/spinner style from
+               them. We'll just stick with the old ones in dialogs too for now.
+        -->
+        <!--
+              <item name="android:alertDialogTheme">@style/ATAKDialog</item>
+         <item name="android:alertDialogStyle">@style/ATAKDialog</item>
+        -->
+    </style>
+
+    <!--
+         This shouldn't be necessary since Widget.Spinner is a base android theme that 
+         shouldn't change across devices. But just in case, since otherwise we crash...
+    -->
+    <style name="ATAKSpinner" parent="@android:style/Widget.Spinner">
+        <item name="android:spinnerMode">dialog</item>
+    </style>
+    
+    
+    <style name="ATAKEditText" parent="@android:style/Widget.EditText">
+        <!-- Default to non-multi-line edit texts? Probably should do this field-by-field, but we've missed a LOT of them!  -->
+        <!-- <item name="inputType">text</item> -->
+
+        <!-- Make all text fields use the non-fullscreen keyboard. -->
+        <item name="android:imeOptions">flagNoFullscreen</item>
+    </style>
+
+    <!--
+    <style name="ATAKDialog" parent="@android:style/Theme.DeviceDefault.Dialog">
+         Use defaults for dialogs, so they match text fields / etc there. Except we can't (see above).
+         <item name="android:buttonStyle">@android:style/Widget.DeviceDefault.Button</item>
+         <item name="android:imageButtonStyle">@android:style/Widget.DeviceDefault.Button</item>
+         <item name="android:buttonStyleToggle">@android:style/Widget.DeviceDefault.Button</item>
+         <item name="android:spinnerStyle">@android:style/Widget.DeviceDefault.Spinner</item>
+    </style>
+    -->
+
+    <!-- In the new theme, sometimes the spinner text color is turning white. -->
+    <style name="ATAKSpinnerItem" parent="@style/ATAKTheme">
+        <item name="android:textColor">@android:color/black</item>
+    </style>
+    
+
+    <!-- ====== Style for use in 9-line and other dropdowns that have very restricted space. ====== -->
+    <style name="FullDropdownStyle" parent="@style/ATAKTheme">
+        <item name="android:buttonStyle">@style/unpaddedButton</item>
+        <item name="android:textColor">@android:color/white</item>
+        <item name="android:imeOptions">flagNoExtractUi</item>
+    </style>
+    
+    <style name="smallHoloButton" parent="@android:style/Widget.Holo.Button.Small">
+        <item name="android:minHeight">0dp</item>
+        <item name="android:minWidth">0dp</item>
+    </style>
+    
+    <style name="smallHoloSpinner" parent="@android:style/Widget.Holo.Button.Small">
+        <item name="android:background">@drawable/spinner_background_holo</item>
+        <item name="android:gravity">right|center_vertical</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:spinnerMode">dialog</item>
+    </style>
+
+    <style name="unpaddedButton" parent="@android:style/Widget.Button">
+        <item name="android:paddingTop">0dp</item>
+        <item name="android:paddingBottom">3dp</item>
+        <item name="android:textSize">@dimen/fontSize</item>
+    </style>
+
+    <!-- ==== Style for JumpMaster EditText ==== -->
+    <style name="JumpMasterEditText" parent="@android:style/Widget.EditText">
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:paddingTop">3dp</item>
+        <item name="android:maxLength">3</item>
+        <item name="android:textCursorDrawable">@null</item>
+        <item name="android:imeOptions">flagNoFullscreen</item>
+        <item name="android:background">#FFFFFF</item>
+        <item name="android:gravity">center</item>
+        <item name="android:selectAllOnFocus">true</item>
+        <item name="android:textColor">#FF000000</item>
+        <item name="android:textSize">@dimen/spinnerFontSize</item>
+    </style>
+    
+    
+    <!-- ==== Style for ISRV Dark Buttons ==== -->
+    <style name="darkButton" parent="@android:style/Widget.Button">
+        <item name="android:background">@drawable/btn_gray</item>
+        <item name="android:shadowColor">@color/darker_gray</item>
+        <item name="android:shadowDy">1</item>
+        <item name="android:shadowRadius">2</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    
+    <style name="darkButtonNoHighlight" parent="@android:style/Widget.Button">
+        <item name="android:background">@drawable/btn_gray_no_checked_highlight</item>
+        <item name="android:shadowColor">@color/darker_gray</item>
+        <item name="android:shadowDy">1</item>
+        <item name="android:shadowRadius">2</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:paddingLeft">10dp</item>
+        <item name="android:paddingRight">10dp</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    
+    
+    <!-- ====== Style used on survey dropdowns ====== -->
+    <style name="ATAKSurveyTheme" parent="@style/ATAKTheme">
+         
+    </style>
+    
+    <style name="whiteEditText" parent="@android:style/Widget.EditText">
+        <item name="android:background">@drawable/atak_textfield</item>
+        <item name="android:textSize">@dimen/draper_font</item>
+    </style>
+
+    <style name="dflt_toolbar_btn_tool">
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:shadowColor">#FFAAAAAA</item>
+        <item name="android:shadowDx">2</item>
+        <item name="android:shadowDy">2</item>
+        <item name="android:shadowRadius">3</item>
+    </style>
+
+    <style name="AppTheme" parent="android:Theme.Light" />
+    
+    
+    <!-- COMMON -->
+    <style name="wrap">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+    </style>
+    <style name="fill">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">match_parent</item>
+    </style>
+    
+    
+    <!-- TOOLBAR -->
+    <style name="toolbar_btn">
+        <item name="android:layout_width">70dp</item>
+        <item name="android:layout_height">70dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:layout_marginBottom">5dp</item>
+        <item name="android:background">@drawable/btn_gray</item>
+    </style>
+    
+    <style name="toolbar_btn_tool">
+        <item name="android:textColor">@color/light_blue_gray</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:shadowColor">#000000</item>
+        <item name="android:shadowDx">0</item>
+        <item name="android:shadowDy">1</item>
+        <item name="android:shadowRadius">2</item>
+    </style>
+    
+    <style name="toolbar_btn_setting">
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textSize">18sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:shadowColor">#FFAAAAAA</item>
+        <item name="android:shadowDx">2</item>
+        <item name="android:shadowDy">2</item>
+        <item name="android:shadowRadius">3</item>
+    </style>
+    
+    
+    <!-- TOOL -->
+    <style name="tool_list_btn_left" parent="toolbar_btn">
+        <item name="android:layout_marginLeft">4dp</item>
+        <item name="android:layout_marginTop">2dp</item>
+        <item name="android:layout_marginRight">2dp</item>
+        <item name="android:layout_marginBottom">2dp</item>
+    </style>
+    
+    <style name="tool_list_btn_right" parent="toolbar_btn">
+        <item name="android:layout_marginLeft">2dp</item>
+        <item name="android:layout_marginTop">2dp</item>
+        <item name="android:layout_marginRight">4dp</item>
+        <item name="android:layout_marginBottom">2dp</item>
+    </style>
+    
+    
+    <!-- TOOL - RADIO -->
+    <style name="tool_radio_section_header">
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    
+    <style name="tool_radio_section_value">
+        <item name="android:textColor">@color/light_blue_gray</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+    
+    
+    
+    
+    <!-- PULL TO REFRESH LIST VIEW -->
+    <style name="ptr_headerContainer">
+        <item name="android:layout_width">fill_parent</item>
+        <item name="android:layout_height">50dp</item>
+        <item name="android:gravity">center</item>
+    </style>
+    
+    <style name="ptr_header">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">50dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:padding">5dp</item>
+    </style>
+    
+    <style name="ptr_arrow">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_centerVertical">true</item>
+        <item name="android:src">@drawable/ic_pulltorefresh_arrow</item>
+    </style>
+    
+    <style name="ptr_spinner" parent="@android:style/Widget.ProgressBar.Small">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_centerVertical">true</item>
+        <item name="android:indeterminate">true</item>
+    </style>
+    
+    <style name="ptr_text">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_centerHorizontal">true</item>
+        <item name="android:layout_centerVertical">true</item>
+        <item name="android:layout_marginLeft">5dp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/light_gray</item>
+    </style>
+    
+    
+</resources>

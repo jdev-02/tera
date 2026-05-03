@@ -1,0 +1,35 @@
+SampleDetailTester
+
+
+_________________________________________________________________
+PURPOSE AND CAPABILITIES
+
+Used to test out new ways of packing data into details.
+
+
+_________________________________________________________________
+STATUS
+
+In Progress
+
+_________________________________________________________________
+POINT OF CONTACTS
+
+shawn_bisgrove@partech.com
+jeff_downs@partech.com
+_________________________________________________________________
+PORTS REQUIRED
+
+(This is important for ATO, networking, and other security concerns)
+
+_________________________________________________________________
+EQUIPMENT REQUIRED
+
+_________________________________________________________________
+EQUIPMENT SUPPORTED
+
+_________________________________________________________________
+COMPILATION
+
+_________________________________________________________________
+DEVELOPER NOTES

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- description -->
+     <string name="app_name">ATAK Video Overlay</string>
+    <string name="app_desc"></string>
+
+
+    <!-- App -->
+    
+    <string name="subject_field_hint">Subject</string>
+    <string name="comments_field_hint">Comments</string>
+    <string name="flag_box_title">Flag Message</string>
+    <string name="attachment_button_title">Attach File</string>
+    
+    <string name="reply_prefix">Re:</string>
+    <string name="forward_prefix">Fwd:</string>
+    <string name="original_message">\nOriginal Message: \n%s\n</string>
+    
+    <string name="comment_limit_near">Approaching Limit of 1200 Characters.</string>
+    <string name="comment_limit_reached">Limit of 1200 Characters. Reached.</string>
+    
+    <string name="message_saved">Message Saved</string>
+    <string name="message_sent">Message Sent</string>
+    <string name="missing_recipients">Must Add Recipient to Send</string>
+    <string name="missing_subject_comments">Must Fill in Subject or Comments to Send</string>
+    <string name="unexpected_error">An Unexpected Error Occurred</string>
+    
+    <string name="map_plugin_long_description">Free Text</string>
+    <string name="map_plugin_short_description">Free Text</string>
+    <string name="tool_send_freetext_description">Send Free Text</string>
+    
+    <string name="notification_ticker_text">New Free Text Received</string>
+    
+    <string name="launch_intent_name">Launch Intent</string>
+    
+</resources>

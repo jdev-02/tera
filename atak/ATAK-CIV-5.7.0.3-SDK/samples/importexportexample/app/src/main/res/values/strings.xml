@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- description -->
+    <string name="app_name">Import/Export Plugin</string>
+    <string name="app_desc">The Import/Export Plugin demonstrates use of the Import/Export APIs.</string>
+    <string name="importexport_example">Import/Export Example</string>
+</resources>

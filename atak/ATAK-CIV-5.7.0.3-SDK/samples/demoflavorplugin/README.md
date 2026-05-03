@@ -1,0 +1,34 @@
+Demonstrate Flavors 
+
+
+_________________________________________________________________
+PURPOSE AND CAPABILITIES
+
+This plugin demonstrates the ability to use flavors to change behavior in a plugin.
+
+
+_________________________________________________________________
+STATUS
+
+In Progress
+
+_________________________________________________________________
+POINT OF CONTACTS
+
+Shawn Bisgrove
+_________________________________________________________________
+PORTS REQUIRED
+
+(This is important for ATO, networking, and other security concerns)
+
+_________________________________________________________________
+EQUIPMENT REQUIRED
+
+_________________________________________________________________
+EQUIPMENT SUPPORTED
+
+_________________________________________________________________
+COMPILATION
+
+_________________________________________________________________
+DEVELOPER NOTES

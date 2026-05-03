@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.atakmap.android.plugins.VideoOverlayManagerFileBrowser xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical" >
+
+    <LinearLayout 
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <Button 
+            android:id="@+id/importManagerFileBrowserUpButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/navigation_previous_item"
+            android:layout_margin="3dp"/>
+        <TextView 
+            android:id="@+id/importBrowserCurrentDirectory"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:textSize="@dimen/draper_title_font"
+            android:textColor="#FFF"
+            android:gravity="left|center_vertical"/>
+    </LinearLayout>
+    <View 
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:background="#CCC"/>
+    <ListView 
+        android:id="@+id/importBrowserFileItemList"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/>
+</com.atakmap.android.plugins.VideoOverlayManagerFileBrowser>

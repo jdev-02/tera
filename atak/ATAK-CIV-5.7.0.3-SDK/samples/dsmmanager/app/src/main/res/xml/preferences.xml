@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" >
+
+    <com.atakmap.android.gui.PanListPreference
+        android:key="dsm.defaultmodel"
+        android:summary="Default Model when reading a new DSM file"
+        android:title="Model"
+        android:entries="@array/dsm_model"
+        android:entryValues="@array/dsm_model"
+        />
+
+    <com.atakmap.android.gui.PanListPreference
+        android:key="dsm.defaultunits"
+        android:summary="Default Units when reading a new DSM file"
+        android:title="Units"
+        android:entries="@array/dsm_units"
+        android:entryValues="@array/dsm_units"
+        />
+
+    <com.atakmap.android.gui.PanListPreference
+        android:key="dsm.defaultreference"
+        android:summary="Default Reference when reading a new DSM file"
+        android:title="Reference"
+        android:entries="@array/dsm_reference"
+        android:entryValues="@array/dsm_reference"
+        />
+
+    <com.atakmap.android.gui.PanPreference
+        android:key="manual"
+        android:title="Plugin Documentation"
+        android:summary="Get Help With Using This Tool By Browsing The User Guide And Quick Start Documentation"
+      />
+
+</PreferenceScreen>
+

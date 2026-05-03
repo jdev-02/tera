@@ -1,0 +1,35 @@
+WindConsumer
+
+
+_________________________________________________________________
+PURPOSE AND CAPABILITIES
+
+This is an example plugin that demonstrates the capability of the dataset consumer capability in ATAK core.   Works in conjunction with the WindProvider plugin.
+
+
+_________________________________________________________________
+STATUS
+
+In Progress
+
+_________________________________________________________________
+POINT OF CONTACTS
+
+shawn_bisgrove@partech.com
+
+_________________________________________________________________
+PORTS REQUIRED
+
+(This is important for ATO, networking, and other security concerns)
+
+_________________________________________________________________
+EQUIPMENT REQUIRED
+
+_________________________________________________________________
+EQUIPMENT SUPPORTED
+
+_________________________________________________________________
+COMPILATION
+
+_________________________________________________________________
+DEVELOPER NOTES

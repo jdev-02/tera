@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes'?>
+<event version='2.0' uid='66fdb70b-3794-447c-8a7d-d7d37500bea8' type='a-f' time='2023-03-06T17:32:46.099Z' start='2023-03-06T17:32:46.099Z' stale='2024-03-05T17:32:46.099Z' how='h-g-i-g-o'>
+    <point lat='39.8057549' lon='-83.8921087' hae='272.659' ce='9999999.0' le='9999999.0' />
+    <detail>
+        <precisionlocation altsrc='DTED0'/>
+        <contact callsign='VideoSalesman'/>
+        <__videoCollections>
+            <videoCollection uid='cam-1' alias='Camera 1'>
+                <feed uid='cam-1-hi' alias='Camera 1 (High Res)' active='true' url='http://media.developer.dolby.com/Atmos/MP4/Universe_Fury2.mp4'/>
+                <feed uid='cam-1-lo' alias='Camera 1 (Low Res)' active='false' url='http://media.developer.dolby.com/Atmos/MP4/shattered-3Mb.mp4'/>
+            </videoCollection>
+            <videoCollection uid='cam-2' alias='Camera 2'>
+                <feed uid='cam-2-def' alias='Camera 2 (Default)' active='true' url='http://media.developer.dolby.com/DDP/MP4_HPL40_30fps_channel_id_51.mp4'/>
+            </videoCollection>
+            <videoCollection uid='cam-3' alias='Camera 3'>
+                <feed uid='cam-3-def' alias='Camera 3 (Default)' active='true' url='http://media.developer.dolby.com/DDP/MP4_HPL40_30fps_channel_id_51.mp4'/>
+            </videoCollection>
+            <videoCollection uid='cam-4' alias='Camera 4'>
+                <feed uid='cam-4-def' alias='Camera 4 (Default)' active='true' url='http://media.developer.dolby.com/DDP/MP4_HPL40_30fps_channel_id_51.mp4'/>
+            </videoCollection>
+            <videoCollection uid='cam-5' alias='Camera 5'>
+                <feed uid='cam-5-def' alias='Camera 5 (Default)' active='true' url='http://media.developer.dolby.com/DDP/MP4_HPL40_30fps_channel_id_51.mp4'/>
+            </videoCollection>
+            <videoCollection uid='cam-6' alias='Camera 6'>
+                <feed uid='cam-6-def' alias='Camera 6 (Default)' active='true' url='http://media.developer.dolby.com/DDP/MP4_HPL40_30fps_channel_id_51.mp4'/>
+            </videoCollection>
+        </__videoCollections>
+        <!-- <__video url='http://media.developer.dolby.com/Atmos/MP4/Universe_Fury2.mp4'/> -->
+    </detail>
+</event>

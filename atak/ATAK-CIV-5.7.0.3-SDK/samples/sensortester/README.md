@@ -1,0 +1,35 @@
+Sensor Tester
+
+
+_________________________________________________________________
+PURPOSE AND CAPABILITIES
+
+Simple Example for how to read all of the sensors on the device.
+
+
+_________________________________________________________________
+STATUS
+
+completed
+
+_________________________________________________________________
+POINT OF CONTACTS
+
+Shawn Bisgrove 
+
+_________________________________________________________________
+PORTS REQUIRED
+
+(This is important for ATO, networking, and other security concerns)
+
+_________________________________________________________________
+EQUIPMENT REQUIRED
+
+_________________________________________________________________
+EQUIPMENT SUPPORTED
+
+_________________________________________________________________
+COMPILATION
+
+_________________________________________________________________
+DEVELOPER NOTES

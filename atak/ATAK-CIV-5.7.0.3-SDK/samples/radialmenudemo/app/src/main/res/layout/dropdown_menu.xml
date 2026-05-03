@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.atakmap.android.radialmenudemo.DropdownMenuView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical">
+
+    <TableLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"><!-- layout_weight  here only forces buttons to end!-->
+        <TableRow>
+            <TextView android:text="@string/menuTitle" />
+            <TextView android:id="@+id/menu_title" />
+        </TableRow>
+        <TableRow>
+            <TextView android:text="@string/menuType" />
+            <TextView android:id="@+id/menu_type" />
+        </TableRow>
+        <TableRow
+            android:id="@+id/submenu_header">
+            <ImageView
+                android:id="@+id/icon_view"
+                android:layout_gravity="end"/>
+            <TextView android:id="@+id/submenu_value" />
+        </TableRow>
+    </TableLayout>
+
+    <ImageButton
+        android:id="@+id/parent_menu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/back"
+        android:src="@android:drawable/ic_menu_revert" />
+
+    <ImageButton
+        android:id="@+id/edit_menu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/edit"
+        android:src="@android:drawable/ic_menu_edit" />
+
+    <ImageButton
+        android:id="@+id/add_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/add"
+        android:src="@android:drawable/ic_menu_add" />
+</com.atakmap.android.radialmenudemo.DropdownMenuView>

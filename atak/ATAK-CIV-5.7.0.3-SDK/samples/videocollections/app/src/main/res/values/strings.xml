@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">VideoCollections</string>
+    <!-- description -->
+    <string name="app_desc">This plugin implements support for the newer VideoCollections CoT detail schema</string>
+    <string name="displays_video_feed">Displays video feed</string>
+    <string name="adds_video_feed">Adds video feed</string>
+    <string name="adds_video_collection">Adds video collection</string>
+    <string name="removes_video_collection">Removes video collection</string>
+    <string name="removes_video_feed">Removes video feed</string>
+
+</resources>

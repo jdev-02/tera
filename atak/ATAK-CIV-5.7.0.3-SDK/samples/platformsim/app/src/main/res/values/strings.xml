@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <!-- description -->
+    <string name="app_name">Platform Simulator</string>
+    <string name="app_desc"></string>
+
+
+
+    <string name="wxView">Platform Simulator</string>
+    <string name="wxCoord">-- \n-- ft MSL</string>
+    <string name="wxPan">Pan</string>
+    <string name="wxDate">Date</string>
+    <string name="wxLocation">Location</string>
+    <string name="wxTemperature">Temperature</string>
+    <string name="wxCondition">Condition</string>
+    <string name="platformSimOrbit">Orbit</string>
+    <string name="platformSimSpi">SPI Point</string>
+    <string name="platformSimClear">Clear</string>
+    <string name="platformSimPause">Pause</string>
+    <string name="platformSimResume">Resume</string>
+    <string name="platformSimOrbitCenter">Center</string>
+    <string name="platformSimOrbitRadius">Radius</string>
+</resources>

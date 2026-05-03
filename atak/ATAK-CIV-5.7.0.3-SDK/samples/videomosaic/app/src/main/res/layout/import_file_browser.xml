@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.atakmap.android.plugins.videomosaic.VideoImportFileBrowser xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical" >
+
+    <TextView 
+        android:id="@+id/importBrowserCurrentDirectory"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:textSize="@dimen/draper_title_font"
+        android:textColor="#FFF"
+        android:gravity="left"/>
+    <View 
+        android:layout_width="fill_parent"
+        android:layout_height="2dp"
+        android:background="#CCC"/>
+    <ListView 
+        android:id="@+id/importBrowserFileItemList"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent"/>
+</com.atakmap.android.plugins.videomosaic.VideoImportFileBrowser>

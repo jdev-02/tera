@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">  
+    <item type="integer" name="fontStyle">0</item>
+    <item type="integer" name="ellipsization">3</item>
+    <item type="integer" name ="numberofLines">1</item>
+    <item type="bool" name="oneLine">true</item>
+</resources>

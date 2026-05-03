@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">Hello JNI Tool</string>
+    <string name="hello_world">Hello JNI</string>
+    <!-- description -->
+    <string name="app_desc">Hello JNI Plugin</string>
+
+</resources>

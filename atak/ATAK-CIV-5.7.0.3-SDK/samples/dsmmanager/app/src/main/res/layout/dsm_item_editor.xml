@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical" android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="5dp"
+        android:orientation="horizontal" >
+
+        <TextView
+            android:layout_width="150dp"
+            android:textColor="@color/white"
+            android:layout_height="wrap_content"
+            android:text="@string/model"
+            android:textSize="18sp"/>
+        <com.atakmap.android.gui.PluginSpinner
+            android:layout_width="100dp"
+            android:layout_height="wrap_content"
+            style="@style/darkButton"
+            android:padding="6dp"
+            android:id="@+id/dsm_edit_model_spinner"/>
+    </LinearLayout>
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="5dp"
+        android:orientation="horizontal" >
+
+        <TextView
+            android:layout_width="150dp"
+            android:textColor="@color/white"
+            android:layout_height="wrap_content"
+            android:text="@string/units"
+            android:textSize="18sp"/>
+        <com.atakmap.android.gui.PluginSpinner
+            android:layout_width="100dp"
+            android:layout_height="wrap_content"
+            style="@style/darkButton"
+            android:textColor="@color/white"
+            android:padding="6dp"
+            android:id="@+id/dsm_edit_units_spinner"/>
+    </LinearLayout>
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="5dp"
+        android:orientation="horizontal" >
+
+        <TextView
+            android:layout_width="150dp"
+            android:textColor="@color/white"
+            android:layout_height="wrap_content"
+            android:text="@string/reference"
+            android:textSize="18sp"/>
+        <com.atakmap.android.gui.PluginSpinner
+            android:layout_width="100dp"
+            android:layout_height="wrap_content"
+            style="@style/darkButton"
+            android:padding="6dp"
+            android:id="@+id/dsm_edit_reference_spinner"/>
+    </LinearLayout>
+
+</LinearLayout>

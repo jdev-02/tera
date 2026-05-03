@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <RelativeLayout
+        android:id="@+id/wx_report_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:id="@+id/wxReportTitle"
+        android:textColor="#FFFFFFFF"
+        android:textSize="25sp"
+        android:textStyle="bold"
+        android:text="@string/wxView"
+        android:gravity="center_horizontal"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:id="@+id/titleHorizontalBar"
+        android:background="@color/white"
+        android:layout_below="@+id/wxReportTitle"/>
+
+    <TextView
+            android:id="@+id/label_orbit"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFFFF"
+            android:textSize="20sp"
+            android:text="@string/platformSimOrbit"
+            android:layout_below="@+id/titleHorizontalBar"/>
+        
+    <LinearLayout
+        android:orientation="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/label_orbit"
+        android:id="@+id/platformSimOrbitLayout">
+        
+        <!-- orbit center -->
+        <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+    
+            <TextView
+                android:id="@+id/label_orbit_center"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/platformSimOrbitCenter"/>
+    
+            <Button
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:id="@+id/platformSimOrbitCoordButton"
+                style="@style/darkButton"
+                android:lines="2"
+                android:textSize="@dimen/draper_title_font"
+                android:text="@string/wxCoord"
+                android:gravity="center_vertical"
+                android:layout_weight="1"
+                android:paddingLeft="10dp"
+                android:visibility="gone"
+                />
+    
+            <ImageButton
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:id="@+id/platformSimOrbitCenterPickPointButton"
+                android:background="#0000"
+                android:src="@layout/panto_button"
+                android:contentDescription="@string/wxPan"
+                android:layout_gravity="center_vertical"
+                />
+        </LinearLayout>
+        
+        <!-- orbit radius -->
+       <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+    
+            <TextView
+                android:id="@+id/label_orbit_radius"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/platformSimOrbitRadius"/>
+     
+            <EditText
+                android:id="@+id/platformSimRadiusEditText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="numberDecimal"
+                android:visibility="gone"
+                />
+
+            <com.atakmap.android.gui.PluginSpinner
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:entries="@array/radiusUnits"
+                android:id="@+id/platformSimOrbitRadiusUnitSpinner"
+                android:visibility="gone"
+                />
+
+            <ImageButton
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:id="@+id/platformSimOrbitRadiusPickPointButton"
+                android:background="#0000"
+                android:src="@layout/panto_button"
+                android:contentDescription="@string/wxPan"
+                android:layout_gravity="center_vertical"
+                />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:id="@+id/orbitHorizontalBar"
+        android:background="@color/white"
+        android:layout_below="@+id/platformSimOrbitLayout"/>
+    
+
+        
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/orbitHorizontalBar"
+        android:id="@+id/platformSimSpiLayout">
+
+        <TextView
+            android:id="@+id/label_spi"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/platformSimSpi"/>
+
+        <Button
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:id="@+id/platformSimSpiCoordButton"
+            style="@style/darkButton"
+            android:lines="2"
+            android:textSize="@dimen/draper_title_font"
+            android:text="@string/wxCoord"
+            android:gravity="center_vertical"
+            android:layout_weight="1"
+            android:paddingLeft="10dp"
+            android:visibility="gone"
+            />
+
+        <ImageButton
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:id="@+id/platformSimSpiPickPointButton"
+            android:background="#0000"
+            android:src="@layout/panto_button"
+            android:contentDescription="@string/wxPan"
+            android:layout_gravity="center_vertical"
+            />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:id="@+id/spiHorizontalBar"
+        android:background="@color/white"
+        android:layout_below="@+id/platformSimSpiLayout"/>
+    
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/spiHorizontalBar" >
+
+        <Button
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:id="@+id/platformSimClearButton"
+            style="@style/darkButton"
+            android:lines="2"
+            android:textSize="@dimen/draper_title_font"
+            android:text="@string/platformSimClear"
+            android:gravity="center_vertical"
+            android:layout_weight="1"
+            android:paddingLeft="10dp"/>
+
+        <Button
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:id="@+id/platformSimPauseButton"
+            style="@style/darkButton"
+            android:lines="2"
+            android:textSize="@dimen/draper_title_font"
+            android:text="@string/platformSimPause"
+            android:gravity="center_vertical"
+            android:layout_weight="1"
+            android:paddingLeft="10dp"/>
+        
+        <Button
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:id="@+id/platformSimResumeButton"
+            style="@style/darkButton"
+            android:lines="2"
+            android:textSize="@dimen/draper_title_font"
+            android:text="@string/platformSimResume"
+            android:gravity="center_vertical"
+            android:layout_weight="1"
+            android:paddingLeft="10dp"/>
+    </LinearLayout>
+    
+    </RelativeLayout>
+</ScrollView>

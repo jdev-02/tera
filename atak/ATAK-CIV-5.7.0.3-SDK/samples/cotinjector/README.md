@@ -1,0 +1,37 @@
+CoT Injector
+
+
+_________________________________________________________________
+PURPOSE AND CAPABILITIES
+
+This plugin provides the capability of injecting an arbitrary
+number of CoT entities into the internal processing pipeline
+for stress testing/performance profiling activities.
+
+
+_________________________________________________________________
+STATUS
+
+In Progress
+
+_________________________________________________________________
+POINT OF CONTACTS
+
+Judd Richards (judd.richards@tak.gov)
+
+_________________________________________________________________
+PORTS REQUIRED
+
+NONE
+
+_________________________________________________________________
+EQUIPMENT REQUIRED
+
+_________________________________________________________________
+EQUIPMENT SUPPORTED
+
+_________________________________________________________________
+COMPILATION
+
+_________________________________________________________________
+DEVELOPER NOTES

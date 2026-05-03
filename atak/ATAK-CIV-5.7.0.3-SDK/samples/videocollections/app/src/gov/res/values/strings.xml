@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">VideoCollections</string>
+    <!-- description -->
+    <string name="app_desc">This plugin implements support for the newer VideoCollections CoT detail schema</string>
+
+    <!-- will be wired in for 4.4 if the above is deemed acceptable -->
+    <string name="app_distro_statement">DISTRIBUTION STATEMENT A. Approved for public release: distribution unlimited.</string>
+
+</resources>

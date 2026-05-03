@@ -1,0 +1,102 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- allows for the app to run the notification service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+
+    <!-- Android 13 required for posting notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Allow for the app to run independent of battery restrictions -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+
+    <application 
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:description="@string/app_desc"
+        android:theme="@style/AppTheme" >
+        <meta-data android:name="plugin-api" android:value="${atakApiVersion}"/>
+        <meta-data android:name="app_desc" android:value="@string/app_desc"/>
+
+
+  
+        <provider android:name="com.javacodegeeks.android.contentprovidertest.BirthProvider"
+            android:authorities="com.javacodegeeks.provider.Birthday"
+            android:exported="true">
+        </provider>
+
+        <service
+            android:name="com.atakmap.android.helloworld.notification.NotificationService"
+            android:label="Plugin Notification Service"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="com.atakmap.android.helloworld.notification.NotificationService"/>
+            </intent-filter>
+        </service>
+
+        <service
+            android:name="com.atakmap.android.helloworld.service.ExampleAidlService"
+            android:label="Plugin Aidl Service"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="com.atakmap.android.helloworld.service.ExampleAidlService"/>
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name="com.atakmap.android.helloworld.CameraActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen"
+            android:exported="true"
+            android:configChanges="orientation">
+        </activity>
+
+       <!-- Commented out, functionality absorbed by SpeechToActivity
+        <activity
+            android:name="com.atakmap.android.helloworld.SpeechToTextActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true"
+            android:configChanges="orientation"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="com.atakmap.android.helloworld.SpeechToTextActivity"/>
+            </intent-filter>
+        </activity>
+        -->
+        <activity
+            android:name="com.atakmap.android.helloworld.speechtotext.SpeechToActivity"
+            android:theme="@style/Theme.Transparent"
+            android:exported="true"
+            android:configChanges="orientation"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="com.atakmap.android.helloworld.SpeechToActivity"/>
+            </intent-filter>
+        </activity>
+
+       <!-- allow for plugin discovery -->
+       <activity android:name="com.atakmap.app.component"
+           android:exported="true"
+           tools:ignore="MissingClass">
+           <intent-filter android:label="@string/app_name">
+              <action android:name="com.atakmap.app.component" />
+           </intent-filter>
+       </activity>
+
+
+        <activity android:name="com.atakmap.android.helloworld.PluginPermissionActivity"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:screenOrientation="behind"
+            android:theme="@style/PermissionTheme">
+            <intent-filter>
+                <action android:name="com.atakmap.android.sip.SipPermissionsActivity" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

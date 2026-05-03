@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- match parent for small screens -->
+    <integer name="currency_dialog_width">-1</integer>
+    <integer name="currency_dialog_height">-1</integer>
+</resources>

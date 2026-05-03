@@ -1,0 +1,40 @@
+SMSService Plugin
+
+
+_________________________________________________________________
+PURPOSE AND CAPABILITIES
+
+Sample program to demonstrate how to use AIDL and Permissions in order to accomplish getting
+a permission that was previously not defined in ATAK set, so that the plugin can pass information
+to itself.
+
+
+
+
+
+_________________________________________________________________
+STATUS
+
+Sample/Training
+
+_________________________________________________________________
+POINT OF CONTACTS
+
+shawn_bisgrove@partech.com
+
+_________________________________________________________________
+PORTS REQUIRED
+
+None
+
+_________________________________________________________________
+EQUIPMENT REQUIRED
+
+_________________________________________________________________
+EQUIPMENT SUPPORTED
+
+_________________________________________________________________
+COMPILATION
+
+_________________________________________________________________
+DEVELOPER NOTES

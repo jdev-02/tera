@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">MetricsApi Plugin</string>
+    <!-- description -->
+    <string name="app_desc">This plugin demonstrate bare bones usage of the metrics api plugin</string>
+
+
+
+
+</resources>

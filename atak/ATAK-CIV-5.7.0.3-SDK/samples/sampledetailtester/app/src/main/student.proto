@@ -1,0 +1,21 @@
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+
+package com.atakmap.android.sampledetailtester.proto;
+
+option java_multiple_files = true;
+
+message Period {
+    int32 number = 1;
+    int32 absences = 2;
+    string teacher = 3;
+    double gps = 4;
+    string room = 5;
+}
+
+message Student {
+    string firstname = 1;
+    string surname = 2;
+    int32 grade = 3;
+    repeated Period period = 4;
+}

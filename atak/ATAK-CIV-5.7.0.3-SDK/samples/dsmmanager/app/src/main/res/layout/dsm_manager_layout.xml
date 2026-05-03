@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:weightSum="100"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:weightSum="1"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            android:text="Elevation Model Datasets"
+            android:layout_weight=".95"/>
+
+        <Switch
+            android:id="@+id/dsmEnabled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:textOff="OFF"
+            android:textOn="ON"/>
+
+        <ImageButton
+            android:id="@+id/dsmrefresh"
+            style="@style/darkButton"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:gravity="end"
+            android:padding="6dp"
+            android:layout_weight=".05"
+            android:src="@drawable/refresh" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="99"
+        android:orientation="vertical"
+        android:id="@+id/dsmReportOverlaysLayout">
+        <TextView android:id="@+id/empty"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textColor="#FF444444"
+            android:text="no DSM information in\natak/tools/dsm"
+            android:visibility="gone"/>
+
+        <ListView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+
+            android:fadeScrollbars="false"
+            android:id="@+id/listView" />
+    </LinearLayout>
+
+
+</LinearLayout>

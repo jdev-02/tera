@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- description -->
+    <string name="app_name">DSM Manager</string>
+    <string name="app_desc">Digital Surface Model for viewing terrain and building heights</string>
+
+
+    <!-- App -->
+    <string name="wxView">Wx Report</string>
+    <string name="wxCoord">-- \n-- ft MSL</string>
+    <string name="wxPan">Pan</string>
+    <string name="wxDate">Date: </string>
+    <string name="wxLocation">Location</string>
+    <string name="wxTemperature">Temperature</string>
+    <string name="wxCondition">Condition</string>
+    <string name="wxOverlayItemTitle">Unknown</string>
+    <string name="wxOverlayItemToggleImage">wxOverlayItemToggleImage</string>
+    <string name="model">Model:</string>
+    <string name="units">Units:</string>
+    <string name="reference">Reference:</string>
+
+    <string-array name="dsm_model">
+        <item>Surface</item>
+        <item>Terrain</item>
+        <item>Terrain+Surface</item>
+    </string-array>
+
+    <string-array name="dsm_units">
+        <item>meters</item>
+        <item>feet</item>
+    </string-array>
+
+    <string-array name="dsm_reference">
+        <item>HAE</item>
+        <item>MSL</item>
+    </string-array>
+
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">SelfMarker Data</string>
+    <!-- description -->
+    <string name="app_desc">This plugin demonstrate to include information into a self marker.</string>
+
+
+
+
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">Action Bar Demo</string>
+    <!-- description -->
+    <string name="app_desc">This plugin demonstrates various APIs for the ATAK Action Bar</string>
+
+
+
+
+</resources>

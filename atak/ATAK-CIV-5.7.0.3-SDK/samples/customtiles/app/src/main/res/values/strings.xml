@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">Custom Tiles Example</string>
+    <string name="custom_tiles">Custom Tiles</string>
+    <!-- description -->
+    <string name="app_desc"></string>
+
+
+
+</resources>

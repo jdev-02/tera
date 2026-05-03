@@ -1,0 +1,50 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    
+    tools:ignore="GoogleAppIndexingWarning">
+
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:description="@string/app_desc"
+        android:extractNativeLibs="true"
+        android:theme="@style/AppTheme" >
+        <meta-data android:name="plugin-api" android:value="${atakApiVersion}"/>
+        <meta-data android:name="app_desc" android:value="@string/app_desc"/>
+
+
+        <service
+            android:name="com.atakmap.android.sms.service.SmsManagerService"
+            android:exported="true"
+            android:label="SmsManagerService">
+
+            <intent-filter>
+                <action android:name="com.atakmap.android.sms.service.SmsManagerService"/>
+            </intent-filter>
+        </service>
+
+        <activity android:name="com.atakmap.android.sms.service.PermissionActivity"
+            android:screenOrientation="behind"
+            android:exported="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"/>
+
+
+       <!-- This fictitious activity entry allow for ATAK 4.6.0.2 and newer to perform
+            plugin discovery  android devices.  If this is removed, the plugin will
+            not be able to be discovered or loaded.  -->
+       <activity android:name="com.atakmap.app.component"
+           android:exported="true"
+           tools:ignore="MissingClass">
+           <intent-filter android:label="@string/app_name">
+              <action android:name="com.atakmap.app.component" />
+           </intent-filter>
+       </activity>
+
+    </application>
+
+</manifest>

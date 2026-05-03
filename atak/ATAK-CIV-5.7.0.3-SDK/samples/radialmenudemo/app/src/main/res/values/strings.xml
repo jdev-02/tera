@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">Radial Menu Demo</string>
+    <!-- description -->
+    <string name="app_desc">This plugin demonstrates dynamically composable radial menus</string>
+
+    <!-- default image label -->
+    <string name="default_item_image">Default Item Image</string>
+    <!-- default text label -->
+    <string name="default_item_text">Default Item Text</string>
+
+    <string name="add">Add</string>
+    <string name="delete">Delete</string>
+    <string name="edit">Edit</string>
+    <string name="update">Update</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+
+    <!-- edit menus -->
+    <string name="editMenuTitle">Edit Menu</string>
+
+    <!-- edit buttons -->
+    <string name="editButtonTitle">Edit Menu Button</string>
+
+    <!-- other -->
+    <string name="keyText">Key Text</string>
+    <string name="valueText">Value Text</string>
+    <string name="prefsTitle">PrefKeysValues</string>
+    <string name="prefsKeys">PrefKeys</string>
+    <string name="prefsValues">PrefValues</string>
+    <string name="submenuTitle">Submenu</string>
+    <string name="onclickTitle">OnClick</string>
+    <string name="disabledTitle">Disabled</string>
+    <string name="buttonRadius">Button Radius</string>
+    <string name="buttonSpan">Button Span</string>
+    <string name="buttonWidth">Button Width</string>
+    <string name="buttonBackground">Button Background</string>
+    <string name="iconTitle">Icon</string>
+    <string name="angleTitle">Angle</string>
+    <string name="radius">Radius</string>
+    <string name="width">Width</string>
+    <string name="mapItemType">Map Item Type</string>
+    <string name="mapItemTitle">Map Item Title</string>
+    <string name="back">Back</string>
+    <string name="dropper">Dropper</string>
+    <string name="menuTitle">Title</string>
+    <string name="menuType">Type</string>
+    <string name="coveredAngleTitle">Covered Angle</string>
+    <string name="startAngleTitle">Start Angle</string>
+    <string name="innerRadius">Inner Radius</string>
+    <string name="buttonWinding">Button Winding</string>
+    <string name="clockwise">Clockwise</string>
+    <string name="counter_clockwise">CounterClockwise</string>
+    <string name="span">Span</string>
+    <string name="weightTitle">Weight</string>
+
+
+</resources>

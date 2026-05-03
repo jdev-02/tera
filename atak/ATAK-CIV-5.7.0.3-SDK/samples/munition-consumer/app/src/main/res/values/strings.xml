@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">Munition Consumer</string>
+    <!-- description -->
+    <string name="app_desc">This plugin demonstrate a consumer written to make use of the data provider interface</string>
+    <string name="standing">Standing (m)</string>
+    <string name="prone">Prone (m)</string>
+    <string name="prone_protected">Prone Protected (m)</string>
+    <string name="ricochet_fan">Ricochet Fan</string>
+    <string name="munitions">Munitions</string>
+    <string name="warning">Munitions Dataset Not Found / Unsupported in this version of ATAK</string>
+
+
+</resources>

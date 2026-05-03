@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CoT Injector</string>
+    <string name="app_desc">This plugin can be used to generate internal CoT traffic for stress testing</string>
+    <string name="start">Start</string>
+    <string name="stop">Stop</string>
+    <string name="count">Count</string>
+    <string name="interval">Interval</string>
+    <string name="lower_left">Lower Left</string>
+    <string name="upper_right">Upper Right</string>
+    <string name="latitude">Latitude</string>
+    <string name="longitude">Longitude</string>
+    <string name="threads">Threads</string>
+    <string name="count_per_thread">Count (per thread)</string>
+    <string name="reset">Reset</string>
+    <string name="updates">Updates</string>
+</resources>
