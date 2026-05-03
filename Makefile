@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert atak-link-server atak-link-test tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert atak-link-server atak-link-test tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -163,6 +163,9 @@ demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
 
 eval: install ## Run the 20-prompt regression set
 	$(PYTHON) -m eval.runner
+
+jetson-autoupdate-install: ## Install systemd services on Jetson to auto-pull origin/main and restart planner
+	@bash deploy/scripts/install_jetson_autoupdate.sh
 
 clean: ## Remove venv and caches
 	rm -rf $(VENV) .pytest_cache .ruff_cache .mypy_cache __pycache__
