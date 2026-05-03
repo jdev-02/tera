@@ -175,6 +175,9 @@ DEFAULT_CENTER_MGRS = "11S KC 79790 48252"
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "38.35537339313087"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-119.52018528165966"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
+UTM_LATITUDE_BANDS = "CDEFGHJKLMNPQRSTUVWX"
+MGRS_COLUMN_LETTER_SETS = ("ABCDEFGH", "JKLMNPQR", "STUVWXYZ")
+MGRS_ROW_LETTER_SETS = ("ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE")
 TERA_ATAK_MODEL = os.getenv("TERA_ATAK_MODEL", "gemma3:4b")
 TERA_ATAK_AGENT_PROFILE = os.getenv("TERA_ATAK_AGENT_PROFILE", "tera-atak-live")
 TERA_ATAK_DEVICE_URL = os.getenv("TERA_ATAK_DEVICE_URL", "").strip()
@@ -5950,6 +5953,185 @@ def _tak_item_distance_text(item: TakCotItem) -> str:
     return f" ({raw_distance:.0f} m)"
 
 
+def _clamp_number(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _utm_zone_for_lat_lon(lat: float, lon: float) -> int:
+    zone = int(math.floor((lon + 180.0) / 6.0) + 1)
+    zone = int(_clamp_number(zone, 1, 60))
+    if 56 <= lat < 64 and 3 <= lon < 12:
+        return 32
+    if 72 <= lat < 84:
+        if 0 <= lon < 9:
+            return 31
+        if 9 <= lon < 21:
+            return 33
+        if 21 <= lon < 33:
+            return 35
+        if 33 <= lon < 42:
+            return 37
+    return zone
+
+
+def _utm_latitude_band(lat: float) -> str:
+    if lat >= 84:
+        return "X"
+    if lat < -80:
+        return "C"
+    index = int(_clamp_number(math.floor((lat + 80.0) / 8.0), 0, len(UTM_LATITUDE_BANDS) - 1))
+    return UTM_LATITUDE_BANDS[index]
+
+
+def _lat_lon_to_utm(lat: float, lon: float) -> dict[str, int | str]:
+    a = 6378137.0
+    f = 1 / 298.257223563
+    k0 = 0.9996
+    e_sq = f * (2 - f)
+    e_prime_sq = e_sq / (1 - e_sq)
+    zone = _utm_zone_for_lat_lon(lat, lon)
+    lon_origin = (zone - 1) * 6 - 180 + 3
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    lon_origin_rad = math.radians(lon_origin)
+    sin_lat = math.sin(lat_rad)
+    cos_lat = math.cos(lat_rad)
+    tan_lat = math.tan(lat_rad)
+    n = a / math.sqrt(1 - e_sq * sin_lat * sin_lat)
+    t = tan_lat * tan_lat
+    c = e_prime_sq * cos_lat * cos_lat
+    aa = cos_lat * (lon_rad - lon_origin_rad)
+    m = a * (
+        (1 - e_sq / 4 - (3 * e_sq * e_sq) / 64 - (5 * e_sq * e_sq * e_sq) / 256)
+        * lat_rad
+        - ((3 * e_sq) / 8 + (3 * e_sq * e_sq) / 32 + (45 * e_sq * e_sq * e_sq) / 1024)
+        * math.sin(2 * lat_rad)
+        + ((15 * e_sq * e_sq) / 256 + (45 * e_sq * e_sq * e_sq) / 1024)
+        * math.sin(4 * lat_rad)
+        - ((35 * e_sq * e_sq * e_sq) / 3072) * math.sin(6 * lat_rad)
+    )
+    easting = k0 * n * (
+        aa
+        + ((1 - t + c) * aa**3) / 6
+        + ((5 - 18 * t + t * t + 72 * c - 58 * e_prime_sq) * aa**5) / 120
+    ) + 500000.0
+    northing = k0 * (
+        m
+        + n
+        * tan_lat
+        * (
+            (aa * aa) / 2
+            + ((5 - t + 9 * c + 4 * c * c) * aa**4) / 24
+            + ((61 - 58 * t + t * t + 600 * c - 330 * e_prime_sq) * aa**6) / 720
+        )
+    )
+    if lat < 0:
+        northing += 10000000.0
+    return {
+        "zone": zone,
+        "band": _utm_latitude_band(lat),
+        "easting": int(round(easting)),
+        "northing": int(round(northing)),
+    }
+
+
+def _utm_to_mgrs(utm: dict[str, int | str]) -> str:
+    zone = int(utm["zone"])
+    easting = int(utm["easting"])
+    northing = int(utm["northing"])
+    column_set = MGRS_COLUMN_LETTER_SETS[(zone - 1) % len(MGRS_COLUMN_LETTER_SETS)]
+    row_set = MGRS_ROW_LETTER_SETS[(zone - 1) % len(MGRS_ROW_LETTER_SETS)]
+    column_index = int(_clamp_number(math.floor(easting / 100000) - 1, 0, len(column_set) - 1))
+    row_index = math.floor(northing / 100000) % len(row_set)
+    square = f"{column_set[column_index]}{row_set[row_index]}"
+    easting_text = str(easting % 100000).zfill(5)
+    northing_text = str(northing % 100000).zfill(5)
+    return f"{zone}{utm['band']} {square} {easting_text} {northing_text}"
+
+
+def _lat_lon_to_mgrs(lat: float, lon: float) -> str:
+    if lat < -80 or lat >= 84:
+        return "MGRS unavailable"
+    return _utm_to_mgrs(_lat_lon_to_utm(lat, lon))
+
+
+def _point_mgrs(lat: float | None, lon: float | None) -> str | None:
+    if lat is None or lon is None:
+        return None
+    try:
+        return _lat_lon_to_mgrs(float(lat), float(lon))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _tak_item_mgrs_text(item: TakCotItem) -> str:
+    if item.item_type == "route" and item.checkpoints:
+        grid_parts: list[str] = []
+        for checkpoint in item.checkpoints:
+            mgrs = _point_mgrs(checkpoint.lat, checkpoint.lon)
+            if mgrs:
+                grid_parts.append(f"{checkpoint.label} MGRS {mgrs}")
+        if grid_parts:
+            return "TAK grids: " + " | ".join(grid_parts) + "."
+    mgrs = _point_mgrs(item.lat, item.lon)
+    if mgrs:
+        label = _tak_item_target_label(item)
+        return f"TAK grid: {label} MGRS {mgrs}."
+    return ""
+
+
+_LABELED_LAT_LON_RE = re.compile(
+    r"\b(?:lat(?:itude)?\.?\s*[:=]?\s*)(?P<lat>[+-]?\d{1,2}(?:\.\d+)?)"
+    r"\s*(?:,|/|\s+)\s*(?:lon(?:gitude)?\.?\s*[:=]?\s*)"
+    r"(?P<lon>[+-]?\d{1,3}(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_LABELED_LON_LAT_RE = re.compile(
+    r"\b(?:lon(?:gitude)?\.?\s*[:=]?\s*)(?P<lon>[+-]?\d{1,3}(?:\.\d+)?)"
+    r"\s*(?:,|/|\s+)\s*(?:lat(?:itude)?\.?\s*[:=]?\s*)"
+    r"(?P<lat>[+-]?\d{1,2}(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_DECIMAL_COORD_PAIR_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?P<a>[+-]?\d{1,3}\.\d{3,})\s*,\s*"
+    r"(?P<b>[+-]?\d{1,3}\.\d{3,})(?![A-Za-z0-9_-])"
+)
+
+
+def _mgrs_replacement(lat: float, lon: float) -> str:
+    return f"MGRS {_lat_lon_to_mgrs(lat, lon)}"
+
+
+def _replace_chat_coordinates_with_mgrs(text: str) -> str:
+    def replace_labeled_lat_lon(match: re.Match[str]) -> str:
+        return _mgrs_replacement(float(match.group("lat")), float(match.group("lon")))
+
+    def replace_labeled_lon_lat(match: re.Match[str]) -> str:
+        return _mgrs_replacement(float(match.group("lat")), float(match.group("lon")))
+
+    def replace_decimal_pair(match: re.Match[str]) -> str:
+        first = float(match.group("a"))
+        second = float(match.group("b"))
+        if -90 <= first <= 90 and -180 <= second <= 180 and abs(second) > 90:
+            return _mgrs_replacement(first, second)
+        if -180 <= first <= 180 and abs(first) > 90 and -90 <= second <= 90:
+            return _mgrs_replacement(second, first)
+        return match.group(0)
+
+    text = _LABELED_LAT_LON_RE.sub(replace_labeled_lat_lon, text)
+    text = _LABELED_LON_LAT_RE.sub(replace_labeled_lon_lat, text)
+    return _DECIMAL_COORD_PAIR_RE.sub(replace_decimal_pair, text)
+
+
+def _atak_chat_response_text(text: str, tak_cot: TakCotPayload) -> str:
+    text = _replace_chat_coordinates_with_mgrs(text)
+    if tak_cot.items and "TAK grid" not in text:
+        grid_text = _tak_item_mgrs_text(tak_cot.items[0])
+        if grid_text:
+            return f"{text}\n\n{grid_text}"
+    return text
+
+
 def _decisive_tak_response_text(text: str, tak_cot: TakCotPayload) -> str:
     if not (
         _looks_like_blocking_clarification(text)
@@ -5962,13 +6144,17 @@ def _decisive_tak_response_text(text: str, tak_cot: TakCotPayload) -> str:
         label = _tak_item_target_label(first)
         distance = _tak_item_distance_text(first)
         if first.item_type == "route":
+            grid_text = _tak_item_mgrs_text(first)
+            grid_sentence = f" {grid_text}" if grid_text else ""
             return (
-                f"Best route generated to {label}{distance}. TAK route, checkpoints, "
+                f"Best route generated to {label}{distance}.{grid_sentence} TAK route, checkpoints, "
                 "and package are attached. Review on the map; reply 'alternate' or "
                 "tell me what is blocked and I will rework it."
             )
+        grid_text = _tak_item_mgrs_text(first)
+        grid_sentence = f" {grid_text}" if grid_text else ""
         return (
-            f"Best local points generated for {label}{distance}. TAK markers and "
+            f"Best local points generated for {label}{distance}.{grid_sentence} TAK markers and "
             "package are attached. Reply with what to refine if you need a different "
             "selection."
         )
@@ -6897,6 +7083,11 @@ def _build_system_prompt(request: PromptRequest) -> str:
                 "- Use deterministic server outputs first. Once a route, checkpoint set, "
                 "water point, or CoT/KMZ package is available, summarize that action and "
                 "give the operator a quick refinement path instead of asking for more data."
+            ),
+            (
+                "- When speaking to the ATAK operator, express every coordinate or grid "
+                "reference in MGRS only. Do not put decimal latitude/longitude in chat; "
+                "those coordinates belong only inside the TAK CoT/KMZ payload."
             ),
             (
                 "- For follow-up rejection like 'that route does not work' or 'we cannot "
@@ -9059,6 +9250,8 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
         raise
     result.tak_cot = _build_tak_cot_payload(request, result.response)
     result.response = _decisive_tak_response_text(result.response, result.tak_cot)
+    if "atak" in (request.agent_profile or "").lower():
+        result.response = _atak_chat_response_text(result.response, result.tak_cot)
     if mirror:
         outbound_text = _response_text_with_tak_cot_summary(
             result.response,
@@ -9161,6 +9354,8 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                 )
                 result.tak_cot = _build_tak_cot_payload(request, result.response)
                 mirror_text = _decisive_tak_response_text(result.response, result.tak_cot)
+                if "atak" in (request.agent_profile or "").lower():
+                    mirror_text = _atak_chat_response_text(mirror_text, result.tak_cot)
                 if mirror:
                     _append_atak_mirror_event(
                         source="tera-agent",
@@ -9254,6 +9449,11 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                         streamed_text,
                                         tak_cot,
                                     )
+                                    if "atak" in (request.agent_profile or "").lower():
+                                        mirror_text = _atak_chat_response_text(
+                                            mirror_text,
+                                            tak_cot,
+                                        )
                                     if mirror:
                                         _append_atak_mirror_event(
                                             source="tera-agent",

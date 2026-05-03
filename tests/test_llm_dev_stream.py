@@ -260,6 +260,7 @@ def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
     assert "OSM vectors from /WINTAK Imagery and DTED terrain from /DTED" in system_prompt
     assert "do not ask the operator to choose among streams, springs, lakes" in system_prompt
     assert "Pick the best candidate" in system_prompt
+    assert "express every coordinate or grid reference in MGRS only" in system_prompt
 
 
 def test_atak_prompt_source_catalog_is_limited_to_root_osm_and_dted() -> None:
@@ -930,8 +931,23 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
     )
     assert "Best route generated to Demo Creek" in decisive
     assert "TAK route, checkpoints, and package are attached" in decisive
+    assert "TAK grids: Start MGRS" in decisive
+    assert f"Demo Creek MGRS {kmh_app._lat_lon_to_mgrs(37.795, -122.392)}" in decisive
     assert "streams, springs, or lakes" not in decisive
     assert "reply 'alternate'" in decisive
+
+    atak_chat_text = kmh_app._atak_chat_response_text(
+        (
+            "Client at lat 37.790000, lon -122.400000. "
+            "Target coordinate -122.392000, 37.795000."
+        ),
+        payload,
+    )
+    assert "MGRS 10S" in atak_chat_text
+    assert "37.790000" not in atak_chat_text
+    assert "-122.400000" not in atak_chat_text
+    assert "37.795000" not in atak_chat_text
+    assert "-122.392000" not in atak_chat_text
 
     forbidden_source_response = kmh_app._decisive_tak_response_text(
         (
@@ -1240,6 +1256,9 @@ async def test_runtime_config_defaults_to_demo_mgrs_center() -> None:
     response = await kmh_app.runtime_config()
 
     assert kmh_app.DEFAULT_CENTER_MGRS == "11S KC 79790 48252"
+    assert kmh_app._lat_lon_to_mgrs(kmh_app.DEFAULT_LAT, kmh_app.DEFAULT_LON) == (
+        kmh_app.DEFAULT_CENTER_MGRS
+    )
     assert response.default_lat == pytest.approx(38.35537339313087)
     assert response.default_lon == pytest.approx(-119.52018528165966)
     assert response.default_height_m == pytest.approx(14000)
