@@ -259,6 +259,26 @@ def test_planner_workflow_has_carousel_and_resizable_ao_handles() -> None:
     assert "finishAreaResize" in js
 
 
+def test_planner_opens_questions_and_uses_compact_source_checklist() -> None:
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "ensureClarifyingQuestions" in js
+    assert "state.workflowStageIndex = 1;" in js
+    assert "Use Questions to scope, then confirm sources." in js
+    assert "Next questions:" not in js
+
+    assert 'article.className = "source-item compact-source-item";' in js
+    assert 'article.title = `${source.category} | ${formatSourceStatus(source)}`;' in js
+    assert 'purpose.className = "source-purpose"' not in js
+    assert 'meta.className = "source-meta"' not in js
+
+    assert "--text-base: 12px;" in css
+    assert "max-height: min(18vh, 180px);" in css
+    assert "grid-template-columns: auto minmax(0, 1fr);" in css
+    assert "min-height: 76px;" in css
+
+
 def test_source_planner_degrades_without_false_inference_failure() -> None:
     html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")

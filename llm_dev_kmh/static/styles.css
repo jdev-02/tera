@@ -20,12 +20,12 @@
 
   --text-xs: 10px;
   --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
-  --text-2xl: 24px;
-  --text-display: 34px;
+  --text-base: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-display: 32px;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -647,8 +647,8 @@ textarea {
 
 .workflow-carousel {
   display: grid;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
+  gap: var(--space-1);
+  margin-top: var(--space-1);
 }
 
 .workflow-nav {
@@ -705,7 +705,7 @@ textarea {
 
 .workflow-slide.active {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .workflow-card,
@@ -719,7 +719,7 @@ textarea {
 
 .workflow-card {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
   padding: var(--space-2);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
@@ -729,7 +729,7 @@ textarea {
   margin: 0;
   padding-left: var(--space-4);
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
   color: var(--color-text-secondary);
 }
 
@@ -781,17 +781,17 @@ textarea {
 
 .source-list {
   display: grid;
-  gap: var(--space-2);
-  max-height: min(42vh, 460px);
+  gap: var(--space-1);
+  max-height: min(18vh, 180px);
   overflow: auto;
-  margin: var(--space-2) 0;
+  margin: var(--space-1) 0;
   padding-right: var(--space-1);
 }
 
 .source-item {
   display: grid;
-  gap: var(--space-2);
-  padding: var(--space-2);
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
 }
 
 .source-item[data-selected="true"] {
@@ -801,11 +801,12 @@ textarea {
 
 .source-item-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-2);
   align-items: center;
   color: var(--color-text-primary);
   cursor: pointer;
+  min-height: 22px;
 }
 
 .source-item-header input,
@@ -819,6 +820,7 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 700;
+  font-size: var(--text-sm);
 }
 
 .source-category {
@@ -850,7 +852,7 @@ textarea {
 }
 
 .source-actions {
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .package-output {
@@ -1011,7 +1013,7 @@ textarea {
 }
 
 .chat-composer textarea {
-  min-height: 92px;
+  min-height: 76px;
 }
 
 .composer-actions {
