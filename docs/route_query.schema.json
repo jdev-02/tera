@@ -32,8 +32,8 @@
     },
     "max_distance_km": {
       "type": "number",
-      "minimum": 0,
-      "maximum": 10
+      "exclusiveMinimum": 0,
+      "maximum": 500
     },
     "constraints": {
       "type": "array",
