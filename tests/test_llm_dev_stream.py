@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import zipfile
 import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -897,6 +899,21 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
     assert detail.find("labels_on").attrib["value"] == "false"  # type: ignore[union-attr]
     assert item.metadata["target"]["source_layer"] == "waterways"
     assert item.metadata["takcot_schema"] == "Route.xsd"
+    assert payload.package is not None
+    assert payload.package.file_name == f"{payload.collection_uid}.kmz"
+    assert payload.package.format == "kmz"
+    assert payload.package.target_path == f"Internal storage/fromTERA/{payload.package.file_name}"
+    package_bytes = base64.b64decode(payload.package.content_b64)
+    assert payload.package.size_bytes == len(package_bytes)
+    with zipfile.ZipFile(BytesIO(package_bytes)) as package:
+        names = set(package.namelist())
+        assert "doc.kml" in names
+        assert "MANIFEST/manifest.xml" in names
+        assert f"cot/{item.uid}.xml" in names
+        kml = package.read("doc.kml").decode("utf-8")
+        assert "TERA route to Demo Creek" in kml
+        assert "-122.3920000,37.7950000,0.00" in kml
+        assert "Generated 1 TAK item" in package.read("MANIFEST/manifest.xml").decode("utf-8")
 
 
 def test_tak_cot_payload_prefers_client_location_and_visible_bounds(
@@ -1043,15 +1060,30 @@ def test_atak_plugin_understands_prompt_tak_cot_payload() -> None:
         / "values"
         / "strings.xml"
     ).read_text(encoding="utf-8")
+    manifest = (
+        repo_root
+        / "atak"
+        / "plugin"
+        / "app"
+        / "src"
+        / "main"
+        / "AndroidManifest.xml"
+    ).read_text(encoding="utf-8")
 
     assert "applyTakCot" in plugin_source
+    assert "saveTakPackage" in plugin_source
+    assert "Environment.getExternalStorageDirectory()" in plugin_source
+    assert '"fromTERA"' in plugin_source
+    assert "content_b64" in plugin_source
     assert "activeTeraItemUids" in plugin_source
     assert "activeTeraItems" in plugin_source
     assert "client_location" in plugin_source
     assert "client_location" in client_source
     assert "tera_active_items" in plugin_source
     assert "tak_cot" in client_source
+    assert "Internal storage/fromTERA" in client_source
     assert "/api/prompt" in strings
+    assert "MANAGE_EXTERNAL_STORAGE" in manifest
 
 
 @pytest.mark.asyncio

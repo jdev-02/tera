@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
+from io import BytesIO
 import json
 import math
 import os
@@ -353,12 +355,27 @@ class TakCotItem(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TakCotFilePackage(BaseModel):
+    file_name: str
+    format: Literal["kmz"] = "kmz"
+    mime_type: str = "application/vnd.google-earth.kmz"
+    encoding: Literal["base64"] = "base64"
+    content_b64: str
+    size_bytes: int
+    sha256: str
+    target_folder: str = "Internal storage/fromTERA"
+    target_path: str
+    kml_entry: str = "doc.kml"
+    item_count: int = 0
+
+
 class TakCotPayload(BaseModel):
     replace_existing: bool = True
     collection_uid: str | None = None
     summary: str = ""
     algorithm: str = ""
     items: list[TakCotItem] = Field(default_factory=list)
+    package: TakCotFilePackage | None = None
 
 
 class PromptResponse(BaseModel):
@@ -5138,6 +5155,127 @@ def _cot_text(text: str, *, max_length: int = 500) -> str:
     return re.sub(r"\s+", " ", text).strip()[:max_length]
 
 
+def _safe_tak_package_name(value: str | None, *, fallback: str = "TERA-TAK") -> str:
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", (value or fallback).strip()).strip("._-")
+    return candidate[:80] or fallback
+
+
+def _kml_coord(lon: float, lat: float, altitude: float | None = None) -> str:
+    return f"{lon:.7f},{lat:.7f},{0.0 if altitude is None else altitude:.2f}"
+
+
+def _tak_cot_payload_to_kml(tak_cot: TakCotPayload) -> str:
+    kml_ns = "http://www.opengis.net/kml/2.2"
+    kml = ET.Element("kml", {"xmlns": kml_ns})
+    document = ET.SubElement(kml, "Document")
+    document_name = _safe_tak_package_name(tak_cot.collection_uid, fallback="TERA TAK package")
+    ET.SubElement(document, "name").text = document_name
+    ET.SubElement(document, "description").text = tak_cot.summary
+
+    route_style = ET.SubElement(document, "Style", {"id": "tera-route"})
+    line_style = ET.SubElement(route_style, "LineStyle")
+    ET.SubElement(line_style, "color").text = "ffff8700"
+    ET.SubElement(line_style, "width").text = "5"
+
+    point_style = ET.SubElement(document, "Style", {"id": "tera-point"})
+    icon_style = ET.SubElement(point_style, "IconStyle")
+    ET.SubElement(icon_style, "scale").text = "1.1"
+
+    for item in tak_cot.items:
+        placemark = ET.SubElement(document, "Placemark")
+        ET.SubElement(placemark, "name").text = item.title or item.uid
+        description_parts = [
+            f"uid={item.uid}",
+            f"cot_type={item.cot_type}",
+            f"item_type={item.item_type}",
+        ]
+        if item.metadata.get("distance_m") is not None:
+            description_parts.append(f"distance_m={item.metadata['distance_m']}")
+        ET.SubElement(placemark, "description").text = "\n".join(description_parts)
+        extended = ET.SubElement(placemark, "ExtendedData")
+        for key, value in (
+            ("uid", item.uid),
+            ("cot_type", item.cot_type),
+            ("item_type", item.item_type),
+        ):
+            data = ET.SubElement(extended, "Data", {"name": key})
+            ET.SubElement(data, "value").text = value
+
+        if item.item_type == "route" and len(item.coordinates) >= 2:
+            ET.SubElement(placemark, "styleUrl").text = "#tera-route"
+            line = ET.SubElement(placemark, "LineString")
+            ET.SubElement(line, "tessellate").text = "1"
+            ET.SubElement(line, "coordinates").text = " ".join(
+                _kml_coord(float(coord[0]), float(coord[1]))
+                for coord in item.coordinates
+                if len(coord) >= 2
+            )
+            for checkpoint in item.checkpoints:
+                checkpoint_pm = ET.SubElement(document, "Placemark")
+                ET.SubElement(checkpoint_pm, "name").text = checkpoint.label
+                ET.SubElement(checkpoint_pm, "styleUrl").text = "#tera-point"
+                cp_extended = ET.SubElement(checkpoint_pm, "ExtendedData")
+                data = ET.SubElement(cp_extended, "Data", {"name": "uid"})
+                ET.SubElement(data, "value").text = checkpoint.uid
+                point = ET.SubElement(checkpoint_pm, "Point")
+                ET.SubElement(point, "coordinates").text = _kml_coord(
+                    checkpoint.lon,
+                    checkpoint.lat,
+                )
+        elif item.lat is not None and item.lon is not None:
+            ET.SubElement(placemark, "styleUrl").text = "#tera-point"
+            point = ET.SubElement(placemark, "Point")
+            ET.SubElement(point, "coordinates").text = _kml_coord(item.lon, item.lat)
+
+    ET.indent(kml, space="  ")
+    return ET.tostring(kml, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
+def _tak_data_package_manifest(tak_cot: TakCotPayload, cot_entries: list[str]) -> str:
+    manifest = ET.Element("MissionPackageManifest", {"version": "2"})
+    configuration = ET.SubElement(manifest, "Configuration")
+    ET.SubElement(configuration, "Parameter", {"name": "uid", "value": tak_cot.collection_uid or "TERA-TAK"})
+    ET.SubElement(configuration, "Parameter", {"name": "name", "value": "TERA TAK package"})
+    ET.SubElement(configuration, "Parameter", {"name": "remarks", "value": tak_cot.summary})
+    contents = ET.SubElement(manifest, "Contents")
+    ET.SubElement(contents, "Content", {"ignore": "false", "zipEntry": "doc.kml"})
+    for entry in cot_entries:
+        ET.SubElement(contents, "Content", {"ignore": "false", "zipEntry": entry})
+    ET.indent(manifest, space="  ")
+    return ET.tostring(manifest, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
+def _tak_cot_file_package(tak_cot: TakCotPayload) -> TakCotFilePackage | None:
+    if not tak_cot.items:
+        return None
+
+    file_stem = _safe_tak_package_name(tak_cot.collection_uid)
+    file_name = f"{file_stem}.kmz"
+    kml = _tak_cot_payload_to_kml(tak_cot)
+    cot_entries: list[str] = []
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.writestr("doc.kml", kml)
+        for item in tak_cot.items:
+            if not item.cot_xml:
+                continue
+            entry_name = f"cot/{_safe_tak_package_name(item.uid)}.xml"
+            cot_entries.append(entry_name)
+            package.writestr(entry_name, item.cot_xml)
+        package.writestr("MANIFEST/manifest.xml", _tak_data_package_manifest(tak_cot, cot_entries))
+
+    content = buffer.getvalue()
+    return TakCotFilePackage(
+        file_name=file_name,
+        content_b64=base64.b64encode(content).decode("ascii"),
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        target_path=f"Internal storage/fromTERA/{file_name}",
+        item_count=len(tak_cot.items),
+    )
+
+
 def _sign_cot_xml(
     *,
     uid: str,
@@ -5709,7 +5847,7 @@ def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCot
                 )
             )
 
-    return TakCotPayload(
+    payload = TakCotPayload(
         replace_existing=True,
         collection_uid=collection_uid,
         summary=(
@@ -5723,6 +5861,8 @@ def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCot
         ),
         items=items,
     )
+    payload.package = _tak_cot_file_package(payload)
+    return payload
 
 
 def _response_text_with_tak_cot_summary(text: str, tak_cot: TakCotPayload) -> str:

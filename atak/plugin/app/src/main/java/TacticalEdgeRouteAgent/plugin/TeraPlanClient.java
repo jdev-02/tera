@@ -393,19 +393,29 @@ final class TeraPlanClient {
                 String response = json.optString("response", "").trim();
                 JSONObject takCot = json.optJSONObject("tak_cot");
                 int takItemCount = 0;
+                String packageLine = "";
                 if (takCot != null && takCot.optJSONArray("items") != null) {
                     takItemCount = takCot.optJSONArray("items").length();
+                    JSONObject filePackage = takCot.optJSONObject("package");
+                    if (filePackage != null) {
+                        String fileName = filePackage.optString("file_name", "");
+                        if (!fileName.trim().isEmpty()) {
+                            packageLine = "\nTAK package: Internal storage/fromTERA/" + fileName;
+                        }
+                    }
                 }
                 if (!response.isEmpty()) {
                     if (takItemCount > 0) {
                         return new PromptResult(
                                 true,
-                                response + "\n\nTAK items: " + takItemCount + " placed/updated.");
+                                response + "\n\nTAK items: " + takItemCount + " placed/updated."
+                                        + packageLine);
                     }
                     return new PromptResult(true, response);
                 }
                 if (takItemCount > 0) {
-                    return new PromptResult(true, "TAK items: " + takItemCount + " placed/updated.");
+                    return new PromptResult(true, "TAK items: " + takItemCount + " placed/updated."
+                            + packageLine);
                 }
                 return new PromptResult(false, "Jetson returned an empty TERA response.");
             }
