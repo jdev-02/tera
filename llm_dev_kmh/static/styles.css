@@ -1090,6 +1090,65 @@ textarea {
   padding: 0 var(--space-1) 0 0;
 }
 
+.atak-mirror-panel {
+  display: grid;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  max-height: min(32vh, 260px);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.atak-mirror-header {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.atak-mirror-log {
+  display: grid;
+  gap: var(--space-2);
+  min-height: 72px;
+  overflow-y: auto;
+}
+
+.atak-mirror-empty {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.atak-mirror-event {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-status-online);
+  background: var(--color-bg-tertiary);
+}
+
+.atak-mirror-event.inbound {
+  border-left-color: var(--color-accent-gold);
+}
+
+.atak-mirror-event-header {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-text-secondary);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.atak-mirror-event-body {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .chat-composer {
   display: grid;
   gap: var(--space-2);
