@@ -19,7 +19,7 @@ YELLOW=$'\033[33m'; RED=$'\033[31m'; RESET=$'\033[0m'
 say()   { printf "%s\n" "$*"; }
 title() { printf "\n${BOLD}${CYAN}== %s ==${RESET}\n" "$*"; }
 ok()    { printf "  ${GREEN}[ok]${RESET}   %s\n" "$*"; }
-warn()  { printf "  ${YELLOW}[!!]${RESET}   %s\n" "$*"; }
+warn() { printf "  ${YELLOW}[!!]${RESET}   %s\n" "$*"; }
 err()   { printf "  ${RED}[xx]${RESET}   %s\n" "$*" >&2; }
 ask()   { printf "${BOLD}%s${RESET} " "$*"; }
 

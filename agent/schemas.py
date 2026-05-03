@@ -57,12 +57,21 @@ class Coord(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    """The operator's natural-language request + their current position."""
+    """ATAK plugin request: operator text/STT prompt + current TAK position.
+
+    `voice_profile` lets the caller pin which voice the orchestrator uses
+    for the spoken rationale (PRD §6, issue #54). 'calm' = briefer voice,
+    'comms' = default ops cadence, 'critical' = degraded radio FX. None
+    means: read TERA_VOICE_PROFILE env var, falling back to 'comms'.
+    Severity cues in the rationale (CASEVAC, DANGER CLOSE, etc.) will
+    auto-elevate the chosen mode upward but never demote.
+    """
 
     prompt: str = Field(..., min_length=1, max_length=2000)
     current: Coord
     request_id: str | None = None
     source: Literal["operator_voice", "operator_text", "test"] = "operator_text"
+    voice_profile: Literal["calm", "comms", "critical"] | None = None
 
 
 class Waypoint(BaseModel):

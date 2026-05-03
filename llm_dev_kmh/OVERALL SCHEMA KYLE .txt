@@ -1,0 +1,50 @@
+TERA runtime workflow schema
+
+1. Operator interface
+- TERA lives behind an ATAK plugin on the TAK device.
+- The operator enters intent as typed text or speech-to-text in the plugin.
+- The plugin attaches operational context when available: current location,
+  selected map objects, visible AO, prior TERA CoT UIDs, route IDs, waypoint
+  IDs, and any relevant plugin state.
+
+2. Transport to Jetson
+- The ATAK plugin sends the request over the local IP link to the NVIDIA
+  Jetson Orin Nano.
+- The hero/demo path must remain local/offline: no cloud dependency and no
+  outbound internet.
+
+3. Jetson-side TERA app
+- The Jetson runs the TERA app and local Gemma3:4b through Ollama.
+- Gemma interprets the operator prompt with TERA-specific system context.
+- The TERA app validates the interpreted intent, then runs targeted local geo
+  queries over packaged data such as imagery metadata, terrain/DEM,
+  hydrography, OSM, roads, trails, landcover, and mission layers.
+- TERA code then creates the useful output: route geometry, waypoints, no-go
+  areas, control measures, search sectors, resource markers, hazards,
+  rationale text, and any other objects needed for the operator.
+
+4. Return to ATAK
+- The Jetson returns the chat response to the plugin.
+- The Jetson also emits corresponding TAK CoT traffic over the local IP
+  network.
+- The ATAK plugin receives the response and CoT, then renders objects on the
+  TAK map.
+
+5. Follow-on conversation
+- Follow-on prompts should refine the existing TERA map state, not start from
+  scratch unless requested.
+- The plugin/Jetson should preserve object memory: TERA route IDs, CoT UIDs,
+  waypoint IDs, control-measure IDs, names, colors, and selection state.
+- Requests like "move that checkpoint", "delete the red no-go area", "make
+  the route more covered", "add an LZ near waypoint 2", or "remove the old
+  route" should resolve against the provided map context.
+- If the user references an object but no object is selected or known, TERA
+  should ask which object to modify or name the missing map-state requirement.
+
+6. Terminal harness caveat
+- llm_dev_kmh/tera_gemma/chat_tera_gemma.py is only a local Gemma terminal
+  harness.
+- It does not have a live ATAK plugin, live map state, CoT registry, or
+  geospatial tool dispatcher attached unless that context is pasted into chat.
+- In the terminal harness, TERA should describe the intended Jetson-side
+  query/tool/CoT sequence instead of pretending final map geometry was created.

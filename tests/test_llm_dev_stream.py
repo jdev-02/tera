@@ -354,7 +354,17 @@ def test_claude_model_labels_normalize_to_current_sonnet() -> None:
     assert kmh_app._normalize_claude_model("Claude Haiku 4.5") == "claude-3-5-haiku-20241022"
 
 
-def test_local_model_detection_prefers_installed_gemma_alias() -> None:
+def test_local_model_detection_prefers_installed_gemma_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the configured OLLAMA_MODEL is installed locally, pick it.
+
+    Hermetic via monkeypatch so the test passes regardless of the
+    operator's .env (which on the demo Jetson sets OLLAMA_MODEL=gemma2:2b
+    pre-Phase-3-cutover; once Kyle pulls gemma3:4b on the Jetson, the
+    .env switches and this test still pins the early-return behavior).
+    """
+    monkeypatch.setattr(kmh_app, "OLLAMA_MODEL", "gemma3:4b")
     models = [
         "hf.co/unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL",
         "gemma4:e4b",

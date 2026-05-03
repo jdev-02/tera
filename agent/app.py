@@ -1,16 +1,20 @@
-"""TERA agent HTTP service.
+"""TERA Jetson-side HTTP service.
 
-POST /plan: operator natural-language route request -> validated, signed route.
+POST /plan: ATAK plugin text/STT request -> validated route intent -> signed response.
 GET  /health: liveness + which mode is the default.
 
 The orchestrator (`agent.orchestrator.plan`) does the actual work; this
-module is just the FastAPI wrapper.
+module is just the FastAPI wrapper. The deployed path is:
+
+ATAK plugin on the TAK device -> local IP -> Jetson TERA app -> local Gemma
+intent translation + geo tools -> route/control measures/chat response/signed
+CoT -> local IP -> ATAK plugin render.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -48,14 +52,36 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/plan", response_model=PlanResponse, responses={403: {"model": PlanBlocked}})
-async def plan_endpoint(req: PlanRequest, tts: bool = False) -> PlanResponse:
+async def plan_endpoint(
+    req: PlanRequest,
+    tts: bool = False,
+    profile: Literal["calm", "comms", "critical"] | None = None,
+) -> PlanResponse:
     """POST /plan with optional TTS.
 
-    `?tts=true` makes the orchestrator synthesize the rationale via Piper
-    and return it base64-encoded in `audio_b64`. Defaults to False so the
-    web frontend can keep doing what it does without surprise audio payloads.
-    The hero demo (PRD §6) sets `?tts=true`.
+    Query / body params:
+        ?tts=true            -- synthesize the rationale via Piper, return
+                                base64 WAV in `audio_b64`.
+        ?profile=<mode>      -- pin the voice profile for this request:
+                                'calm' (briefer voice, no FX), 'comms'
+                                (default ops cadence + radio FX), 'critical'
+                                (degraded radio FX for urgent contexts).
+                                Equivalent to setting `voice_profile` in
+                                the request body. The query-param form is
+                                here for curl ergonomics. If both forms are
+                                set, the body wins (explicit > implicit).
+                                None = read TERA_VOICE_PROFILE env var or
+                                fall back to 'comms'.
+
+    Defaults preserve old behavior: ?tts=false means audio_b64 is null.
+    The hero demo (PRD §6) sets `?tts=true`. Severity cues in the
+    rationale auto-elevate the chosen mode upward but never demote.
     """
+    if profile is not None and req.voice_profile is None:
+        # Promote query-param profile into the request body so the
+        # orchestrator sees a single source of truth. If req.voice_profile
+        # is already set in the body, keep that.
+        req = req.model_copy(update={"voice_profile": profile})
     try:
         return await orchestrate_plan(req, with_tts=tts)
     except PlanBlockedError as e:
