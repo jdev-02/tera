@@ -1,0 +1,5 @@
+.gitattributes text eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+lefthook.yml text eol=lf
+.github/workflows/*.yml text eol=lf

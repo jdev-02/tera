@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -37,6 +38,7 @@ from agent.schemas import (
     PlanApprovalResponse,
     PlanRequest,
     PlanResponse,
+    PlanVerifyResponse,
     Signature,
     Waypoint,
 )
@@ -63,6 +65,15 @@ def _timestamp_to_iso(value: Any) -> str:
 
 def _hex_to_b64(value: str) -> str:
     return base64.b64encode(bytes.fromhex(value)).decode("ascii")
+
+
+def _b64_to_hex(value: str) -> str:
+    return base64.b64decode(value, validate=True).hex()
+
+
+def _cot_route_hash(feature: dict[str, Any]) -> str:
+    """Match crypto.cot_signer.sign_cot route_hash construction exactly."""
+    return _sha256_hex(json.dumps(feature, sort_keys=True).encode())
 
 
 # ---------------------------------------------------------------------------
@@ -259,11 +270,21 @@ def _sign_response(
             mission_type=mission_type,
         )
         signed = sign_cot(route)
+        payload_json = json.dumps(signed["payload"], sort_keys=True, separators=(",", ":"))
+        # Auto-bootstrap the device's signing key into the trust list on first
+        # sign. Without this, /plan -> sign -> /plan/verify would reject its
+        # own freshly-minted key (PRD line 294 trust list), so the hero demo
+        # would need a manual `make trust-bootstrap` step. Idempotent: the
+        # helper merges into the existing file.
+        _bootstrap_device_trust(signed["key_id"])
         return Signature(
-            scheme="ML-DSA-65",  # Satriyo's signer uses ML-DSA-65 (Dilithium3)
+            scheme=signed["algorithm"],
             key_id=signed["key_id"],
             value_b64=_hex_to_b64(signed["signature"]),
             signed_at=_timestamp_to_iso(signed["timestamp"]),
+            canonicalization="route-payload-json-v1",
+            payload_hash=signed["payload_hash"],
+            payload_json=payload_json,
         )
     except (ImportError, RuntimeError) as e:
         log.warning("signer_unavailable", error=str(e))
@@ -271,6 +292,206 @@ def _sign_response(
     except Exception as e:  # noqa: BLE001 -- never fail /plan because of signer
         log.exception("signer_failed", error=str(e))
         return None
+
+
+_BOOTSTRAPPED_KEY_IDS: set[str] = set()
+
+
+def _bootstrap_device_trust(key_id: str) -> None:
+    """Ensure the device's own public key is in the trust list.
+
+    Runs once per process per key_id. Idempotent on disk --
+    `export_public_key_to_trust_list` merges into whatever already exists,
+    so calling it twice is safe. Failures are swallowed: the trust list
+    being un-writable (e.g. read-only rootfs in a locked-down build) must
+    not fail /plan; the verify gate will just reject that key_id, which is
+    the correct failure mode.
+    """
+    if key_id in _BOOTSTRAPPED_KEY_IDS:
+        return
+    try:
+        from crypto.cot_signer import export_public_key_to_trust_list
+        from crypto.ml_dsa_signer import create_signer
+
+        export_public_key_to_trust_list(signer_instance=create_signer(key_id))
+        _BOOTSTRAPPED_KEY_IDS.add(key_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("trust_list_bootstrap_failed", key_id=key_id, error=str(e))
+
+
+def _destination_for_response(response: PlanResponse) -> tuple[float, float]:
+    if response.waypoints:
+        last = response.waypoints[-1]
+        return last.lat, last.lon
+
+    coords = response.route.get("geometry", {}).get("coordinates", [])
+    if not coords:
+        raise ValueError("route geometry has no coordinates")
+    dest_lon, dest_lat = coords[-1][0], coords[-1][1]
+    return float(dest_lat), float(dest_lon)
+
+
+def _payload_matches_plan_response(
+    response: PlanResponse,
+    payload: dict[str, Any],
+) -> tuple[bool, str, str]:
+    route_hash = _cot_route_hash(response.route)
+
+    if payload.get("uid") != f"TERA-{response.request_id}":
+        return False, "signed payload uid does not match response request_id", route_hash
+
+    if payload.get("route_hash") != route_hash:
+        return False, "signed payload route_hash does not match response route", route_hash
+
+    if payload.get("rationale") != response.rationale:
+        return False, "signed payload rationale does not match response rationale", route_hash
+
+    try:
+        expected_lat, expected_lon = _destination_for_response(response)
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        return False, f"response destination is malformed: {e}", route_hash
+
+    payload_lat_raw = payload.get("lat")
+    payload_lon_raw = payload.get("lon")
+    if payload_lat_raw is None or payload_lon_raw is None:
+        return False, "signed payload destination is missing", route_hash
+
+    try:
+        payload_lat = float(payload_lat_raw)
+        payload_lon = float(payload_lon_raw)
+    except (TypeError, ValueError) as e:
+        return False, f"signed payload destination is malformed: {e}", route_hash
+
+    if not math.isclose(payload_lat, expected_lat, rel_tol=0.0, abs_tol=1e-7):
+        return False, "signed payload latitude does not match response destination", route_hash
+
+    if not math.isclose(payload_lon, expected_lon, rel_tol=0.0, abs_tol=1e-7):
+        return False, "signed payload longitude does not match response destination", route_hash
+
+    if not isinstance(payload.get("mission_type"), str) or not payload["mission_type"]:
+        return False, "signed payload mission_type is missing", route_hash
+
+    return True, "payload binding valid", route_hash
+
+
+def verify_plan_response(response: PlanResponse) -> PlanVerifyResponse:
+    """Verify a /plan response before ATAK renders it.
+
+    This is the hackathon verify-proxy path for issue #81. The signature is
+    self-contained: payload_json is verified cryptographically, then bound back
+    to the route/rationale fields ATAK is about to render.
+    """
+    signature = response.signature
+    if signature is None:
+        return PlanVerifyResponse(valid=False, reason="Route signature missing - REJECTED")
+
+    if not signature.payload_hash or not signature.payload_json:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            reason="Signature payload metadata missing - REJECTED",
+        )
+
+    try:
+        payload = json.loads(signature.payload_json)
+        canonical_payload = _canonical_json(payload)
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            reason=f"Signature payload_json malformed - REJECTED: {e}",
+        )
+
+    computed_hash = _sha256_hex(canonical_payload)
+    if computed_hash != signature.payload_hash:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            reason="Signature payload_hash mismatch - REJECTED",
+        )
+
+    bound, reason, route_hash = _payload_matches_plan_response(response, payload)
+    if not bound:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason=f"{reason} - REJECTED",
+        )
+
+    # PRD line 293-294: "Verify on ingest -- ATAK Bridge verifier checks
+    # signature against trust list before forwarding to ATAK" / "Trust list --
+    # static list of allowed key IDs for the demo". Enforce that here BEFORE
+    # any crypto math: an adversary who publishes their own key + valid sig
+    # must not pass the render gate.
+    try:
+        from crypto.cot_signer import load_trust_list
+    except ImportError as e:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason=f"Trust list unavailable - REJECTED: {e}",
+        )
+
+    trust_list = load_trust_list()
+    trusted_pub_key = trust_list.get(signature.key_id)
+    if trusted_pub_key is None:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason="Untrusted key_id - REJECTED",
+        )
+
+    try:
+        from crypto.ml_dsa_signer import SignedPayload, create_signer
+
+        signed = SignedPayload(
+            payload=payload,
+            signature=_b64_to_hex(signature.value_b64),
+            key_id=signature.key_id,
+            algorithm=signature.scheme,
+            timestamp=0.0,
+            payload_hash=signature.payload_hash,
+        )
+        # Pass the trusted public key bytes explicitly so we never silently
+        # fall back to a freshly generated local keypair that happens to share
+        # the same key_id string. Both MLDSASigner.verify and
+        # FallbackSigner.verify take the trusted public key as their second
+        # positional argument.
+        ok = create_signer(signature.key_id).verify(signed, trusted_pub_key)
+    except Exception as e:  # noqa: BLE001 -- fail closed for render gate
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason=f"Signature verification error - REJECTED: {e}",
+        )
+
+    if not ok:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason="Signature invalid - route REJECTED",
+        )
+
+    return PlanVerifyResponse(
+        valid=True,
+        key_id=signature.key_id,
+        scheme=signature.scheme,
+        route_hash=route_hash,
+        reason="Signature valid - route authentic",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +657,10 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto", with_tts: bool = Fal
         try:
             from voice.tts import synthesize_rationale_b64
 
-            audio_b64 = synthesize_rationale_b64(dispatch["rationale"])
+            audio_b64 = synthesize_rationale_b64(
+                dispatch["rationale"],
+                operator_mode=req.voice_profile,
+            )
         except Exception as e:  # noqa: BLE001 -- TTS failure must not fail /plan
             logger.warning("tts_synth_failed", error=str(e))
 

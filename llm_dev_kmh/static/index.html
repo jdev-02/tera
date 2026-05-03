@@ -22,6 +22,7 @@
         <button id="importOverlayBtn" class="ghost-button" type="button">Import KML/KMZ</button>
         <input id="overlayFileInput" class="file-input" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" />
         <span class="chip" id="tokenChip">Cesium token: checking</span>
+        <button id="atakAgentBtn" class="chip chip-button" type="button">ATAK Local</button>
         <div class="top-provider-shell">
           <button id="modelProviderBtn" class="chip chip-button" type="button" aria-expanded="false" aria-controls="modelProviderMenu">Model: checking</button>
           <div id="modelProviderMenu" class="provider-menu hidden">
@@ -33,7 +34,8 @@
               <label>
                 Provider
                 <select id="providerSelect">
-                  <option value="ollama" selected>Local Ollama</option>
+                  <option value="auto" selected>Auto: Claude -> Local</option>
+                  <option value="ollama">Local Ollama</option>
                   <option value="claude">Claude API</option>
                 </select>
               </label>
@@ -46,8 +48,9 @@
               <label id="providerClaudeModelRow" class="hidden">
                 Claude model
                 <select id="claudeModelSelect">
-                  <option value="claude-sonnet-4-20250514" selected>Claude Sonnet 4</option>
+                  <option value="claude-sonnet-4-6" selected>Claude Sonnet 4.6</option>
                   <option value="claude-opus-4-1-20250805">Claude Opus 4.1</option>
+                  <option value="claude-opus-4-20250514">Claude Opus 4</option>
                   <option value="claude-3-7-sonnet-20250219">Claude Sonnet 3.7</option>
                   <option value="claude-3-5-haiku-20241022">Claude Haiku 3.5</option>
                 </select>
@@ -109,6 +112,7 @@
               </div>
             </div>
             <button id="mapResetViewBtn" class="map-reset-button" type="button">Reset View</button>
+            <button id="mapModeToggleBtn" class="ghost-button map-mode-toggle" type="button" aria-pressed="false">3D View</button>
           </div>
         </div>
         <div class="map-overlay bottom-left center-grid-panel" aria-live="polite">
@@ -130,7 +134,7 @@
             <span id="packageModeChip" class="chip">Awaiting mission</span>
           </div>
 
-          <div id="workflowEmpty" class="workflow-empty">Describe the mission in chat to begin source planning.</div>
+          <div id="workflowEmpty" class="workflow-empty" aria-hidden="true"></div>
 
           <div id="workflowCarousel" class="workflow-carousel hidden" aria-live="polite">
             <div class="workflow-nav">
@@ -157,13 +161,6 @@
                 </div>
               </section>
 
-              <section class="workflow-slide" data-workflow-slide="questions">
-                <div class="workflow-card">
-                  <div class="section-subtitle">Socratic questions</div>
-                  <ul id="clarifyingQuestions" class="question-list"></ul>
-                </div>
-              </section>
-
               <section class="workflow-slide" data-workflow-slide="sources">
                 <div id="sourceList" class="source-list" aria-live="polite"></div>
                 <div class="button-row source-actions">
@@ -187,6 +184,25 @@
                     <button id="clearAreaBtn" class="ghost-button small-button" type="button">Clear AO</button>
                   </div>
                 </div>
+                <div id="jetsonStorageCard" class="storage-card" aria-live="polite">
+                  <div class="storage-header">
+                    <div>
+                      <div class="section-subtitle">Jetson Storage</div>
+                      <div id="storageRoot" class="section-meta">Checking package root...</div>
+                    </div>
+                    <span id="storageFitChip" class="chip">Checking</span>
+                  </div>
+                  <div class="storage-meter" aria-hidden="true">
+                    <span id="storageMeterUsed"></span>
+                    <span id="storageMeterReserve"></span>
+                  </div>
+                  <div class="storage-grid">
+                    <span>Free</span><strong id="storageFree">--</strong>
+                    <span>Usable</span><strong id="storageUsable">--</strong>
+                    <span>Reserve</span><strong id="storageReserve">--</strong>
+                    <span>Estimate</span><strong id="storageEstimate">--</strong>
+                  </div>
+                </div>
                 <div class="button-row source-actions">
                   <button id="buildPackageBtn" class="primary-button" type="button">Build Manifest</button>
                 </div>
@@ -197,95 +213,115 @@
           <div id="packageStatus" class="section-meta">No sources selected yet. Send a mission description to plan the needed package.</div>
           <pre id="packageManifest" class="package-output hidden"></pre>
           <a id="downloadManifestLink" class="download-link hidden" href="#" download>Download manifest JSON</a>
+          <div id="packageExecutionActions" class="button-row package-execution-actions hidden">
+            <button id="downloadToJetsonBtn" class="primary-button" type="button">Download to Jetson</button>
+            <button id="refreshPackageStatusBtn" class="ghost-button" type="button">Refresh Status</button>
+          </div>
+          <div id="packageExecutionStatus" class="package-status-grid hidden" aria-live="polite"></div>
+          <pre id="packageArtifacts" class="package-output hidden"></pre>
         </section>
 
         <section class="sidebar-card panel-chat-shell chat-panel-shell">
           <div class="section-header rail-header chat-panel-header">
-            <div>
-              <h2>Source Advisor</h2>
-              <div id="requestStatus" class="section-meta">Idle</div>
+            <div class="visually-hidden">
+              <h2>Advisor conversation</h2>
+              <div id="requestStatus" class="section-meta" aria-live="polite">Idle</div>
             </div>
             <div class="panel-header-actions">
               <div class="settings-shell">
                 <button id="settingsToggleBtn" class="ghost-button icon-button" type="button" aria-expanded="false" aria-label="Open advisor settings">
                   <span aria-hidden="true">&#9881;</span>
                 </button>
-                <div id="settingsMenu" class="settings-menu hidden">
-                  <div class="settings-menu-header">
-                    <strong>Advisor Settings</strong>
-                    <span id="chatMeta" class="section-meta">0 messages</span>
-                  </div>
-                  <div class="settings-grid">
-                    <label>
-                      Agent profile
-                      <select id="agentProfileSelect">
-                        <option value="imagery-sourcing" selected>Imagery Sourcing</option>
-                        <option value="terrain-route">Terrain Route</option>
-                        <option value="map-analysis">Map Analysis</option>
-                        <option value="survival-sar">Survival / SAR</option>
-                      </select>
-                    </label>
-                    <label>
-                      Installed model
-                      <select id="modelSelect" name="model">
-                        <option value="">Loading models...</option>
-                      </select>
-                    </label>
-                    <label>
-                      Imagery stream
-                      <select id="imagerySelect">
-                        <option value="esri">Esri World Imagery</option>
-                        <option value="ion-satellite">Cesium World Imagery</option>
-                        <option value="osm">OpenStreetMap</option>
-                      </select>
-                    </label>
-                    <label>
-                      Terrain stream
-                      <select id="terrainSelect">
-                        <option value="cesium-world">Cesium World Terrain</option>
-                        <option value="ellipsoid">Ellipsoid Only</option>
-                      </select>
-                    </label>
-                    <label class="span-2">
-                      Sourcing policy
-                      <textarea id="systemInput" name="system" class="short-input" placeholder="Optional planner instruction, e.g. favor open global sources or keep package size minimal."></textarea>
-                    </label>
-                    <label class="checkbox-row span-2">
-                      <input id="includeMapContext" type="checkbox" checked />
-                      <span>Include current map/AOI context</span>
-                    </label>
-                  </div>
-                  <div class="settings-subsection">
-                    <div class="section-subtitle">Installed Models</div>
-                    <div id="modelsStatus" class="section-meta">Checking Ollama...</div>
-                    <ul id="modelsList" class="bullet-list compact-list">
-                      <li>Loading models...</li>
-                    </ul>
-                  </div>
-                  <div class="settings-subsection">
-                    <div class="section-subtitle">Map Context</div>
-                    <div id="terrainStatus" class="section-meta">Terrain: loading</div>
-                    <dl class="info-grid compact-info-grid">
-                      <div>
-                        <dt>Camera</dt>
-                        <dd id="cameraPosition">Initializing</dd>
-                      </div>
-                      <div>
-                        <dt>Imagery source</dt>
-                        <dd id="imageryStatus">Loading</dd>
-                      </div>
-                    </dl>
-                  </div>
-                  <div class="button-row settings-actions">
-                    <button id="resetViewBtn" class="ghost-button" type="button">Reset View</button>
-                    <button id="clearChatBtn" class="ghost-button" type="button">Clear Chat</button>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
 
+          <div id="settingsMenu" class="settings-menu hidden">
+            <div class="settings-menu-header">
+              <strong>Advisor Settings</strong>
+              <span id="chatMeta" class="section-meta">0 messages</span>
+            </div>
+            <div class="settings-grid">
+              <label>
+                Agent profile
+                <select id="agentProfileSelect">
+                  <option value="imagery-sourcing" selected>Imagery Sourcing</option>
+                  <option value="tera-atak-live">TERA ATAK Link</option>
+                  <option value="terrain-route">Terrain Route</option>
+                  <option value="map-analysis">Map Analysis</option>
+                  <option value="survival-sar">Survival / SAR</option>
+                </select>
+              </label>
+              <label>
+                Installed model
+                <select id="modelSelect" name="model">
+                  <option value="">Loading models...</option>
+                </select>
+              </label>
+              <label>
+                Imagery stream
+                <select id="imagerySelect">
+                  <option value="ion-satellite">Cesium World Imagery</option>
+                  <option value="usgs-imagery">USGS Imagery Only</option>
+                  <option value="osm">OpenStreetMap</option>
+                  <option value="esri">Esri World Imagery</option>
+                </select>
+              </label>
+              <label>
+                Terrain stream
+                <select id="terrainSelect">
+                  <option value="cesium-world">Cesium World Terrain</option>
+                  <option value="ellipsoid">Ellipsoid Only</option>
+                </select>
+              </label>
+              <label class="span-2">
+                Sourcing policy
+                <textarea id="systemInput" name="system" class="short-input" placeholder="Optional planner instruction, e.g. favor open global sources or keep package size minimal."></textarea>
+              </label>
+              <label class="checkbox-row span-2">
+                <input id="includeMapContext" type="checkbox" checked />
+                <span>Include current map/AOI context</span>
+              </label>
+            </div>
+            <div class="settings-subsection">
+              <div class="section-subtitle">Installed Models</div>
+              <div id="modelsStatus" class="section-meta">Checking Ollama...</div>
+              <ul id="modelsList" class="bullet-list compact-list">
+                <li>Loading models...</li>
+              </ul>
+            </div>
+            <div class="settings-subsection">
+              <div class="section-subtitle">Map Context</div>
+              <div id="terrainStatus" class="section-meta">Terrain: loading</div>
+              <dl class="info-grid compact-info-grid">
+                <div>
+                  <dt>Camera</dt>
+                  <dd id="cameraPosition">Initializing</dd>
+                </div>
+                <div>
+                  <dt>Imagery source</dt>
+                  <dd id="imageryStatus">Loading</dd>
+                </div>
+              </dl>
+            </div>
+            <div class="button-row settings-actions">
+              <button id="resetViewBtn" class="ghost-button" type="button">Reset View</button>
+              <button id="clearChatBtn" class="ghost-button" type="button">Clear Chat</button>
+            </div>
+          </div>
+
           <div id="chatLog" class="chat-log"></div>
+
+          <section id="atakMirrorPanel" class="atak-mirror-panel hidden" aria-live="polite">
+            <div class="atak-mirror-header">
+              <div>
+                <div class="section-subtitle">ATAK / Ollama Monitor</div>
+                <div id="atakMirrorStatus" class="section-meta">Read-only view of Samsung TAK requests and TERA replies</div>
+              </div>
+              <button id="atakMirrorRefreshBtn" class="ghost-button small-button" type="button">Refresh</button>
+            </div>
+            <div id="atakMirrorLog" class="atak-mirror-log"></div>
+          </section>
 
           <form id="promptForm" class="chat-composer" autocomplete="off">
             <textarea id="promptInput" name="prompt" placeholder="We need an offline package for a patrol to find the nearest reliable water source while avoiding steep exposed terrain." required></textarea>
@@ -303,6 +339,7 @@
     window.CESIUM_BASE_URL = "https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/";
   </script>
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Cesium.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

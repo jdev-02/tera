@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginLeft="3dp"
+    android:layout_marginRight="3dp"
+    android:orientation="vertical"
+    android:paddingLeft="11dp"
+    android:paddingTop="9dp"
+    android:paddingRight="11dp"
+    android:paddingBottom="11dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/heading_yellow"
+            android:textStyle="bold"
+            android:textSize="18sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:layout_marginTop="7dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="7dp"
+            android:paddingRight="7dp"
+            android:background="@drawable/status_bar_bg">
+
+            <TextView
+                android:id="@+id/tera_connection_status"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/connection_offline"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/tera_host_input"
+                android:layout_width="94dp"
+                android:layout_height="31dp"
+                android:background="@drawable/chat_icon_button_bg"
+                android:textColor="@color/white"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:text="@string/host_local" />
+
+            <ImageButton
+                android:id="@+id/tera_info"
+                android:layout_width="31dp"
+                android:layout_height="31dp"
+                android:layout_marginLeft="5dp"
+                android:background="@drawable/chat_icon_button_bg"
+                android:contentDescription="@string/info_button"
+                android:padding="7dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_info" />
+
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="7dp"
+            android:text="Chat"
+            android:textSize="13sp" />
+
+        <ScrollView
+            android:id="@+id/tera_chat_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="108dp"
+            android:fadeScrollbars="false">
+
+            <TextView
+                android:id="@+id/tera_chat_transcript"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="top|start"
+                android:padding="5dp"
+                android:text="@string/chat_empty"
+                android:textSize="13sp" />
+
+        </ScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="43dp"
+            android:layout_marginTop="9dp"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/tera_chat_input"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:hint="@string/chat_input_hint"
+                android:imeOptions="flagNoEnterAction"
+                android:inputType="textCapSentences|textMultiLine"
+                android:maxLines="2"
+                android:singleLine="false"
+                android:textSize="13sp" />
+
+            <ImageButton
+                android:id="@+id/tera_send_message"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginLeft="7dp"
+                android:layout_gravity="center_vertical"
+                android:background="@drawable/chat_icon_button_bg"
+                android:contentDescription="@string/send_button"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_send_arrow" />
+
+            <ImageButton
+                android:id="@+id/tera_voice_message"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginLeft="5dp"
+                android:layout_gravity="center_vertical"
+                android:background="@drawable/chat_icon_button_bg"
+                android:contentDescription="@string/mic_button"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_microphone" />
+
+            <ImageButton
+                android:id="@+id/tera_tts_toggle"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginLeft="5dp"
+                android:layout_gravity="center_vertical"
+                android:background="@drawable/chat_icon_button_bg"
+                android:contentDescription="@string/tts_button"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_volume" />
+
+        </LinearLayout>
+
+</LinearLayout>

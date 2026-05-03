@@ -1,0 +1,20 @@
+[Unit]
+Description=TERA Intel Planner Web App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+Group=__RUN_USER__
+WorkingDirectory=__REPO_DIR__
+Environment=REPO_DIR=__REPO_DIR__
+Environment=PLANNER_HOST=0.0.0.0
+Environment=PLANNER_PORT=8080
+ExecStart=/usr/bin/env bash __REPO_DIR__/deploy/scripts/run_tera_planner.sh
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

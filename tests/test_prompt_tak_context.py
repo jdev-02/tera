@@ -20,9 +20,15 @@ def test_tera_prompts_include_tak_output_context() -> None:
     assert "bridge-local adapter" in full_prompt
     assert "Emergency alert CoT is only appropriate" in full_prompt
 
-    assert "TAK OUTPUT CONTEXT:" in local_prompt
-    assert "Do not fabricate routes, hazards, resources, or coordinates" in local_prompt
-    assert "draw-shape polyline" in local_prompt
+    # Kyle's #73 rewrote the local prompt away from the RFSim-era action vocab
+    # (draw-shape polyline / TAK OUTPUT CONTEXT) toward an ATAK-plugin
+    # deployment narrative + JSON action contract. We now assert on the
+    # semantic anchors that survived the rewrite (anti-fabrication guardrail,
+    # ATAK-pipeline awareness, and identity hardening) instead of the old
+    # literal phrases, which the production translator never depended on.
+    assert "ATAK plugin" in local_prompt
+    assert "Do not invent final route geometry" in local_prompt
+    assert "TERA, the Tactical Edge Route Agent" in local_prompt
 
     assert "Downstream TAK output target:" in sourcing_prompt
     assert "primary/alternate routes" in sourcing_prompt

@@ -33,6 +33,16 @@ Usage
   # List every term the glossary can explain:
   python scripts/demo_voice.py --explain-list
 
+  # Override which Piper voice model to use (must be downloaded to models/piper/):
+  python scripts/demo_voice.py --voice en_US-ryan-high
+
+  # Apply radio-comms post-processing FX (clean/light/comms/degraded):
+  python scripts/demo_voice.py --fx comms
+
+  # Voice + FX bake-off: render the canonical PRD scenario across all
+  # downloaded voices and FX intensities so you can A/B them:
+  python scripts/demo_voice.py --bakeoff
+
 In interactive mode (default), at each phrase prompt:
   [Enter]   -> next phrase (no notes captured)
   r         -> replay current phrase
@@ -57,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import shutil
 import subprocess
 import sys
@@ -64,9 +75,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from voice.audio_fx import Intensity, apply_radio_fx
 from voice.glossary import known_terms
 from voice.phrases import PHRASES, by_category, by_id, categories
-from voice.piper_client import get_piper, reset_piper
+from voice.piper_client import PiperClient, get_piper, reset_piper
 from voice.rationale import to_operator_cadence
 from voice.tts import synthesize_explanation_b64, synthesize_rationale_b64
 
@@ -118,6 +130,341 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  text:    {text}")
     print(f"  cadence: {to_operator_cadence(text)}")
     print(f"  listen:  {listen_for}")
+
+
+# Phrase metadata for the severity demo. Each entry tells judges:
+#   1. WHO the operator is (PRD persona)
+#   2. WHAT they just asked / what's happening
+#   3. WHERE in the PRD this scenario is documented
+#   4. WHY the voice profile choice solves a real problem under stress
+# Kept in module scope so unit tests / other callers can reuse it.
+_SEVERITY_DEMO_PHRASES: list[dict[str, str]] = [
+    {
+        "tag": "routine",
+        "scenario_short": 'Sgt. Vega · dismounted recon · "route to nearest freshwater"',
+        "text": "Routed to Lobos Creek. Distance 2.1 kilometers. ETA 38 minutes.",
+        "operator": (
+            "P-1 Sgt. Vega — dismounted recon, hands on rifle + TAK device. "
+            "Just asked TERA: 'route to nearest freshwater within 5 km.'"
+        ),
+        "prd_section": "PRD §6.2 Hero Scenario A (urban / Lobos Creek)",
+        "value": (
+            "Voice-out replaces the head-down map check. Eyes stay on AO. "
+            "PRD §3 Core Problem: minimize cognitive load under stress."
+        ),
+    },
+    {
+        "tag": "urgent",
+        "scenario_short": "Mid-mission · waypoint blocked · re-routing through alternate",
+        "text": "Be advised, route blocked at waypoint 3. Rerouting through alternate.",
+        "operator": (
+            "Mid-mission. Orchestrator detected a blocked waypoint (terrain "
+            "refresh, threat update, or teammate no-go sync) and re-routed."
+        ),
+        "prd_section": "PRD §6.2 Hero Scenario A (mid-mission re-plan)",
+        "value": (
+            "Severity-routed voice = one bit of info AT THE GEAR LEVEL "
+            "('this isn't routine') before words are parsed. Faster orient "
+            "in the operator's OODA loop."
+        ),
+    },
+    {
+        "tag": "critical",
+        "scenario_short": "SAR · mirror flash from person in distress · golden hour",
+        "text": "CASEVAC inbound. Routing to open field at grid 11SMS1234 5678. Suitable HLZ.",
+        "operator": (
+            "P-3 Sam (SAR variant) — operator hears mirror flash from a "
+            "person in distress. Reports to TERA. New route to HLZ in the "
+            "golden hour. (See docs/demo-scenarios/sar-olympic.md.)"
+        ),
+        "prd_section": "PRD §6.2 + Issue #60 (Olympic SAR scenario)",
+        "value": (
+            "Catastrophic-mode voice profile = operator KNOWS the severity "
+            "without parsing the words. PRD §3 thesis under live stress: "
+            "the gear talks, the operator stays focused on the casualty."
+        ),
+    },
+]
+
+
+def _print_pitch_block(
+    *,
+    idx: int,
+    total: int,
+    phrase: dict[str, str],
+    cadence: str,
+    profile_name: str,
+    voice: str,
+    fx: str,
+    length_scale: float,
+    bump: int,
+    base_mode: str,
+) -> None:
+    """Print a self-narrating pitch block for one phrase. Designed so a
+    judge watching the recorded demo can read the scenario context BEFORE
+    the audio plays, with the architecture path visible."""
+    sep = "=" * 76
+    bar = "-" * 76
+    print()
+    print(sep)
+    print(f"  PHRASE {idx}/{total} — {phrase['tag'].upper()}")
+    print(f"  {phrase['prd_section']}")
+    print(sep)
+    print()
+    print("OPERATOR:")
+    for line in _wrap(phrase["operator"], 70):
+        print(f"  {line}")
+    print()
+    print("WHAT THIS SOLVES (PRD-cited):")
+    for line in _wrap(phrase["value"], 70):
+        print(f"  {line}")
+    print()
+    print("ROUTE THROUGH THE STACK (PRD §7.1):")
+    print("  ATAK plugin (mic/STT)")
+    print("       │")
+    print("       ▼  HTTP over local IP — NO cloud, NO outbound packets")
+    print("  agent/app.py                  POST /plan?tts=true")
+    print("  agent/orchestrator.py         dispatch")
+    print("  agent/llm.py                  gemma2:2b (austere profile)")
+    print("  security/pipeline.py          PlanGuard / parse-verify / policy gate")
+    print("  agent/tools/ + routing/       Valhalla local routing (Ben's lane)")
+    print("  agent/orchestrator.py         rationale built  ◀── upstream done")
+
+    # Box content fits exactly 64 chars between the borders so the right
+    # edge lands consistently regardless of value length.
+    def _box(s: str) -> str:
+        return s[:64].ljust(64)
+
+    print("  ┌─[ THIS DEMO'S CODE PATH STARTS HERE ]" + "─" * 27 + "┐")
+    print(f"  │ {_box(f'voice/profiles.py       severity classified -> {profile_name}')} │")
+    print(f"  │ {_box('voice/rationale.py      cadence transform')} │")
+    print(f"  │ {_box(f'voice/piper_client.py   Piper TTS ({voice})')} │")
+    print(f"  │ {_box(f'voice/audio_fx.py       radio FX ({fx})')} │")
+    print(f"  │ {_box('agent/orchestrator.py   audio_b64 in PlanResponse')} │")
+    print("  └" + "─" * 66 + "┘")
+    print("       │")
+    print("       ▼")
+    print("  ATAK plugin → operator headset")
+    print()
+    print("INPUT (English from orchestrator rationale):")
+    for line in _wrap(phrase["text"], 70):
+        print(f"  {line}")
+    print()
+    print("CADENCE TRANSFORM (what Piper actually speaks):")
+    for line in _wrap(cadence, 70):
+        print(f"  {line}")
+    print()
+    print(f"VOICE PROFILE PICKED  (operator-mode={base_mode}, severity bump={bump}):")
+    print(f"  profile name : {profile_name}")
+    print(f"  voice model  : {voice}")
+    print(f"  radio FX     : {fx}")
+    print(f"  pace         : length_scale={length_scale:.2f}")
+    print()
+    print(bar)
+    print("  ▶ Playing audio...")
+    print(bar)
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    """Tiny wordwrap so paragraphs don\'t blow past the 76-col band."""
+    out: list[str] = []
+    for paragraph in text.split("\n"):
+        words = paragraph.split()
+        cur: list[str] = []
+        cur_len = 0
+        for w in words:
+            if cur and cur_len + 1 + len(w) > width:
+                out.append(" ".join(cur))
+                cur, cur_len = [w], len(w)
+            else:
+                cur.append(w)
+                cur_len += (1 if cur_len else 0) + len(w)
+        if cur:
+            out.append(" ".join(cur))
+    return out
+
+
+def _run_severity_demo(
+    operator_mode: str | None,
+    pause_secs: float = 3.0,
+    verbose: bool = False,
+) -> int:
+    """Pitch-mode demo of severity-routed voice profiles.
+
+    DEFAULT (sparse, for live pitch): a 6-line scenario card per phrase.
+    Audio is the protagonist; Presenter A narrates over the silent pauses
+    between phrases. Matches PRD §12 pitch discipline (no feature dump,
+    hold beats in silence).
+
+    --verbose: also print operator persona, PRD section cite, the full
+    architecture path through the stack, and the cadence transform per
+    phrase. Engineering-walkthrough mode; off by default for the pitch.
+
+    Three phrases:
+      1. ROUTINE  (no cues)             stays at operator's base mode
+      2. URGENT   (BE ADVISED cue)      auto-elevates one level
+      3. CRITICAL (CASEVAC cue)         auto-elevates to critical (capped)
+    """
+    import time
+
+    from voice.profiles import OperatorMode, detect_severity_bump, select_profile
+    from voice.tts import synthesize_rationale_b64
+
+    base_mode: OperatorMode = operator_mode or "comms"  # type: ignore[assignment]
+
+    out_dir = Path(tempfile.gettempdir()) / "tera_severity_demo"
+    out_dir.mkdir(exist_ok=True)
+    for old_wav in out_dir.glob("*.wav"):
+        old_wav.unlink()
+
+    sep = "═" * 64
+
+    # Sparse opening title -- one card, scannable in under a second.
+    print()
+    print(sep)
+    print("  TERA  ·  severity-routed voice  ·  PRD §6.2")
+    print(sep)
+    print(f"  operator base: {base_mode.upper():<8s}     pause between phrases: {pause_secs:.0f}s")
+    print()
+
+    for i, phrase in enumerate(_SEVERITY_DEMO_PHRASES, start=1):
+        bump = detect_severity_bump(phrase["text"])
+        profile = select_profile(phrase["text"], operator_mode=base_mode)
+
+        if verbose:
+            cadence = to_operator_cadence(phrase["text"])
+            _print_pitch_block(
+                idx=i,
+                total=len(_SEVERITY_DEMO_PHRASES),
+                phrase=phrase,
+                cadence=cadence,
+                profile_name=profile.name,
+                voice=profile.voice,
+                fx=profile.fx,
+                length_scale=profile.length_scale,
+                bump=bump,
+                base_mode=base_mode,
+            )
+        else:
+            # Sparse pitch-mode card: tag + scenario one-liner + voice line.
+            tag = phrase["tag"].upper()
+            elevation = ""
+            if bump == 1:
+                elevation = '   ↑ auto-elevated by "BE ADVISED"'
+            elif bump == 2:
+                elevation = '   ↑↑ auto-elevated by "CASEVAC"'
+            scenario = phrase.get("scenario_short", phrase["tag"])
+            print(sep)
+            print(f"  {i} / {len(_SEVERITY_DEMO_PHRASES)}  ·  {tag}{elevation}")
+            print(sep)
+            print(f"  {scenario}")
+            print(f"  voice: {profile.name.upper()}  ({profile.voice} · {profile.fx} FX)")
+            print()
+
+        audio = synthesize_rationale_b64(phrase["text"], operator_mode=base_mode)
+        if audio is None:
+            print(f"  ! synth returned None for {phrase['tag']} (Piper unavailable?)")
+            continue
+        out_path = out_dir / f"{i}_{phrase['tag']}_{profile.name}.wav"
+        out_path.write_bytes(base64.b64decode(audio))
+        _play(out_path)
+
+        # Silent breath between phrases. Narrator talks here; the screen
+        # stays still so the audience focuses on the voice, not the text.
+        if i < len(_SEVERITY_DEMO_PHRASES):
+            time.sleep(pause_secs)
+
+    print()
+    print(sep)
+    if verbose:
+        print("  END OF DEMO  — three phrases, three voice profiles, one stack.")
+        print(sep)
+        print(f"  All WAVs saved at {out_dir}/")
+        print("  Voice path on main:")
+        print("    voice/profiles.py     severity-routed VoiceProfile registry (#54)")
+        print("    voice/rationale.py    operator cadence transform (#26)")
+        print("    voice/piper_client.py Piper TTS wrapper (#26)")
+        print("    voice/audio_fx.py     pure-numpy band-pass + compressor (#54)")
+        print("    voice/glossary.py     deterministic acronym explain (#54)")
+    else:
+        print(f"  end · WAVs in {out_dir}/")
+    print()
+
+    return 0
+
+
+def _run_bakeoff() -> int:
+    """Render the canonical PRD scenario A across every downloaded voice and
+    FX intensity. Writes WAVs to /tmp/tera_bakeoff/<voice>_<fx>.wav so Jon
+    can listen and pick the demo configuration.
+
+    Looks at models/piper/ for *.onnx files; if none beyond the default
+    exist, prints download hints.
+    """
+    models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
+    voices = sorted(p.stem for p in models_dir.glob("*.onnx"))
+    if not voices:
+        print(f"No voice models in {models_dir}/. Run `make install-voice` first.")
+        return 1
+
+    intensities: list[Intensity] = ["clean", "light", "comms", "degraded"]
+
+    out_dir = Path(tempfile.gettempdir()) / "tera_bakeoff"
+    out_dir.mkdir(exist_ok=True)
+    for old in out_dir.glob("*.wav"):
+        old.unlink()
+
+    rationale = "Routed to Lobos Creek, distance 2.1 kilometers, ETA 38 minutes on foot covered."
+    cadence = to_operator_cadence(rationale)
+    print(f"input:    {rationale}")
+    print(f"cadence:  {cadence}")
+    print(f"voices:   {voices}")
+    print(f"fx:       {intensities}")
+    print()
+
+    # On-disk size of each voice model -- feeds Jetson budget tracking (#56).
+    print("voice model sizes (issue #56 budget):")
+    total_mb = 0.0
+    for voice in voices:
+        size_mb = (models_dir / f"{voice}.onnx").stat().st_size / (1024 * 1024)
+        total_mb += size_mb
+        print(f"  {voice:<32s} {size_mb:>6.1f} MB")
+    print(f"  {'TOTAL':<32s} {total_mb:>6.1f} MB on disk")
+    print()
+
+    # Print on-disk size of each voice model -- feeds the Jetson budget
+    # tracking in issue #56.
+    print("voice model sizes (issue #56 budget):")
+    total_mb = 0.0
+    for voice in voices:
+        size_mb = (models_dir / f"{voice}.onnx").stat().st_size / (1024 * 1024)
+        total_mb += size_mb
+        print(f"  {voice:<32s} {size_mb:>6.1f} MB")
+    print(f"  {'TOTAL':<32s} {total_mb:>6.1f} MB on disk")
+    print()
+
+    for voice in voices:
+        model_path = models_dir / f"{voice}.onnx"
+        client = PiperClient(model_path=model_path, length_scale=1.15)
+        if not client.is_available():
+            print(f"  ! {voice}: model file present but piper-tts not importable; skipping")
+            continue
+        try:
+            base_wav = client.synthesize_wav(cadence)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! {voice}: synth failed ({e}); skipping")
+            continue
+        for fx in intensities:
+            wav = base_wav if fx == "clean" else apply_radio_fx(base_wav, intensity=fx)
+            out_path = out_dir / f"{voice}__{fx}.wav"
+            out_path.write_bytes(wav)
+            print(f"  + {out_path.relative_to(out_dir.parent)}  ({len(wav):,} bytes)")
+
+    print()
+    print(f"All renders in {out_dir}/")
+    print("Listen with:")
+    print(f"  for f in {out_dir}/*.wav; do echo == $f ==; afplay $f; done")
+    return 0
 
 
 def _write_notes(notes: list[tuple[str, str, str, str]], length_scale: float) -> Path:
@@ -267,6 +614,51 @@ def main() -> int:
         action="store_true",
         help="print every term the glossary can explain, and exit",
     )
+    p.add_argument(
+        "--voice",
+        metavar="VOICE_ID",
+        help="Piper voice model to use (e.g. 'en_US-ryan-high'). "
+        "Must exist at models/piper/<voice_id>.onnx. "
+        "Default: en_US-libritts_r-medium.",
+    )
+    p.add_argument(
+        "--fx",
+        choices=["clean", "light", "comms", "degraded"],
+        default="clean",
+        help="radio-comms post-processing intensity (default: clean)",
+    )
+    p.add_argument(
+        "--bakeoff",
+        action="store_true",
+        help="render the canonical PRD scenario A across every downloaded "
+        "voice and FX intensity for A/B listening (no interactive prompts)",
+    )
+    p.add_argument(
+        "--profile",
+        choices=["calm", "comms", "critical"],
+        help="operator voice profile (overrides TERA_VOICE_PROFILE env var). "
+        "comms = demo default; critical = degraded comms for CASEVAC etc.",
+    )
+    p.add_argument(
+        "--severity-demo",
+        action="store_true",
+        help="pitch-mode demo: 3 phrases (routine, urgent cue, critical cue) "
+        "with sparse on-screen cards so a presenter can narrate over the "
+        "audio. Combine with --profile to set the operator base mode.",
+    )
+    p.add_argument(
+        "--pause-secs",
+        type=float,
+        default=3.0,
+        help="silent pause between severity-demo phrases (default 3.0). "
+        "Tune to your speaking pace.",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="severity-demo: include the full architecture path + PRD cite "
+        "+ cadence transform per phrase. Engineering-walkthrough mode.",
+    )
     args = p.parse_args()
 
     if args.list:
@@ -299,11 +691,37 @@ def main() -> int:
             print("  (audio unavailable -- text-only explanation)")
         return 0
 
-    # Set the global length_scale for this session.
-    reset_piper()
-    from voice import piper_client
+    if args.bakeoff:
+        return _run_bakeoff()
 
-    piper_client._client = piper_client.PiperClient(length_scale=args.rate)
+    if args.severity_demo:
+        return _run_severity_demo(
+            args.profile,
+            pause_secs=args.pause_secs,
+            verbose=args.verbose,
+        )
+
+    # Set TERA_VOICE_PROFILE so the synth path (tts.py) auto-routes by
+    # profile. --voice and --fx are still honored as overrides for the
+    # corpus walk in case the user wants to bypass profile selection.
+    if args.profile:
+        os.environ["TERA_VOICE_PROFILE"] = args.profile
+    if args.voice:
+        models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
+        model_path = models_dir / f"{args.voice}.onnx"
+        if not model_path.exists():
+            print(f"voice model not found: {model_path}")
+            print("Download it from https://huggingface.co/rhasspy/piper-voices first.")
+            return 1
+        # Direct voice override -- bypass profile selection by pinning the
+        # singleton client to this voice.
+        reset_piper()
+        from voice import piper_client
+
+        piper_client._client = piper_client.PiperClient(
+            model_path=model_path,
+            length_scale=args.rate,
+        )
 
     if args.text:
         phrases = [("custom", "custom", args.text, "your phrase")]
