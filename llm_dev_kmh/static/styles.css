@@ -302,9 +302,20 @@ textarea {
 }
 
 .location-suggestion-status {
+  display: grid;
+  gap: var(--space-1);
   padding: var(--space-2);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
+}
+
+.location-suggestion-external {
+  color: var(--color-accent-gold);
+  text-decoration: none;
+}
+
+.location-suggestion-external:hover {
+  color: var(--color-accent-gold-dim);
 }
 
 .center-grid-panel {
@@ -330,6 +341,10 @@ textarea {
   display: grid;
   gap: var(--space-1);
   justify-items: end;
+}
+
+.map-mode-toggle {
+  width: 100%;
 }
 
 .instrument-row {
