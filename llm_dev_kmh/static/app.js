@@ -37,6 +37,7 @@ const state = {
   mapLocationConfirmed: false,
   locationSearchTimer: null,
   locationSearchRequestId: 0,
+  cesiumIonTokenAvailable: false,
   localModelAvailable: false,
   localModelDetail: "",
   serverClaudeKeyAvailable: false,
@@ -2530,15 +2531,40 @@ function toggleMapMode() {
   setMapMode(state.mapMode === "3d" ? "2d" : "3d");
 }
 
+function hasCesiumIonToken() {
+  return Boolean(state.config?.cesium_ion_token);
+}
+
+function updateMapStreamChip(imagery, terrain, requestedModes = {}) {
+  const requestedIon = requestedModes.imageryMode === "ion-satellite"
+    || requestedModes.terrainMode === "cesium-world";
+  const fallbackReason = [imagery?.fallbackReason, terrain?.fallbackReason]
+    .filter(Boolean)
+    .join("; ");
+
+  if (imagery?.usingIon || terrain?.usingIon) {
+    setChip(els.tokenChip, "Cesium ion stream active", "good");
+    return;
+  }
+
+  if (fallbackReason || (requestedIon && !state.cesiumIonTokenAvailable)) {
+    setChip(els.tokenChip, "Map stream active; ion fallback", "warn");
+    return;
+  }
+
+  const imageryLabel = imagery?.shortLabel || imagery?.label || "imagery";
+  setChip(els.tokenChip, `Map stream: ${imageryLabel}`, "good");
+}
+
 async function loadRuntimeConfig() {
   state.config = await fetchJson("/api/config");
-  const hasToken = Boolean(state.config.cesium_ion_token);
+  state.cesiumIonTokenAvailable = hasCesiumIonToken();
   state.serverClaudeKeyAvailable = Boolean(state.config.anthropic_api_key_configured);
-  setChip(els.tokenChip, hasToken ? "Cesium token detected" : "Cesium token missing", hasToken ? "good" : "warn");
+  setChip(els.tokenChip, "Map stream checking");
   els.claudeModelSelect.value = state.config.claude_default_model || els.claudeModelSelect.value;
   setModelProviderButton(`Default model: ${state.config.default_model}`, "warn");
   state.imageryMode = "esri";
-  state.terrainMode = hasToken ? "cesium-world" : "ellipsoid";
+  state.terrainMode = state.cesiumIonTokenAvailable ? "cesium-world" : "ellipsoid";
   els.imagerySelect.value = state.imageryMode;
   els.terrainSelect.value = state.terrainMode;
 }
@@ -2977,6 +3003,8 @@ async function resolveImageryProvider() {
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
       label: IMAGERY_FALLBACKS.esri.label,
+      shortLabel: "Esri imagery",
+      usingIon: false,
     };
   }
 
@@ -2984,15 +3012,20 @@ async function resolveImageryProvider() {
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.osm),
       label: IMAGERY_FALLBACKS.osm.label,
+      shortLabel: "OSM basemap",
+      usingIon: false,
     };
   }
 
-  if (!state.config.cesium_ion_token) {
+  if (!hasCesiumIonToken()) {
     state.imageryMode = "esri";
     els.imagerySelect.value = "esri";
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
       label: IMAGERY_FALLBACKS.esri.label,
+      shortLabel: "Esri imagery",
+      usingIon: false,
+      fallbackReason: "Cesium ion token is not configured for World Imagery.",
     };
   }
 
@@ -3002,6 +3035,8 @@ async function resolveImageryProvider() {
         style: Cesium.IonWorldImageryStyle.AERIAL,
       }),
       label: "Cesium World Imagery",
+      shortLabel: "Cesium imagery",
+      usingIon: true,
     };
   } catch (error) {
     console.warn("Cesium imagery failed; using Esri fallback.", error);
@@ -3010,25 +3045,36 @@ async function resolveImageryProvider() {
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
       label: IMAGERY_FALLBACKS.esri.label,
+      shortLabel: "Esri imagery",
+      usingIon: false,
+      fallbackReason: "Cesium World Imagery request failed.",
     };
   }
 }
 
 async function resolveTerrainProvider() {
-  if (state.terrainMode === "ellipsoid" || !state.config.cesium_ion_token) {
-    if (state.terrainMode !== "ellipsoid" && !state.config.cesium_ion_token) {
+  if (state.terrainMode === "ellipsoid" || !hasCesiumIonToken()) {
+    const fallbackReason = state.terrainMode !== "ellipsoid" && !hasCesiumIonToken()
+      ? "Cesium ion token is not configured for World Terrain."
+      : "";
+    if (state.terrainMode !== "ellipsoid" && !hasCesiumIonToken()) {
       state.terrainMode = "ellipsoid";
       els.terrainSelect.value = "ellipsoid";
     }
     return {
       provider: new Cesium.EllipsoidTerrainProvider(),
       label: "Terrain: Ellipsoid only",
+      shortLabel: "ellipsoid terrain",
+      usingIon: false,
+      fallbackReason,
     };
   }
   try {
     return {
       provider: await Cesium.createWorldTerrainAsync(),
       label: "Terrain: Cesium World Terrain",
+      shortLabel: "Cesium terrain",
+      usingIon: true,
     };
   } catch (error) {
     console.warn("Cesium terrain failed; using ellipsoid fallback.", error);
@@ -3037,6 +3083,9 @@ async function resolveTerrainProvider() {
     return {
       provider: new Cesium.EllipsoidTerrainProvider(),
       label: "Terrain: Ellipsoid fallback",
+      shortLabel: "ellipsoid terrain",
+      usingIon: false,
+      fallbackReason: "Cesium World Terrain request failed.",
     };
   }
 }
@@ -3369,7 +3418,7 @@ async function buildViewer() {
     }
   }
 
-  if (state.config.cesium_ion_token) {
+  if (hasCesiumIonToken()) {
     Cesium.Ion.defaultAccessToken = state.config.cesium_ion_token;
   }
 
@@ -3389,12 +3438,17 @@ async function buildViewer() {
   });
   window.__LLM_DEV_VIEWER = state.viewer;
 
+  const requestedModes = {
+    imageryMode: state.imageryMode,
+    terrainMode: state.terrainMode,
+  };
   const imagery = await resolveImageryProvider();
   state.viewer.imageryLayers.removeAll();
   state.viewer.imageryLayers.addImageryProvider(imagery.provider);
 
   const terrain = await resolveTerrainProvider();
   state.viewer.terrainProvider = terrain.provider;
+  updateMapStreamChip(imagery, terrain, requestedModes);
 
   state.viewer.scene.globe.depthTestAgainstTerrain = false;
   applyMapModeCameraControls();
@@ -3914,14 +3968,14 @@ function onPromptInputKeyDown(event) {
 async function streamSelectedSources() {
   if (state.selectedSourceIds.has("esri_world_imagery")) {
     state.imageryMode = "esri";
-  } else if (state.selectedSourceIds.has("cesium_world_imagery") && state.config?.cesium_ion_token) {
+  } else if (state.selectedSourceIds.has("cesium_world_imagery") && hasCesiumIonToken()) {
     state.imageryMode = "ion-satellite";
   } else if (state.selectedSourceIds.has("osm_basemap")) {
     state.imageryMode = "osm";
   }
 
   state.terrainMode = state.selectedSourceIds.has("cesium_world_terrain")
-    && state.config?.cesium_ion_token
+    && hasCesiumIonToken()
     ? "cesium-world"
     : "ellipsoid";
 

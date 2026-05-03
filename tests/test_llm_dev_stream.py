@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -358,6 +359,34 @@ def test_chat_panel_hides_advisor_header_and_status_noise() -> None:
     assert 'id="requestStatus" class="section-meta" aria-live="polite"' in html
     assert "Use the advisor response" not in js
     assert "Deterministic advisor response shown (" not in js
+
+
+def test_map_stream_status_does_not_confuse_esri_tiles_with_missing_ion() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    app_source = Path(kmh_app.__file__).read_text(encoding="utf-8")
+
+    assert "_load_dotenv_file(BASE_DIR.parent / \".env\")" in app_source
+    assert "_load_dotenv_file(BASE_DIR.parent / \".env.local\")" in app_source
+    assert "CESIUM_ACCESS_TOKEN" in app_source
+    assert "CESIUM_ION_ACCESS_TOKEN" in app_source
+    assert "state.cesiumIonTokenAvailable = hasCesiumIonToken();" in js
+    assert "function updateMapStreamChip" in js
+    assert "Map stream: ${imageryLabel}" in js
+    assert "Map stream active; ion fallback" in js
+    assert "Cesium ion stream active" in js
+    assert "Cesium token missing" not in js
+    assert "Cesium token detected" not in js
+
+
+def test_dotenv_loader_sets_missing_environment_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = "TERA_TEST_DOTENV_VALUE"
+    monkeypatch.delenv(key, raising=False)
+    dotenv_file = tmp_path / ".env"
+    dotenv_file.write_text(f"{key}='loaded-from-dotenv'\n", encoding="utf-8")
+
+    kmh_app._load_dotenv_file(dotenv_file)
+
+    assert os.environ[key] == "loaded-from-dotenv"
 
 
 def test_source_planner_degrades_without_false_inference_failure() -> None:
