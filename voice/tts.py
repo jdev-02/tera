@@ -1,8 +1,15 @@
 """Glue between the orchestrator's plain-English rationale and Piper TTS.
 
-The orchestrator calls `synthesize_rationale_b64(rationale)` to get a
-base64-encoded WAV ready to embed in PlanResponse. Returns None if Piper
-is unavailable -- caller treats that as a degraded but valid response.
+Two synthesis paths:
+
+  synthesize_rationale_b64(text) -- the /plan default. Cadence-transforms
+    a plain-English rationale and synthesizes it. Used in every plan
+    response when ?tts=true.
+
+  synthesize_explanation_b64(term) -- the on-demand explain path. Looks up
+    `term` in voice.glossary (deterministic, no LLM) and synthesizes
+    "<reading> stands for <full meaning>, <context>." Returns None for
+    unknown terms so the operator never hears a fabricated definition.
 
 Pure I/O wiring. Cadence transformation lives in voice.rationale; the
 synth lives in voice.piper_client. This module just composes them.
@@ -14,6 +21,7 @@ import base64
 
 import structlog
 
+from voice.glossary import explain, render_explanation_text
 from voice.piper_client import get_piper
 from voice.rationale import to_operator_cadence
 
@@ -55,3 +63,55 @@ def synthesize_rationale_b64(
         return None
 
     return base64.b64encode(wav_bytes).decode("ascii")
+
+
+def synthesize_explanation_b64(
+    term: str, length_scale: float | None = None
+) -> dict[str, str] | None:
+    """Synthesize a deterministic spoken explanation of an acronym.
+
+    Looks up `term` in voice.glossary (case-insensitive). If known, returns
+    `{"term": <canonical key>, "text": <spoken text>, "audio_b64": <wav>}`.
+    If unknown, returns None and logs `glossary_term_unknown` -- caller can
+    play a 'term not recognized' clip or surface that to the operator.
+
+    Why this is safer than asking the LLM to define the acronym:
+      - Deterministic: same input always yields same output.
+      - Auditable: the definition lives in a versioned source file.
+      - No fabrication risk: unknown terms don't get plausibly-wrong defs.
+
+    Args:
+        term: the acronym the operator wants explained (e.g. "HLZ").
+        length_scale: optional pacing override (None = client default).
+    """
+    entry = explain(term)
+    if entry is None:
+        log.info("glossary_term_unknown", term=term)
+        return None
+
+    spoken_text = render_explanation_text(entry)
+
+    client = get_piper()
+    if not client.is_available():
+        log.info("piper_unavailable", note="explain returns text without audio")
+        return {
+            "term": term.strip().upper(),
+            "text": spoken_text,
+            "audio_b64": "",
+        }
+
+    try:
+        wav_bytes = client.synthesize_wav(spoken_text, length_scale=length_scale)
+    except Exception as e:  # noqa: BLE001 -- never fail the explain path
+        log.warning("piper_explain_synth_failed", error=str(e))
+        return {
+            "term": term.strip().upper(),
+            "text": spoken_text,
+            "audio_b64": "",
+        }
+
+    return {
+        "term": term.strip().upper(),
+        "text": spoken_text,
+        "audio_b64": base64.b64encode(wav_bytes).decode("ascii"),
+    }
