@@ -19,6 +19,10 @@ final class TeraPlanClient {
         void onComplete(boolean ok, String message);
     }
 
+    interface PlanCallback {
+        void onComplete(boolean ok, String message, JSONObject planJson);
+    }
+
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final int CONNECT_TIMEOUT_MS = 5000;
     private static final int READ_TIMEOUT_MS = 180000;
@@ -42,22 +46,22 @@ final class TeraPlanClient {
     }
 
     static void requestPlan(String endpoint, String prompt, JSONObject mapContext,
-                            Callback callback) {
+                            PlanCallback callback) {
         EXECUTOR.execute(() -> {
             HttpURLConnection connection = null;
             try {
                 if (endpoint == null || !endpoint.startsWith("http")) {
-                    callback.onComplete(false, "Endpoint must start with http:// or https://");
+                    callback.onComplete(false, "Endpoint must start with http:// or https://", null);
                     return;
                 }
                 if (prompt == null || prompt.trim().isEmpty()) {
-                    callback.onComplete(false, "Prompt is empty.");
+                    callback.onComplete(false, "Prompt is empty.", null);
                     return;
                 }
 
                 String healthError = checkHealth(endpoint.trim());
                 if (healthError != null) {
-                    callback.onComplete(false, healthError);
+                    callback.onComplete(false, healthError, null);
                     return;
                 }
 
@@ -82,17 +86,23 @@ final class TeraPlanClient {
                 if (code >= 200 && code < 300 && shouldVerifyPlanResponse(responseBody)) {
                     VerifyResult verify = verifyPlanResponse(endpoint, responseBody);
                     if (!verify.ok) {
-                        callback.onComplete(false, REJECTED_SIGNATURE + "\n" + verify.message);
+                        callback.onComplete(false, REJECTED_SIGNATURE + "\n" + verify.message, null);
                         return;
                     }
                 }
 
+                JSONObject planJson = null;
+                try {
+                    planJson = new JSONObject(responseBody);
+                } catch (JSONException ignored) {
+                }
+
                 PromptResult result = parsePromptResult(code, responseBody);
-                callback.onComplete(result.ok, result.message);
+                callback.onComplete(result.ok, result.message, result.ok ? planJson : null);
             } catch (SocketTimeoutException e) {
-                callback.onComplete(false, "Jetson timed out. Check WiFi, port 8080, and whether Gemma is still generating.");
+                callback.onComplete(false, "Jetson timed out. Check WiFi, port 8000, and whether the agent is running.", null);
             } catch (Exception e) {
-                callback.onComplete(false, friendlyException(e));
+                callback.onComplete(false, friendlyException(e), null);
             } finally {
                 if (connection != null) {
                     connection.disconnect();
