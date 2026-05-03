@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert atak-link-server atak-link-test tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert atak-link-server atak-link-test tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install jetson-compose-refresh
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -159,6 +159,9 @@ eval: install ## Run the 20-prompt regression set
 
 jetson-autoupdate-install: ## Install systemd services on Jetson to auto-pull origin/main and restart planner
 	@bash deploy/scripts/install_jetson_autoupdate.sh
+
+jetson-compose-refresh: ## On Jetson: pull main and rebuild/restart the planner with Docker Compose
+	@bash deploy/scripts/jetson_compose_refresh.sh
 
 clean: ## Remove venv and caches
 	rm -rf $(VENV) .pytest_cache .ruff_cache .mypy_cache __pycache__
