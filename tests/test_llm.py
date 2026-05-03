@@ -220,6 +220,7 @@ def test_anthropic_complete_structured(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_ollama_complete_structured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
     fake_response = {"message": {"content": '{"a": 1}'}}
     with patch("agent.llm.OllamaLib") as mock_ollama_cls:
         mock_ollama_cls.return_value.chat.return_value = fake_response
@@ -228,6 +229,7 @@ def test_ollama_complete_structured(monkeypatch: pytest.MonkeyPatch) -> None:
             messages=[Message(role="user", content="x")],
             schema={"type": "object"},
         )
+    assert client.model == "gemma3:4b"
     assert result == {"a": 1}
 
 
