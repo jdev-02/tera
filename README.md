@@ -1,6 +1,6 @@
 # TERA — Tactical Edge Route Agent
 
-> **By Team TruePoint** · National Security Hackathon 2026 (Cerebral Valley × US Army xTech)
+> **By Team TruePoint** — competing as members of the **[Naval Postgraduate School Foundation](https://npsfoundation.org/) Entrepreneurship Club** · National Security Hackathon 2026 (Cerebral Valley × US Army xTech)
 >
 > A pocket-sized, fully-offline AI agent that turns natural language into trustworthy tactical routes inside ATAK, on a Jetson Orin Nano, with no cloud and no outbound packets. Voice in, voice and visual out — operators can navigate hands-free while climbing, fast-roping, or running another task.
 
