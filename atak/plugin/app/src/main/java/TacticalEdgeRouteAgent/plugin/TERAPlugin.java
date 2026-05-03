@@ -24,6 +24,14 @@ import android.widget.TextView;
 
 import com.atak.plugins.impl.PluginContextProvider;
 import com.atak.plugins.impl.PluginLayoutInflater;
+import com.atakmap.android.maps.MapView;
+import com.atakmap.android.maps.Marker;
+import com.atakmap.coremap.maps.coords.GeoBounds;
+import com.atakmap.coremap.maps.coords.GeoPoint;
+import com.atakmap.coremap.maps.coords.GeoPointMetaData;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import gov.tak.api.plugin.IPlugin;
 import gov.tak.api.plugin.IServiceController;
@@ -137,24 +145,23 @@ public class TERAPlugin implements IPlugin {
         final View sendMessage = teraView.findViewById(R.id.tera_send_message);
         final View voiceMessage = teraView.findViewById(R.id.tera_voice_message);
         final View ttsToggle = teraView.findViewById(R.id.tera_tts_toggle);
-        final TextView status = teraView.findViewById(R.id.tera_status);
-        final TextView response = teraView.findViewById(R.id.tera_response);
         final StringBuilder chatHistory = new StringBuilder();
         final StringBuilder hostState = new StringBuilder();
         final boolean[] ttsEnabled = new boolean[] { false };
         final boolean[] listening = new boolean[] { false };
 
         hostButton.setText(R.string.host_local);
-        hostButton.setOnClickListener(v -> showHostPopup(hostButton, hostState, status));
+        hostButton.setOnClickListener(v -> showHostPopup(
+                hostButton, hostState, connectionStatus));
         infoButton.setOnClickListener(v -> showInfoPopup(infoButton));
         voiceMessage.setOnClickListener(v -> toggleVoiceInput(
-                voiceMessage, chatInput, status, listening));
+                voiceMessage, chatInput, listening));
         ttsToggle.setOnClickListener(v -> {
             ttsEnabled[0] = !ttsEnabled[0];
             ttsToggle.setBackgroundResource(ttsEnabled[0]
                     ? R.drawable.chat_icon_button_selected_bg
                     : R.drawable.chat_icon_button_bg);
-            status.setText(ttsEnabled[0] ? "Text-to-speech enabled." : "Text-to-speech disabled.");
+            connectionStatus.setText(ttsEnabled[0] ? "TTS on" : "TTS off");
         });
 
         sendMessage.setOnClickListener(v -> {
@@ -164,6 +171,7 @@ public class TERAPlugin implements IPlugin {
             }
             String host = hostState.toString();
             String endpoint = buildEndpoint(host);
+            JSONObject mapContext = buildMapContext();
 
             appendChatLine(chatHistory, host.isEmpty() ? "Operator (local)" : "Operator (" + host + ")", message);
             transcript.setText(chatHistory.toString());
@@ -171,12 +179,11 @@ public class TERAPlugin implements IPlugin {
             chatInput.setText("");
             sendMessage.setEnabled(false);
             connectionStatus.setText(R.string.connection_connecting);
-            status.setText(R.string.status_sending);
-            response.setText("");
 
             TeraPlanClient.requestPlan(
                     endpoint,
                     message,
+                    mapContext,
                     new TeraPlanClient.Callback() {
                         @Override
                         public void onComplete(boolean ok, String message) {
@@ -185,7 +192,6 @@ public class TERAPlugin implements IPlugin {
                                 connectionStatus.setText(ok
                                         ? R.string.connection_online
                                         : R.string.connection_error);
-                                status.setText(ok ? "Agent response received." : "Agent request failed.");
                                 appendChatLine(chatHistory, ok ? "Agent" : "Error", message);
                                 transcript.setText(chatHistory.toString());
                                 scrollChatToBottom(chatScroll);
@@ -195,7 +201,8 @@ public class TERAPlugin implements IPlugin {
         });
     }
 
-    private void showHostPopup(Button hostButton, StringBuilder hostState, TextView status) {
+    private void showHostPopup(Button hostButton, StringBuilder hostState,
+                               TextView connectionStatus) {
         LinearLayout content = new LinearLayout(hostButton.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(12);
@@ -222,19 +229,26 @@ public class TERAPlugin implements IPlugin {
         hostEdit.setPadding(dp(10), 0, dp(10), 0);
         hostEdit.setSelectAllOnFocus(false);
 
+        TextView result = new TextView(hostButton.getContext());
+        result.setTextColor(Color.WHITE);
+        result.setTextSize(14);
+        result.setLineSpacing(dp(2), 1.0f);
+        result.setPadding(0, dp(10), 0, 0);
+        result.setVisibility(View.GONE);
+
         LinearLayout actions = new LinearLayout(hostButton.getContext());
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setPadding(0, dp(10), 0, 0);
 
-        Button apply = new Button(hostButton.getContext());
-        apply.setText(R.string.host_popup_apply);
-        apply.setTextSize(12);
+        Button connect = new Button(hostButton.getContext());
+        connect.setText(R.string.host_popup_connect);
+        connect.setTextSize(12);
 
         Button useLocal = new Button(hostButton.getContext());
         useLocal.setText(R.string.host_popup_local);
         useLocal.setTextSize(12);
 
-        actions.addView(apply, new LinearLayout.LayoutParams(0,
+        actions.addView(connect, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         actions.addView(useLocal, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1));
@@ -243,6 +257,7 @@ public class TERAPlugin implements IPlugin {
         content.addView(hostEdit, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(38)));
+        content.addView(result);
         content.addView(actions);
 
         PopupWindow popup = new PopupWindow(content, dp(300),
@@ -254,23 +269,43 @@ public class TERAPlugin implements IPlugin {
                 | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
 
-        apply.setOnClickListener(v -> {
-            hostState.setLength(0);
-            hostState.append(hostEdit.getText().toString().trim());
-            hostButton.setText(hostState.length() == 0
-                    ? pluginContext.getString(R.string.host_local)
-                    : hostState.toString());
-            status.setText(hostState.length() == 0
-                    ? "Host set to local."
-                    : "Host set to " + hostState);
-            popup.dismiss();
-        });
-
         useLocal.setOnClickListener(v -> {
             hostState.setLength(0);
             hostButton.setText(R.string.host_local);
-            status.setText("Host set to local.");
+            connectionStatus.setText(R.string.connection_offline);
             popup.dismiss();
+        });
+
+        connect.setOnClickListener(v -> {
+            String host = hostEdit.getText().toString().trim();
+            String endpoint = buildEndpoint(host);
+            hideKeyboard(hostEdit);
+            connect.setEnabled(false);
+            connect.setText("...");
+            connectionStatus.setText(R.string.connection_connecting);
+            result.setVisibility(View.VISIBLE);
+            result.setText("Testing:\n" + endpoint);
+            TeraPlanClient.checkJetson(endpoint, new TeraPlanClient.Callback() {
+                @Override
+                public void onComplete(boolean ok, String message) {
+                    mainHandler.post(() -> {
+                        connect.setEnabled(true);
+                        connect.setText(R.string.host_popup_connect);
+                        connectionStatus.setText(ok
+                                ? R.string.connection_online
+                                : R.string.connection_error);
+                        result.setText(message + "\n\nEndpoint:\n" + endpoint);
+                        if (ok) {
+                            hostState.setLength(0);
+                            hostState.append(host);
+                            hostButton.setText(hostState.length() == 0
+                                    ? pluginContext.getString(R.string.host_local)
+                                    : hostState.toString());
+                            popup.dismiss();
+                        }
+                    });
+                }
+            });
         });
 
         popup.showAtLocation(hostButton.getRootView(),
@@ -285,10 +320,9 @@ public class TERAPlugin implements IPlugin {
         }, 100);
     }
 
-    private void toggleVoiceInput(View voiceButton, EditText chatInput, TextView status,
-                                  boolean[] listening) {
+    private void toggleVoiceInput(View voiceButton, EditText chatInput, boolean[] listening) {
         if (!SpeechRecognizer.isRecognitionAvailable(pluginContext)) {
-            status.setText("Speech recognition is not available on this device.");
+            chatInput.setHint("Speech recognition unavailable");
             return;
         }
 
@@ -298,7 +332,7 @@ public class TERAPlugin implements IPlugin {
             }
             listening[0] = false;
             voiceButton.setBackgroundResource(R.drawable.chat_icon_button_bg);
-            status.setText("Voice input stopped.");
+            chatInput.setHint(R.string.chat_input_hint);
             return;
         }
 
@@ -307,12 +341,12 @@ public class TERAPlugin implements IPlugin {
             speechRecognizer.setRecognitionListener(new RecognitionListener() {
                 @Override
                 public void onReadyForSpeech(Bundle params) {
-                    status.setText(R.string.status_listening);
+                    chatInput.setHint(R.string.status_listening);
                 }
 
                 @Override
                 public void onBeginningOfSpeech() {
-                    status.setText("Listening...");
+                    chatInput.setHint(R.string.status_listening);
                 }
 
                 @Override
@@ -327,14 +361,14 @@ public class TERAPlugin implements IPlugin {
                 public void onEndOfSpeech() {
                     listening[0] = false;
                     voiceButton.setBackgroundResource(R.drawable.chat_icon_button_bg);
-                    status.setText("Processing voice input...");
+                    chatInput.setHint("Processing voice...");
                 }
 
                 @Override
                 public void onError(int error) {
                     listening[0] = false;
                     voiceButton.setBackgroundResource(R.drawable.chat_icon_button_bg);
-                    status.setText("Voice input failed: " + speechErrorMessage(error));
+                    chatInput.setHint("Voice failed: " + speechErrorMessage(error));
                 }
 
                 @Override
@@ -344,12 +378,12 @@ public class TERAPlugin implements IPlugin {
                     java.util.ArrayList<String> matches = results.getStringArrayList(
                             SpeechRecognizer.RESULTS_RECOGNITION);
                     if (matches == null || matches.isEmpty()) {
-                        status.setText("No voice input detected.");
+                        chatInput.setHint("No voice detected");
                         return;
                     }
                     chatInput.setText(matches.get(0));
                     chatInput.setSelection(chatInput.getText().length());
-                    status.setText("Voice input added to chat.");
+                    chatInput.setHint(R.string.chat_input_hint);
                 }
 
                 @Override
@@ -376,7 +410,7 @@ public class TERAPlugin implements IPlugin {
 
         listening[0] = true;
         voiceButton.setBackgroundResource(R.drawable.chat_icon_button_selected_bg);
-        status.setText(R.string.status_listening);
+        chatInput.setHint(R.string.status_listening);
         speechRecognizer.startListening(intent);
     }
 
@@ -423,7 +457,69 @@ public class TERAPlugin implements IPlugin {
         return endpoint;
     }
 
+    private JSONObject buildMapContext() {
+        try {
+            MapView mapView = MapView.getMapView();
+            if (mapView == null) {
+                return null;
+            }
+
+            JSONObject context = new JSONObject();
+            GeoPointMetaData centerMeta = mapView.getCenterPoint();
+            if (centerMeta != null && centerMeta.get() != null && centerMeta.get().isValid()) {
+                context.put("camera", pointToJson(centerMeta.get()));
+            }
+
+            GeoBounds bounds = mapView.getBounds();
+            if (bounds != null) {
+                JSONObject viewBounds = new JSONObject();
+                viewBounds.put("west", bounds.getWest());
+                viewBounds.put("south", bounds.getSouth());
+                viewBounds.put("east", bounds.getEast());
+                viewBounds.put("north", bounds.getNorth());
+                GeoPoint center = bounds.getCenter(null);
+                if (center != null && center.isValid()) {
+                    viewBounds.put("center_lat", center.getLatitude());
+                    viewBounds.put("center_lon", center.getLongitude());
+                }
+                context.put("view_bounds", viewBounds);
+            }
+
+            Marker self = mapView.getSelfMarker();
+            if (self != null && self.getPoint() != null && self.getPoint().isValid()) {
+                JSONObject selectedArea = new JSONObject();
+                GeoPoint selfPoint = self.getPoint();
+                selectedArea.put("west", selfPoint.getLongitude());
+                selectedArea.put("south", selfPoint.getLatitude());
+                selectedArea.put("east", selfPoint.getLongitude());
+                selectedArea.put("north", selfPoint.getLatitude());
+                selectedArea.put("center_lat", selfPoint.getLatitude());
+                selectedArea.put("center_lon", selfPoint.getLongitude());
+                context.put("selected_area", selectedArea);
+            }
+
+            return context.length() == 0 ? null : context;
+        } catch (JSONException e) {
+            return null;
+        }
+    }
+
+    private JSONObject pointToJson(GeoPoint point) throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put("lat", point.getLatitude());
+        json.put("lon", point.getLongitude());
+        if (point.isAltitudeValid()) {
+            json.put("height_m", point.getAltitude());
+        }
+        return json;
+    }
+
     private void showInfoPopup(View anchor) {
+        showMessagePopup(anchor, pluginContext.getString(R.string.tera_info_title),
+                pluginContext.getString(R.string.tera_info_message));
+    }
+
+    private void showMessagePopup(View anchor, String titleText, String messageText) {
         LinearLayout content = new LinearLayout(anchor.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(12);
@@ -431,24 +527,41 @@ public class TERAPlugin implements IPlugin {
         content.setBackgroundResource(R.drawable.status_bar_bg);
 
         TextView title = new TextView(anchor.getContext());
-        title.setText(R.string.tera_info_title);
+        title.setText(titleText);
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
 
         TextView message = new TextView(anchor.getContext());
-        message.setText(R.string.tera_info_message);
+        message.setText(messageText);
         message.setTextColor(Color.WHITE);
-        message.setTextSize(13);
+        message.setTextSize(14);
+        message.setLineSpacing(dp(2), 1.0f);
         message.setPadding(0, dp(8), 0, 0);
+
+        Button close = new Button(anchor.getContext());
+        close.setText("OK");
+        close.setTextSize(12);
 
         content.addView(title);
         content.addView(message);
+        content.addView(close, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        PopupWindow popup = new PopupWindow(content, dp(260), LinearLayout.LayoutParams.WRAP_CONTENT, true);
+        PopupWindow popup = new PopupWindow(content, dp(320), LinearLayout.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-        popup.showAsDropDown(anchor, -dp(226), dp(6));
+        close.setOnClickListener(v -> popup.dismiss());
+        popup.showAtLocation(anchor.getRootView(), Gravity.CENTER, 0, 0);
+    }
+
+    private void hideKeyboard(View view) {
+        InputMethodManager imm = (InputMethodManager) pluginContext.getSystemService(
+                Context.INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+        }
     }
 
     private int dp(int value) {
