@@ -985,15 +985,14 @@ textarea {
 }
 
 .settings-shell {
-  position: relative;
+  display: inline-flex;
 }
 
 .settings-menu {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 20;
-  width: min(430px, calc(100vw - 52px));
+  width: 100%;
+  max-height: min(44vh, 520px);
+  margin-bottom: var(--space-2);
+  overflow-y: auto;
   padding: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: 0;
