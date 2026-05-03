@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
@@ -10,7 +11,7 @@ from uuid import uuid4
 
 import httpx
 import structlog
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -24,13 +25,23 @@ IMAGERY_SOURCING_PROMPT_FILE = (
 )
 INDEX_FILE = BASE_DIR / "static" / "index.html"
 STATIC_DIR = BASE_DIR / "static"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma2:2b")
+ANTHROPIC_API_URL = os.getenv(
+    "ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages"
+)
+ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 REQUEST_TIMEOUT_S = float(os.getenv("REQUEST_TIMEOUT_S", "120"))
+LOCATION_SEARCH_TIMEOUT_S = float(os.getenv("LOCATION_SEARCH_TIMEOUT_S", "4"))
+LOCATION_SEARCH_URL = os.getenv(
+    "LOCATION_SEARCH_URL", "https://nominatim.openstreetmap.org/search"
+)
 CESIUM_ION_TOKEN = os.getenv("CESIUM_ION_TOKEN", "")
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
+ACTIVE_OLLAMA_BASE_URL: str | None = None
 
 app = FastAPI(title="TERA Source Planner", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -51,6 +62,9 @@ class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     system: str | None = Field(default=None, max_length=4000)
     model: str | None = Field(default=None, max_length=200)
+    llm_provider: str | None = Field(default="ollama", max_length=40)
+    cloud_model: str | None = Field(default=None, max_length=200)
+    cloud_api_key: str | None = Field(default=None, max_length=500)
     agent_profile: str | None = Field(default="imagery-sourcing", max_length=80)
     map_context: "MapContext | None" = None
     source_context: SourceContext | None = None
@@ -64,14 +78,34 @@ class PromptResponse(BaseModel):
 class ModelsResponse(BaseModel):
     default_model: str
     models: list[str]
+    online: bool = True
+    base_url: str | None = None
+    detail: str | None = None
 
 
 class RuntimeConfigResponse(BaseModel):
     cesium_ion_token: str
     default_model: str
+    claude_default_model: str
     default_lat: float
     default_lon: float
     default_height_m: float
+
+
+class LocationSuggestion(BaseModel):
+    name: str
+    detail: str = ""
+    lat: float
+    lon: float
+    height_m: float = 12000
+    source: str
+
+
+class LocationSearchResponse(BaseModel):
+    query: str
+    suggestions: list[LocationSuggestion]
+    online: bool
+    detail: str | None = None
 
 
 class MapPoint(BaseModel):
@@ -95,6 +129,9 @@ class MapContext(BaseModel):
     view_bounds: ViewBounds | None = None
     imagery_source: str | None = Field(default=None, max_length=200)
     terrain_source: str | None = Field(default=None, max_length=200)
+    location_focus_label: str | None = Field(default=None, max_length=200)
+    location_focus_source: str | None = Field(default=None, max_length=80)
+    location_confirmed: bool = False
 
 
 class SourceOption(BaseModel):
@@ -233,6 +270,42 @@ SOURCE_CATALOG: list[SourceOption] = [
         recommended_for=["terrain-routing", "signal-planning", "imagery-preview"],
         derived_layers=["cached_terrain_tiles"],
         notes="Good for visualization, not a substitute for indexed DEM rasters.",
+    ),
+    SourceOption(
+        id="esri_world_elevation",
+        name="Esri World Elevation Terrain",
+        provider="Esri ArcGIS Online / Living Atlas",
+        category="terrain",
+        purpose=(
+            "Queryable online elevation terrain source for AO sampling and DEM "
+            "fallback when authoritative DEM downloads are unavailable."
+        ),
+        useful_for=[
+            "elevation sampling",
+            "slope fallback",
+            "hillshade",
+            "viewshed preflight",
+            "terrain sanity checks",
+        ],
+        analysis_role=(
+            "Download or cache clipped AO elevation tiles/samples so the server "
+            "database can answer terrain queries offline when primary DEMs are "
+            "missing or delayed."
+        ),
+        stream_status="queryable-online",
+        download_status="download-required",
+        required_for=["terrain-routing", "signal-planning"],
+        recommended_for=["water-access", "sar-planning", "evacuation"],
+        derived_layers=[
+            "elevation_samples",
+            "slope_degrees",
+            "hillshade",
+            "viewshed_surfaces",
+        ],
+        notes=(
+            "Treat as a queryable fallback or validation layer; prefer USGS 3DEP "
+            "or Copernicus DEM when available for authoritative analysis."
+        ),
     ),
     SourceOption(
         id="osm_basemap",
@@ -633,6 +706,59 @@ US_CONTEXT_TERMS = (
     "usfs",
 )
 
+LOCAL_LOCATION_GAZETTEER: tuple[dict[str, object], ...] = (
+    {
+        "name": "Joshua Tree National Park, CA",
+        "detail": "Desert terrain, trails, dry washes, roads, climbing areas, and water scarcity.",
+        "lat": 33.8734,
+        "lon": -115.9010,
+        "height_m": 18000,
+        "aliases": ("joshua tree", "joshua tree np", "jtnp", "joshu tree", "joshua"),
+    },
+    {
+        "name": "San Francisco, CA",
+        "detail": "City center and Bay Area mission staging reference.",
+        "lat": 37.7749,
+        "lon": -122.4194,
+        "height_m": 14000,
+        "aliases": ("sf", "san fran", "bay area"),
+    },
+    {
+        "name": "Fort Irwin / National Training Center, CA",
+        "detail": "Desert maneuver terrain, dry washes, roads, and range constraints.",
+        "lat": 35.2627,
+        "lon": -116.6848,
+        "height_m": 26000,
+        "aliases": ("fort irwin", "ntc", "national training center"),
+    },
+)
+
+KEYWORD_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "route": ("route", "routing", "navigate", "navigation", "path", "corridor", "approach"),
+    "patrol": ("patrol", "movement", "move", "walk", "team", "operator"),
+    "water": (
+        "water",
+        "hydration",
+        "hydrate",
+        "stream",
+        "river",
+        "spring",
+        "creek",
+        "wash",
+        "well",
+        "source",
+        "watter",
+    ),
+    "terrain": ("terrain", "terain", "topography", "elevation", "ground", "landform"),
+    "slope": ("slope", "steep", "grade", "incline", "cliff", "exposed", "exposure"),
+    "cover": ("cover", "concealment", "conceal", "canopy", "shade", "vegetation", "brush"),
+    "hazard": ("hazard", "hazzard", "risk", "danger", "closure", "blocked", "unsafe"),
+    "signal": ("signal", "comms", "communications", "radio", "relay", "antenna", "line of sight", "los"),
+    "imagery": ("imagery", "image", "satellite", "satelite", "aerial", "visual", "photo"),
+    "sar": ("sar", "search", "rescue", "missing", "lost", "hasty"),
+    "access": ("access", "private", "restricted", "boundary", "parcel", "permission", "legal"),
+}
+
 
 def _get_source_options_by_ids(source_ids: list[str]) -> list[SourceOption]:
     seen: set[str] = set()
@@ -683,14 +809,14 @@ def _format_source_context(source_context: SourceContext | None) -> str:
             for source_id in source_context.required_source_ids
             if source_id in SOURCE_BY_ID
         ]
-        lines.append(f"- Required sources inferred: {', '.join(required_names)}")
+        lines.append(f"- Required sources planned: {', '.join(required_names)}")
     if source_context.optional_source_ids:
         optional_names = [
             SOURCE_BY_ID[source_id].name
             for source_id in source_context.optional_source_ids
             if source_id in SOURCE_BY_ID
         ]
-        lines.append(f"- Optional sources inferred: {', '.join(optional_names)}")
+        lines.append(f"- Optional sources planned: {', '.join(optional_names)}")
     if source_context.clarifying_questions:
         lines.append(
             "- Socratic questions to ask next: "
@@ -715,14 +841,64 @@ def _format_manifest_bounds(map_context: MapContext | None) -> dict[str, float |
     }
 
 
+def _normalize_for_match(text: str) -> str:
+    expanded = text.lower()
+    for canonical, aliases in KEYWORD_EXPANSIONS.items():
+        for alias in aliases:
+            expanded = re.sub(rf"\b{re.escape(alias)}\b", canonical, expanded)
+    return re.sub(r"[^a-z0-9]+", " ", expanded).strip()
+
+
+def _tokens_for_match(text: str) -> list[str]:
+    return [token for token in _normalize_for_match(text).split() if token]
+
+
+def _token_matches(candidate: str, target: str) -> bool:
+    if candidate == target:
+        return True
+    if len(candidate) >= 4 and len(target) >= 4:
+        if candidate.startswith(target) or target.startswith(candidate):
+            return True
+        return SequenceMatcher(None, candidate, target).ratio() >= 0.82
+    return False
+
+
+def _phrase_matches(text_tokens: list[str], term_tokens: list[str]) -> bool:
+    if not term_tokens:
+        return False
+    if len(term_tokens) == 1:
+        return any(_token_matches(token, term_tokens[0]) for token in text_tokens)
+    if len(text_tokens) < len(term_tokens):
+        return False
+    for index in range(0, len(text_tokens) - len(term_tokens) + 1):
+        window = text_tokens[index : index + len(term_tokens)]
+        if all(_token_matches(token, term) for token, term in zip(window, term_tokens)):
+            return True
+    return False
+
+
 def _text_has_any(text: str, terms: tuple[str, ...]) -> bool:
-    return any(term in text for term in terms)
+    normalized_text = _normalize_for_match(text)
+    text_tokens = normalized_text.split()
+    for term in terms:
+        expanded_terms = (term, *KEYWORD_EXPANSIONS.get(term, ()))
+        for expanded_term in expanded_terms:
+            normalized_term = _normalize_for_match(expanded_term)
+            if not normalized_term:
+                continue
+            if f" {normalized_term} " in f" {normalized_text} ":
+                return True
+            if _phrase_matches(text_tokens, normalized_term.split()):
+                return True
+    return False
 
 
 def _infer_is_us_context(prompt_text: str, map_context: MapContext | None) -> bool:
     if _text_has_any(prompt_text, US_CONTEXT_TERMS):
         return True
-    bounds = (map_context.selected_area or map_context.view_bounds) if map_context else None
+    bounds = None
+    if map_context and (map_context.location_confirmed or map_context.selected_area):
+        bounds = map_context.selected_area or map_context.view_bounds
     if bounds and bounds.center_lat is not None and bounds.center_lon is not None:
         return 18.0 <= bounds.center_lat <= 72.0 and -170.0 <= bounds.center_lon <= -50.0
     return False
@@ -731,7 +907,7 @@ def _infer_is_us_context(prompt_text: str, map_context: MapContext | None) -> bo
 def _infer_mission_focus(prompt_text: str) -> str:
     scores: dict[str, int] = {}
     for focus, keywords in FOCUS_KEYWORDS:
-        score = sum(1 for keyword in keywords if keyword in prompt_text)
+        score = sum(1 for keyword in keywords if _text_has_any(prompt_text, (keyword,)))
         if score:
             scores[focus] = score
     if not scores:
@@ -814,8 +990,12 @@ def _infer_source_recommendation(
 
     if needs_terrain:
         _append_unique(required_ids, "usgs_3dep" if is_us_context else "copernicus_dem")
+        _append_unique(required_ids, "esri_world_elevation")
         _append_unique(optional_ids, "cesium_world_terrain")
-        rationale.append("An analysis DEM is required for slope, exposure, hydrology, and cost surfaces.")
+        rationale.append(
+            "An analysis DEM plus queryable Esri terrain fallback is required "
+            "for slope, exposure, hydrology, and cost surfaces."
+        )
 
     if needs_landcover:
         _append_unique(required_ids, "nlcd" if is_us_context else "esa_worldcover")
@@ -844,9 +1024,9 @@ def _infer_source_recommendation(
 
     if needs_hazards:
         _append_unique(optional_ids, "noaa_alerts")
-        if "fire" in prompt_text or "wildfire" in prompt_text:
+        if _text_has_any(prompt_text, ("fire", "wildfire")):
             _append_unique(required_ids, "nasa_firms")
-        if "flood" in prompt_text:
+        if _text_has_any(prompt_text, ("flood",)):
             _append_unique(required_ids, "fema_flood" if is_us_context else "sentinel_1_sar")
         rationale.append(
             "Hazard feeds are included only when the mission says current "
@@ -867,6 +1047,7 @@ def _infer_source_recommendation(
         _append_unique(optional_ids, "fcc_towers" if is_us_context else "osm_towers", "osm_towers")
         if not needs_terrain:
             _append_unique(required_ids, "usgs_3dep" if is_us_context else "copernicus_dem")
+            _append_unique(required_ids, "esri_world_elevation")
         rationale.append("Signal planning requires DEM-derived viewsheds plus tower/high-ground candidates.")
 
     if needs_current_imagery and not needs_water and not needs_hazards:
@@ -878,6 +1059,14 @@ def _infer_source_recommendation(
             "depends on recent conditions."
         )
 
+    if map_context is None or not (map_context.location_confirmed or map_context.selected_area):
+        questions.append(
+            "Move the map to the mission AO with search, KML/KMZ import, or AO "
+            "drawing and confirm that view before final source selection. The "
+            "AO decides clipping bounds and whether U.S. authoritative or global "
+            "open layers are the right defaults."
+        )
+
     if not required_ids:
         questions.append(
             "Which mission outcome must the database answer first: routing, "
@@ -885,7 +1074,7 @@ def _infer_source_recommendation(
             "control? This decides the required source family."
         )
         rationale.append(
-            "No deterministic analytical layer was inferred yet, so the "
+            "No deterministic analytical layer was identified yet, so the "
             "package stays in preview mode."
         )
 
@@ -923,7 +1112,9 @@ def _infer_source_recommendation(
             "or only support terrain movement? Enforcing access adds parcels, "
             "protected areas, or land-management boundaries."
         )
-    if map_context is None or (map_context.selected_area is None and map_context.view_bounds is None):
+    if map_context is None or (
+        map_context.selected_area is None and not map_context.location_confirmed
+    ):
         questions.append(
             "Is this AO inside the U.S. or outside it? That choice switches "
             "between U.S.-authoritative layers and global open layers."
@@ -1425,6 +1616,14 @@ def _build_system_prompt(request: PromptRequest) -> str:
         _format_view_bounds(map_context.selected_area if map_context else None).replace(
             "Visible map bounds", "Selected AO bounds"
         ),
+        (
+            "- Planner-confirmed mission map focus: "
+            + (
+                f"{map_context.location_focus_label or 'selected AO'} via {map_context.location_focus_source or 'map'}"
+                if map_context and (map_context.location_confirmed or map_context.selected_area)
+                else "not confirmed"
+            )
+        ),
         _format_point("Camera position", map_context.camera if map_context else None),
         _format_view_bounds(map_context.view_bounds if map_context else None),
         f"- Imagery source: {(map_context.imagery_source if map_context else None) or 'unknown'}",
@@ -1467,6 +1666,16 @@ def _build_system_prompt(request: PromptRequest) -> str:
                         "- Do not recommend the full catalog. Optimize for the smallest "
                         "package that enables the mission and explain what would be missing "
                         "if a source is omitted."
+                    ),
+                    (
+                        "- Drive source planning to mission scope in the fewest useful turns: "
+                        "combine missing AO, objective, movement mode, time horizon, and "
+                        "constraints into one ranked scope pass when possible."
+                    ),
+                    (
+                        "- If the planner-confirmed mission map focus is not confirmed, "
+                        "tell the planner to move the map with location search, import a "
+                        "KML/KMZ overlay, or draw an AO before final source confirmation."
                     ),
                     (
                         "- Ask no more than three clarifying questions, and only ask "
@@ -1515,8 +1724,179 @@ def _build_ollama_payload(request: PromptRequest, *, stream: bool) -> tuple[str,
     return model, payload
 
 
+def _request_llm_provider(request: PromptRequest) -> str:
+    provider = (request.llm_provider or "ollama").strip().lower()
+    if provider in {"claude", "anthropic"}:
+        return "claude"
+    return "ollama"
+
+
+def _build_claude_payload(request: PromptRequest) -> tuple[str, dict[str, object]]:
+    model = request.cloud_model or request.model or CLAUDE_MODEL
+    payload: dict[str, object] = {
+        "model": model,
+        "max_tokens": 900,
+        "temperature": 0.1,
+        "system": _build_system_prompt(request),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": request.prompt,
+                    }
+                ],
+            }
+        ],
+    }
+    return model, payload
+
+
+def _extract_claude_response_text(data: dict[str, object]) -> str:
+    content = data.get("content")
+    if not isinstance(content, list):
+        return ""
+
+    chunks: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            chunks.append(str(block.get("text", "")))
+    return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+async def _post_claude_message(request: PromptRequest) -> PromptResponse:
+    api_key = (request.cloud_api_key or os.getenv("ANTHROPIC_API_KEY", "")).strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Claude API key required. Open Model Provider, choose Claude API, "
+                "and add a key for this browser session."
+            ),
+        )
+
+    model, payload = _build_claude_payload(request)
+    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
+    headers = {
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+        "x-api-key": api_key,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(ANTHROPIC_API_URL, headers=headers, json=payload)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:500]
+        log.error(
+            "claude_http_error",
+            status_code=exc.response.status_code,
+            body=body,
+            model=model,
+        )
+        if exc.response.status_code in {401, 403}:
+            detail = "Claude API rejected the key or account access for this model."
+        else:
+            detail = f"Claude API returned {exc.response.status_code}: {body}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except httpx.HTTPError as exc:
+        log.error("claude_connection_error", error=str(exc), model=model)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach Claude API. {exc}",
+        ) from exc
+
+    text = _extract_claude_response_text(response.json())
+    if not text:
+        raise HTTPException(status_code=502, detail="Claude returned an empty response.")
+    return PromptResponse(model=model, response=text)
+
+
 def _sse_event(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+def _ollama_base_url_candidates() -> list[str]:
+    candidates = [
+        url.strip().rstrip("/")
+        for url in (
+            ACTIVE_OLLAMA_BASE_URL,
+            OLLAMA_BASE_URL,
+            "http://127.0.0.1:11434",
+            "http://localhost:11434",
+            "http://host.docker.internal:11434",
+        )
+        if url and url.strip()
+    ]
+    deduped: list[str] = []
+    for url in candidates:
+        if url not in deduped:
+            deduped.append(url)
+    return deduped
+
+
+async def _fetch_ollama_models_from(base_url: str) -> list[str]:
+    timeout = httpx.Timeout(6.0, connect=2.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(f"{base_url}/api/tags")
+        response.raise_for_status()
+    data = response.json()
+    return [
+        str(model.get("name", "")).strip()
+        for model in data.get("models", [])
+        if str(model.get("name", "")).strip()
+    ]
+
+
+def _score_local_location(query: str, item: dict[str, object]) -> int:
+    query_tokens = _tokens_for_match(query)
+    if not query_tokens:
+        return 0
+    haystack = " ".join(
+        [
+            str(item.get("name", "")),
+            str(item.get("detail", "")),
+            " ".join(str(alias) for alias in item.get("aliases", ())),
+        ]
+    )
+    haystack_tokens = _tokens_for_match(haystack)
+    score = 0
+    for query_token in query_tokens:
+        if any(_token_matches(token, query_token) for token in haystack_tokens):
+            score += 20
+    normalized_query = _normalize_for_match(query)
+    normalized_name = _normalize_for_match(str(item.get("name", "")))
+    if normalized_name.startswith(normalized_query):
+        score += 60
+    elif normalized_query in normalized_name:
+        score += 40
+    return score
+
+
+def _local_location_suggestions(query: str) -> list[LocationSuggestion]:
+    scored = [
+        (_score_local_location(query, item), item)
+        for item in LOCAL_LOCATION_GAZETTEER
+    ]
+    suggestions: list[LocationSuggestion] = []
+    for score, item in sorted(scored, key=lambda pair: pair[0], reverse=True):
+        if score <= 0:
+            continue
+        suggestions.append(
+            LocationSuggestion(
+                name=str(item["name"]),
+                detail=str(item.get("detail", "")),
+                lat=float(item["lat"]),
+                lon=float(item["lon"]),
+                height_m=float(item.get("height_m", 12000)),
+                source="local-gazetteer",
+            )
+        )
+    return suggestions[:5]
 
 
 @app.get("/")
@@ -1534,6 +1914,7 @@ async def runtime_config() -> RuntimeConfigResponse:
     return RuntimeConfigResponse(
         cesium_ion_token=CESIUM_ION_TOKEN,
         default_model=OLLAMA_MODEL,
+        claude_default_model=CLAUDE_MODEL,
         default_lat=DEFAULT_LAT,
         default_lon=DEFAULT_LON,
         default_height_m=DEFAULT_HEIGHT_M,
@@ -1542,41 +1923,101 @@ async def runtime_config() -> RuntimeConfigResponse:
 
 @app.get("/api/models", response_model=ModelsResponse)
 async def list_ollama_models() -> ModelsResponse:
-    timeout = httpx.Timeout(30.0, connect=10.0)
+    global ACTIVE_OLLAMA_BASE_URL
+    errors: list[str] = []
+    for base_url in _ollama_base_url_candidates():
+        try:
+            models = await _fetch_ollama_models_from(base_url)
+            ACTIVE_OLLAMA_BASE_URL = base_url
+            return ModelsResponse(
+                default_model=OLLAMA_MODEL,
+                models=models,
+                online=True,
+                base_url=base_url,
+            )
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:300]
+            errors.append(f"{base_url} returned {exc.response.status_code}: {body}")
+        except httpx.HTTPError as exc:
+            errors.append(f"{base_url} unreachable: {exc}")
+
+    detail = " | ".join(errors) if errors else "No Ollama base URLs were configured."
+    log.warning("ollama_models_unavailable", detail=detail)
+    return ModelsResponse(
+        default_model=OLLAMA_MODEL,
+        models=[],
+        online=False,
+        base_url=_ollama_base_url_candidates()[0],
+        detail=f"Local model unavailable. Deterministic source planner is active. {detail}",
+    )
+
+
+@app.get("/api/location-search", response_model=LocationSearchResponse)
+async def search_locations(
+    q: str = Query(min_length=2, max_length=200),
+) -> LocationSearchResponse:
+    query = q.strip()
+    suggestions = _local_location_suggestions(query)
+    online = False
+    detail: str | None = None
 
     try:
+        timeout = httpx.Timeout(LOCATION_SEARCH_TIMEOUT_S, connect=2.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+            response = await client.get(
+                LOCATION_SEARCH_URL,
+                params={
+                    "q": query,
+                    "format": "jsonv2",
+                    "limit": 6,
+                    "addressdetails": 1,
+                },
+                headers={
+                    "User-Agent": "TERA Source Planner local web app; optional online geocode"
+                },
+            )
             response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500]
-        log.error(
-            "ollama_tags_http_error",
-            status_code=exc.response.status_code,
-            body=body,
-            ollama_base_url=OLLAMA_BASE_URL,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not list models: Ollama returned {exc.response.status_code}: {body}",
-        ) from exc
-    except httpx.HTTPError as exc:
-        log.error("ollama_tags_connection_error", error=str(exc), ollama_base_url=OLLAMA_BASE_URL)
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Could not reach Ollama to list models. Confirm it is running and that "
-                f"OLLAMA_BASE_URL={OLLAMA_BASE_URL} is reachable."
-            ),
-        ) from exc
+        online = True
+        for item in response.json():
+            lat = item.get("lat")
+            lon = item.get("lon")
+            if lat is None or lon is None:
+                continue
+            display_name = str(item.get("display_name") or item.get("name") or query)
+            category = str(item.get("category") or "online geocoder")
+            place_type = str(item.get("type") or "place")
+            suggestions.append(
+                LocationSuggestion(
+                    name=display_name.split(",")[0],
+                    detail=f"{category}/{place_type} - {display_name}",
+                    lat=float(lat),
+                    lon=float(lon),
+                    height_m=12000,
+                    source="online-geocoder",
+                )
+            )
+    except (httpx.HTTPError, ValueError) as exc:
+        detail = f"Online location lookup unavailable: {exc}"
 
-    data = response.json()
-    models = [
-        str(model.get("name", "")).strip()
-        for model in data.get("models", [])
-        if str(model.get("name", "")).strip()
-    ]
-    return ModelsResponse(default_model=OLLAMA_MODEL, models=models)
+    deduped: list[LocationSuggestion] = []
+    seen: set[tuple[int, int, str]] = set()
+    for suggestion in suggestions:
+        key = (
+            round(suggestion.lat * 1000),
+            round(suggestion.lon * 1000),
+            suggestion.name.lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(suggestion)
+
+    return LocationSearchResponse(
+        query=query,
+        suggestions=deduped[:8],
+        online=online,
+        detail=detail,
+    )
 
 
 @app.get("/api/data-sources", response_model=SourceCatalogResponse)
@@ -1678,6 +2119,13 @@ def _download_plan_warnings(
         warnings.append(f"Unknown source ids ignored: {', '.join(unknown_ids)}")
     if not sources:
         warnings.append("No sources selected; manifest has no server ingest work.")
+    if request.map_context is None or not (
+        request.map_context.location_confirmed or request.map_context.selected_area
+    ):
+        warnings.append(
+            "Mission map focus is not confirmed; use location search, KML/KMZ import, "
+            "or AO drawing before treating bounds as final."
+        )
     if request.map_context is None or (
         request.map_context.selected_area is None and request.map_context.view_bounds is None
     ):
@@ -1741,35 +2189,37 @@ async def download_source_manifest(package_id: str) -> StreamingResponse:
 
 @app.post("/api/prompt", response_model=PromptResponse)
 async def prompt_ollama(request: PromptRequest) -> PromptResponse:
+    if _request_llm_provider(request) == "claude":
+        return await _post_claude_message(request)
+
     model, payload = _build_ollama_payload(request, stream=False)
 
     timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload)
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500]
-        log.error(
-            "ollama_http_error",
-            status_code=exc.response.status_code,
-            body=body,
-            ollama_base_url=OLLAMA_BASE_URL,
+    errors: list[str] = []
+    for base_url in _ollama_base_url_candidates():
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(f"{base_url}/api/generate", json=payload)
+                response.raise_for_status()
+            break
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            errors.append(f"{base_url} returned {exc.response.status_code}: {body}")
+            log.error(
+                "ollama_http_error",
+                status_code=exc.response.status_code,
+                body=body,
+                ollama_base_url=base_url,
+            )
+        except httpx.HTTPError as exc:
+            errors.append(f"{base_url} unreachable: {exc}")
+            log.error("ollama_connection_error", error=str(exc), ollama_base_url=base_url)
+    else:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach a local Ollama host. " + " | ".join(errors),
         )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Ollama returned {exc.response.status_code}: {body}",
-        ) from exc
-    except httpx.HTTPError as exc:
-        log.error("ollama_connection_error", error=str(exc), ollama_base_url=OLLAMA_BASE_URL)
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Could not reach Ollama. Confirm it is running and that "
-                f"OLLAMA_BASE_URL={OLLAMA_BASE_URL} is reachable from the container."
-            ),
-        ) from exc
 
     data = response.json()
     text = str(data.get("response", "")).strip()
@@ -1781,6 +2231,50 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
 
 @app.post("/api/prompt/stream")
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
+    if _request_llm_provider(request) == "claude":
+        model, _payload = _build_claude_payload(request)
+
+        async def claude_event_stream():
+            yield _sse_event({"type": "start", "model": model, "provider": "claude"})
+            yield _sse_event(
+                {
+                    "type": "status",
+                    "detail": "Waiting for Claude API response",
+                    "model": model,
+                }
+            )
+            try:
+                result = await _post_claude_message(request)
+            except HTTPException as exc:
+                yield _sse_event(
+                    {
+                        "type": "error",
+                        "detail": str(exc.detail),
+                        "model": model,
+                        "provider": "claude",
+                    }
+                )
+                return
+            yield _sse_event(
+                {
+                    "type": "token",
+                    "text": result.response,
+                    "model": result.model,
+                    "provider": "claude",
+                }
+            )
+            yield _sse_event({"type": "done", "model": result.model, "provider": "claude"})
+
+        return StreamingResponse(
+            claude_event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     model, payload = _build_ollama_payload(request, stream=True)
     timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
 
@@ -1789,59 +2283,58 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
         yield _sse_event(
             {"type": "status", "detail": "Waiting for local model tokens", "model": model}
         )
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", f"{OLLAMA_BASE_URL}/api/generate", json=payload
-                ) as response:
-                    if response.status_code >= 400:
-                        body = (await response.aread()).decode("utf-8", errors="replace")[:500]
-                        log.error(
-                            "ollama_stream_http_error",
-                            status_code=response.status_code,
-                            body=body,
-                            ollama_base_url=OLLAMA_BASE_URL,
-                        )
-                        yield _sse_event(
-                            {
-                                "type": "error",
-                                "detail": f"Ollama returned {response.status_code}: {body}",
-                                "model": model,
-                            }
-                        )
-                        return
-
-                    async for line in response.aiter_lines():
-                        if not line:
-                            continue
-                        try:
-                            chunk = json.loads(line)
-                        except json.JSONDecodeError:
+        errors: list[str] = []
+        for base_url in _ollama_base_url_candidates():
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "POST", f"{base_url}/api/generate", json=payload
+                    ) as response:
+                        if response.status_code >= 400:
+                            body = (await response.aread()).decode(
+                                "utf-8", errors="replace"
+                            )[:500]
+                            errors.append(
+                                f"{base_url} returned {response.status_code}: {body}"
+                            )
+                            log.error(
+                                "ollama_stream_http_error",
+                                status_code=response.status_code,
+                                body=body,
+                                ollama_base_url=base_url,
+                            )
                             continue
 
-                        text = str(chunk.get("response", ""))
-                        if text:
-                            yield _sse_event({"type": "token", "text": text, "model": model})
+                        async for line in response.aiter_lines():
+                            if not line:
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
 
-                        if chunk.get("done"):
-                            yield _sse_event({"type": "done", "model": model})
-                            return
-        except httpx.HTTPError as exc:
-            log.error(
-                "ollama_stream_connection_error",
-                error=str(exc),
-                ollama_base_url=OLLAMA_BASE_URL,
-            )
-            yield _sse_event(
-                {
-                    "type": "error",
-                    "detail": (
-                        "Could not reach Ollama. Confirm it is running and that "
-                        f"OLLAMA_BASE_URL={OLLAMA_BASE_URL} is reachable."
-                    ),
-                    "model": model,
-                }
-            )
+                            text = str(chunk.get("response", ""))
+                            if text:
+                                yield _sse_event({"type": "token", "text": text, "model": model})
+
+                            if chunk.get("done"):
+                                yield _sse_event({"type": "done", "model": model})
+                                return
+            except httpx.HTTPError as exc:
+                errors.append(f"{base_url} unreachable: {exc}")
+                log.error(
+                    "ollama_stream_connection_error",
+                    error=str(exc),
+                    ollama_base_url=base_url,
+                )
+
+        yield _sse_event(
+            {
+                "type": "error",
+                "detail": "Could not reach a local Ollama host. " + " | ".join(errors),
+                "model": model,
+            }
+        )
 
     return StreamingResponse(
         event_stream(),
