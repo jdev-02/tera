@@ -446,6 +446,19 @@ def test_user_chat_transcript_hides_prompt_context_appendix() -> None:
     assert 'focus: ${sourceContext.mission_focus}' not in js
 
 
+def test_llm_dev_docker_runs_package_import_path() -> None:
+    repo_root = Path(kmh_app.__file__).resolve().parents[1]
+    compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    dockerfile = (repo_root / "llm_dev_kmh" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "context: ." in compose
+    assert "dockerfile: llm_dev_kmh/Dockerfile" in compose
+    assert "COPY llm_dev_kmh ./llm_dev_kmh" in dockerfile
+    assert "COPY prompts ./prompts" in dockerfile
+    assert '"llm_dev_kmh.app:app"' in dockerfile
+    assert '"app:app"' not in dockerfile
+
+
 def test_prompt_composer_clears_after_submit_is_accepted() -> None:
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
