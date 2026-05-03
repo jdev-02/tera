@@ -51,6 +51,9 @@ docker compose up --build
 - `TERA_ATAK_MODEL`: model used by the ATAK Local button, default `gemma3:4b`
 - `TERA_ATAK_AGENT_COMMAND`: optional command launched by the ATAK Local button, for example a tmux/systemd wrapper on the Jetson
 - `TERA_ATAK_DEVICE_URL`: optional ATAK plugin/device target shown in activation status
+- `TERA_ATAK_OLLAMA_KEEP_ALIVE`: Ollama keep-alive used after ATAK activation, default `30m`
+- `TERA_PUBLIC_BASE_URL`: optional public Jetson web URL shown to the Samsung ATAK plugin, for example `http://10.1.63.96:8080`
+- `TERA_JETSON_IP`: optional Jetson IP fallback for ATAK plugin endpoint display
 - `TERA_ATAK_MIRROR_LOG`: optional JSONL mirror path; defaults under `OFFLINE_PACKAGE_ROOT/runtime/`
 - `REQUEST_TIMEOUT_S`: prompt timeout in seconds, default `120`
 - `CESIUM_ION_TOKEN`: required for Cesium World Terrain and Cesium satellite imagery
@@ -74,7 +77,7 @@ docker compose up --build
 
 - Without `CESIUM_ION_TOKEN`, the workspace falls back to OpenStreetMap imagery and ellipsoid terrain.
 - Provider order defaults to Claude first when `ANTHROPIC_API_KEY` is configured, then detected local Ollama, then the deterministic browser planner.
-- Pressing `ATAK Local` forces auto prompt traffic to local Ollama `gemma3:4b`, sets the UI provider/profile for the TERA ATAK link, and opens a mirror panel for ATAK plugin conversations.
+- Pressing `ATAK Local` verifies local Ollama, pulls `gemma3:4b` if needed, warms it with the `tera-atak-live` system profile, forces auto prompt traffic to local Ollama, and opens a mirror panel with the Samsung plugin endpoint.
 - On Docker Desktop, `host.docker.internal` should resolve automatically.
 - On Linux, `extra_hosts` maps `host.docker.internal` to the Docker host gateway.
 - If Ollama is running somewhere else on your LAN, set `OLLAMA_BASE_URL` to that reachable address before starting the container.
