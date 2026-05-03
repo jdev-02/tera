@@ -19,7 +19,7 @@ from typing import Any, Literal
 import structlog
 from fastapi import FastAPI, HTTPException
 
-from agent.orchestrator import PlanBlockedError, approve_plan
+from agent.orchestrator import PlanBlockedError, approve_plan, verify_plan_response
 from agent.orchestrator import plan as orchestrate_plan
 from agent.schemas import (
     PlanApprovalRequest,
@@ -27,6 +27,7 @@ from agent.schemas import (
     PlanBlocked,
     PlanRequest,
     PlanResponse,
+    PlanVerifyResponse,
 )
 
 log = structlog.get_logger(__name__)
@@ -112,3 +113,12 @@ async def plan_approve_endpoint(req: PlanApprovalRequest) -> PlanApprovalRespons
     except RuntimeError as e:
         log.exception("plan_approval_failed", error=str(e))
         raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.post("/plan/verify", response_model=PlanVerifyResponse)
+async def plan_verify_endpoint(resp: PlanResponse) -> PlanVerifyResponse:
+    """Verify a signed /plan response before ATAK renders it."""
+    result = verify_plan_response(resp)
+    if not result.valid:
+        log.warning("plan_verify_rejected", reason=result.reason, key_id=result.key_id)
+    return result

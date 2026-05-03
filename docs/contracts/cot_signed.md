@@ -134,6 +134,38 @@ Stage-1 `/plan` responses are device-signed and provisional. After the operator 
 
 Downstream components must treat device-signed-only routes as suggested/provisional. Only wrappers with a valid device signature and a valid operator signature over the same canonical `payload_json` and `route_hash` may be forwarded as committed routes.
 
+## `/plan/verify` render gate
+
+For the hackathon ATAK plugin path, Android does not load `liboqs` directly.
+The plugin must fail closed by POSTing the exact signed `/plan` response back
+to the Jetson before rendering:
+
+```http
+POST /plan/verify
+Content-Type: application/json
+
+{ ... PlanResponse from /plan ... }
+```
+
+Response:
+
+```json
+{
+  "valid": true,
+  "reason": "Signature valid - route authentic",
+  "key_id": "wayfinder-device-001",
+  "scheme": "ML-DSA-65",
+  "route_hash": "<sha256 of route GeoJSON>"
+}
+```
+
+If `valid` is false, the ATAK plugin must show
+`Route signature invalid - REJECTED` and refuse to draw the route. The verifier
+checks the device signature over `payload_json`, then binds that signed payload
+back to the response fields ATAK would render (`request_id`, route hash,
+destination, and rationale). This catches both missing signatures and
+post-signature route tampering.
+
 ## Performance budget
 
 - Sign: < 5 ms per CoT message on Jetson Orin Nano.

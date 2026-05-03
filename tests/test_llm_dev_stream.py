@@ -424,15 +424,26 @@ def test_planner_keeps_scope_questions_in_agent_response_only() -> None:
     assert "Use Questions to scope, then confirm sources." not in js
     assert "Next questions:" not in js
 
-    assert 'article.className = "source-item compact-source-item";' in js
+    assert 'article.className = "source-item compact-source-item source-chip";' in js
     assert 'article.title = `${source.category} | ${formatSourceStatus(source)}`;' in js
     assert 'purpose.className = "source-purpose"' not in js
     assert 'meta.className = "source-meta"' not in js
 
     assert "--text-base: 12px;" in css
-    assert "max-height: min(18vh, 180px);" in css
+    assert "grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));" in css
+    assert "max-height: min(11vh, 92px);" in css
+    assert ".source-chip" in css
     assert "grid-template-columns: auto minmax(0, 1fr);" in css
     assert "min-height: 76px;" in css
+
+
+def test_user_chat_transcript_hides_prompt_context_appendix() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'const finalPrompt = `${prompt}${makeMapContextAppendix()}`;' in js
+    assert 'prompt: finalPrompt,' in js
+    assert 'appendMessage(\n    "user",\n    prompt,\n  );' in js
+    assert 'focus: ${sourceContext.mission_focus}' not in js
 
 
 def test_prompt_composer_clears_after_submit_is_accepted() -> None:
@@ -462,6 +473,23 @@ def test_chat_panel_hides_advisor_header_and_status_noise() -> None:
     assert 'id="requestStatus" class="section-meta" aria-live="polite"' in html
     assert "Use the advisor response" not in js
     assert "Deterministic advisor response shown (" not in js
+
+
+def test_advisor_settings_panel_opens_inside_chat_column() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+
+    settings_button_index = html.index('id="settingsToggleBtn"')
+    settings_panel_index = html.index('id="settingsMenu"')
+    chat_log_index = html.index('id="chatLog"')
+    settings_css = css[css.index(".settings-menu {") : css.index(".settings-menu-header {")]
+
+    assert settings_button_index < settings_panel_index < chat_log_index
+    assert ".settings-menu {\n  width: 100%;" in css
+    assert "max-height: min(44vh, 520px);" in css
+    assert "overflow-y: auto;" in css
+    assert "position: absolute;" not in settings_css
+    assert "top:" not in settings_css
 
 
 def test_map_stream_status_does_not_confuse_esri_tiles_with_missing_ion() -> None:
