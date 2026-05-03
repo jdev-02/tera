@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -97,6 +97,15 @@ ci: lint test security ## Full CI gate (must pass before push)
 
 run: install ## Start the agent service locally (stub)
 	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
+
+firewall: ## Block port 8000 from WiFi (Windows only). Run before `make run` on shared networks.
+	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 add
+
+firewall-remove: ## Remove the TERA port 8000 firewall block
+	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 remove
+
+firewall-status: ## Check if port 8000 firewall rule is active
+	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 status
 
 tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
 	@bash infra/security_demo_monitors.sh
