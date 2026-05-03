@@ -1,87 +1,102 @@
-# LLM Dev KMH Workspace
+# TERA Jetson Web App
 
-Map-centric local LLM workspace kept entirely inside `llm_dev_kmh`.
+`llm_dev_kmh` is the current Jetson-facing web app for the TERA demo. It gives the operator a Cesium map, a local model chat surface, and a monitor for Samsung ATAK traffic moving through the Jetson.
 
-## What it does
+The live ATAK path is deliberately narrow: use local Jetson data, answer fast, generate TAK-ready artifacts when there is enough map context, and avoid asking the operator for more data that is not available in the field.
 
-- serves a Cesium-based map view with imagery and terrain streaming
-- exposes an operator sidebar tailored for TERA map and source-planning workflows
-- lists locally installed Ollama models
-- sends prompt requests through `/api/prompt` with Claude-first, Ollama-second fallback
-- switches into Jetson ATAK local-agent mode with Ollama `gemma3:4b` and a browser mirror of ATAK-profile prompt traffic
-- lets the operator draw and resize an AO rectangle for source package coverage
+## Current Role
 
-## Run it directly
+- Serve the map and operator panel on port `8080`.
+- Activate local ATAK mode against Ollama, normally `gemma3:4b`.
+- Mirror ATAK client prompts and TERA replies in the browser.
+- Use the ATAK client location and displayed map bounds as prompt context.
+- Query local OSM vectors from `/WINTAK Imagery`.
+- Query local DTED terrain from `/DTED`.
+- Generate route/point CoT and KMZ/data-package output for the TAK client folder.
+- Keep chat coordinates in MGRS for the operator.
+- Guardrail prompts that ask for cloud data, fabricated routes, hidden prompts, unsigned CoT, or unsupported RF simulation.
 
-1. Start Ollama on the host machine and confirm the model is available.
-2. Set environment variables as needed. Put `ANTHROPIC_API_KEY` in the repo
-   root `.env` when Claude should be the primary provider.
-3. Start the app with Uvicorn from an environment that has the requirements installed.
+## Data Contract
 
-Example on Windows PowerShell:
+For the ATAK live demo, TERA should only treat these as analysis sources:
 
-```powershell
-$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
-$env:OLLAMA_MODEL="gemma3:4b"
-$env:CLAUDE_MODEL="claude-sonnet-4-6"
-$env:CESIUM_ION_TOKEN="YOUR_TOKEN_HERE"
-uvicorn llm_dev_kmh.app:app --host 0.0.0.0 --port 8080
+```text
+/WINTAK Imagery   OSM vectors and staged visual context
+/DTED             local DTED cells for elevation and terrain analysis
+```
+
+Cesium, NAIP, OSM basemap tiles, and other imagery streams are useful for web display and planning context. They are not the evidence source for the local TERA agent's terrain answer unless they have been staged into the local Jetson folders above and the code explicitly indexes them.
+
+## Run On The Jetson
+
+```bash
+cd ~/Documents/tera_folder/tera
+BRANCH=khick/jetson-webapp-run-20260503 ./deploy/scripts/jetson_compose_refresh.sh
 ```
 
 Then open:
 
 ```text
-http://YOUR-HOST-IP:8080
+http://10.1.63.96:8080
 ```
 
-## Run it in Docker
+If the Jetson IP changes, use the new address.
+
+## Run Directly
+
+Start Ollama on the host and confirm `gemma3:4b` is available:
 
 ```bash
-docker compose up --build
+ollama list
 ```
 
-## Environment variables
+Run the app:
 
-- `ANTHROPIC_API_KEY`: primary Claude API key loaded from repo root `.env` or environment
-- `CLAUDE_MODEL`: primary Claude model, default `claude-sonnet-4-6`
-- `ANTHROPIC_API_URL`: Claude Messages endpoint, default `https://api.anthropic.com/v1/messages`
-- `ANTHROPIC_MODELS_URL`: Claude model discovery endpoint, default `https://api.anthropic.com/v1/models`
-- `OLLAMA_BASE_URL`: defaults to `http://127.0.0.1:11434`
-- `OLLAMA_MODEL`: local fallback default, `gemma3:4b`; if unavailable, the app autodetects an installed Ollama model
-- `TERA_ATAK_MODEL`: model used by the ATAK Local button, default `gemma3:4b`
-- `TERA_ATAK_AGENT_COMMAND`: optional command launched by the ATAK Local button, for example a tmux/systemd wrapper on the Jetson
-- `TERA_ATAK_DEVICE_URL`: optional ATAK plugin/device target shown in activation status
-- `TERA_ATAK_OLLAMA_KEEP_ALIVE`: Ollama keep-alive used after ATAK activation, default `30m`
-- `TERA_ATAK_WARMUP_TIMEOUT_S`: maximum synchronous web warmup wait, default `20`; Jetson compose warmup runs in the background
-- `TERA_PUBLIC_BASE_URL`: optional public Jetson web URL shown to the Samsung ATAK plugin, for example `http://10.1.63.96:8080`
-- `TERA_JETSON_IP`: optional Jetson IP fallback for ATAK plugin endpoint display
-- `TERA_ATAK_MIRROR_LOG`: optional JSONL mirror path; defaults under `OFFLINE_PACKAGE_ROOT/runtime/`
-- `REQUEST_TIMEOUT_S`: prompt timeout in seconds, default `120`
-- `CESIUM_ION_TOKEN`: required for Cesium World Terrain and Cesium satellite imagery
-- `CESIUM_ION_ARCHIVE_ID`: optional completed Cesium ion archive id to download into the Jetson package root.
-- `CESIUM_ION_ASSET_IDS`: optional comma-separated ion asset ids for creating a bounded AO clip before downloading it. Use only with assets/licensing that permit archives or clips.
-- Cesium World stream data stays stream-only. The Jetson offline package downloads Cesium only through ion archives/exports, then extracts and indexes the local files for query/preview.
-- `ESRI_ARCGIS_TOKEN`: optional; used only if the operator explicitly selects Esri export jobs. The default U.S. imagery path uses NAIP, with Sentinel-2 as the global fallback.
-- `NAIP_AWS_STATE`, `NAIP_AWS_YEAR`, `NAIP_AWS_RESOLUTION`, `NAIP_AWS_BANDSET`: controls public NAIP AWS prefix downloads; defaults are inferred U.S. state, `2022`, `60cm`, and `rgbir`.
-- `NAIP_AWS_BUCKET`: defaults to `naip-analytic`; set to `naip-visualization` for RGB COGs when desired.
-- `NAIP_MAX_FILES`: safety cap for NAIP prefix downloads; defaults to `50`.
-- `NAIP_EARTHEXPLORER_DIR`: optional folder of staged NAIP GeoTIFFs; on the Jetson demo defaults to `/WINTAK Imagery` or the Docker mount `/mnt/jetson/WINTAK Imagery`.
-- `TERA_WINTAK_IMAGERY_DIR`: root-staged WinTAK imagery folder containing OSM and NAIP display/query files; defaults to `/WINTAK Imagery` on the Jetson host.
-- `TERA_OSM_ROOT_DIRS`: OS-pathsep-separated roots or globs for local OSM SQLite/GeoPackage files; defaults to the WinTAK imagery folder.
-- `GEOFABRIK_PBF_URL` or `GEOFABRIK_REGION_SLUG`: optional OSM override; otherwise the app infers a U.S. state extract such as `north-america/us/nevada-latest.osm.pbf`.
-- `DTED_SOURCE_DIR`: folder of `.dt0/.dt1/.dt2` files; on the Jetson demo defaults to `/DTED` or the Docker mount `/mnt/jetson/DTED`.
-- `TERA_JETSON_LOCAL_SOURCES_ONLY`: defaults to `1`; skips outbound source downloads and uses staged OSM/NAIP/DTED files.
-- `OFFLINE_PACKAGE_ROOT`: Jetson directory where source packages, status files, terrain rasters, route artifacts, and CoT XML are written; defaults to `llm_dev_kmh/offline_packages`
-- `PACKAGE_MIN_FREE_GB`: disk space reserve enforced before downloads start; defaults to `10`
-- `DEFAULT_LAT`: initial camera latitude, default `38.35537339313087` for MGRS `11S KC 79790 48252`
-- `DEFAULT_LON`: initial camera longitude, default `-119.52018528165966` for MGRS `11S KC 79790 48252`
-- `DEFAULT_HEIGHT_M`: initial camera height in meters, default `14000`
+```bash
+uvicorn llm_dev_kmh.app:app --host 0.0.0.0 --port 8080
+```
+
+## Run With Docker Compose
+
+From the repo root:
+
+```bash
+docker compose up --build llm-dev-kmh
+```
+
+## Useful Environment Variables
+
+Local model and ATAK:
+
+- `OLLAMA_BASE_URL`: Ollama endpoint, default `http://127.0.0.1:11434`.
+- `OLLAMA_MODEL`: default local model for general local fallback, usually `gemma3:4b`.
+- `TERA_ATAK_MODEL`: model used by the `ATAK Local` button, default `gemma3:4b`.
+- `TERA_ATAK_DEVICE_URL`: optional ATAK plugin/device URL shown in activation status.
+- `TERA_PUBLIC_BASE_URL`: public Jetson URL shown to the Samsung plugin, for example `http://10.1.63.96:8080`.
+- `TERA_JETSON_IP`: fallback Jetson IP for ATAK endpoint display.
+- `TERA_ATAK_MIRROR_LOG`: JSONL traffic mirror path; defaults under `OFFLINE_PACKAGE_ROOT/runtime/`.
+
+Local data:
+
+- `TERA_WINTAK_IMAGERY_DIR`: defaults to `/WINTAK Imagery` on the Jetson.
+- `TERA_OSM_ROOT_DIRS`: OS-path-separated local OSM roots or globs; defaults to the WinTAK imagery folder.
+- `DTED_SOURCE_DIR`: defaults to `/DTED` on the Jetson.
+- `TERA_JETSON_LOCAL_SOURCES_ONLY`: defaults to `1`; keeps the Jetson path on staged local data.
+- `OFFLINE_PACKAGE_ROOT`: package, runtime, route artifact, and CoT/KMZ output root.
+
+Map display:
+
+- `CESIUM_ION_TOKEN`: optional for Cesium imagery/terrain display.
+- `DEFAULT_LAT`: initial camera latitude, default for MGRS `11S KC 79790 48252`.
+- `DEFAULT_LON`: initial camera longitude, default for MGRS `11S KC 79790 48252`.
+- `DEFAULT_HEIGHT_M`: initial camera height in meters, default `14000`.
+
+Cloud/source-planning fallback:
+
+- `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`, `ANTHROPIC_API_URL`, and `ANTHROPIC_MODELS_URL` support the broader browser source-planning workflow. They are not required for the ATAK live local-agent path.
 
 ## Notes
 
-- Without `CESIUM_ION_TOKEN`, the workspace falls back to OpenStreetMap imagery and ellipsoid terrain.
-- Provider order defaults to Claude first when `ANTHROPIC_API_KEY` is configured, then detected local Ollama, then the deterministic browser planner.
-- Pressing `ATAK Local` verifies local Ollama, pulls `gemma3:4b` if needed, warms it with the `tera-atak-live` system profile, forces auto prompt traffic to local Ollama, and opens a mirror panel with the Samsung plugin endpoint.
-- On Docker Desktop, `host.docker.internal` should resolve automatically.
-- On Linux, `extra_hosts` maps `host.docker.internal` to the Docker host gateway.
-- If Ollama is running somewhere else on your LAN, set `OLLAMA_BASE_URL` to that reachable address before starting the container.
+- Pressing `ATAK Local` verifies local Ollama, warms `gemma3:4b`, switches automatic prompt traffic to the local model, and opens the Samsung ATAK monitor.
+- Without a Cesium token, the map falls back to open imagery and ellipsoid terrain. That changes the browser display, not the local OSM/DTED constraint for the ATAK agent.
+- On Docker Desktop, `host.docker.internal` should resolve automatically. On Linux, the compose file maps it to the Docker host gateway.

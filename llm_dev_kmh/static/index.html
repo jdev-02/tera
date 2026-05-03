@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TERA Source Planner</title>
-  <meta name="description" content="Imagery and geospatial data sourcing workspace for TERA offline mission packages." />
+  <title>TERA TAK Planner</title>
+  <meta name="description" content="Offline TAK route planning and Jetson traffic monitoring for local OSM and DTED missions." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -15,8 +15,8 @@
   <div class="app-shell">
     <header class="top-bar">
       <div>
-        <h1>TERA Source Planner</h1>
-        <div class="eyebrow">Mission data sourcing workspace</div>
+        <h1>TERA TAK Planner</h1>
+        <div class="eyebrow">Offline TAK route planning workspace</div>
       </div>
       <div class="top-bar-controls">
         <button id="importOverlayBtn" class="ghost-button" type="button">Import KML/KMZ</button>
@@ -81,7 +81,7 @@
               id="locationSearchInput"
               type="search"
               autocomplete="off"
-              placeholder="Search mission location or paste lat, lon"
+              placeholder="Search mission location, MGRS, or lat/lon"
               aria-autocomplete="list"
               aria-controls="locationSearchSuggestions"
             />
@@ -128,7 +128,7 @@
         <section id="sourcePanel" class="sidebar-card source-panel-shell workflow-panel is-empty">
           <div class="section-header">
             <div>
-              <h2>Data Package</h2>
+              <h2>Local TAK Package</h2>
               <div id="sourceCount" class="section-meta">Loading sources...</div>
             </div>
             <span id="packageModeChip" class="chip">Awaiting mission</span>
@@ -152,7 +152,7 @@
                 <div class="package-controls">
                   <div class="mission-summary">
                     <div class="section-subtitle">Mission extracted</div>
-                    <div id="inferredMission">Describe the mission in chat to draft a focused source package.</div>
+                    <div id="inferredMission">Describe the mission in chat to draft a focused local package.</div>
                   </div>
                   <label>
                     Package name
@@ -171,12 +171,12 @@
 
               <section class="workflow-slide" data-workflow-slide="area">
                 <div id="aoLockedNotice" class="workflow-card">
-                  <div class="section-subtitle">Source AO</div>
+                  <div class="section-subtitle">Coverage AO</div>
                   <div>Confirm the mission sources before selecting coverage.</div>
                 </div>
                 <div id="areaControlSurface" class="area-controls hidden">
                   <div>
-                    <div class="section-subtitle">Source AO</div>
+                    <div class="section-subtitle">Coverage AO</div>
                     <div id="selectedArea">Camera view will be used until an AO is drawn.</div>
                   </div>
                   <div class="area-buttons">
@@ -210,7 +210,7 @@
             </div>
           </div>
 
-          <div id="packageStatus" class="section-meta">No sources selected yet. Send a mission description to plan the needed package.</div>
+          <div id="packageStatus" class="section-meta">No local sources selected yet. Send a mission description to plan the needed package.</div>
           <pre id="packageManifest" class="package-output hidden"></pre>
           <a id="downloadManifestLink" class="download-link hidden" href="#" download>Download manifest JSON</a>
           <div id="packageExecutionActions" class="button-row package-execution-actions hidden">
@@ -229,7 +229,7 @@
             </div>
             <div class="panel-header-actions">
               <div class="settings-shell">
-                <button id="settingsToggleBtn" class="ghost-button icon-button" type="button" aria-expanded="false" aria-label="Open advisor settings">
+                <button id="settingsToggleBtn" class="ghost-button icon-button" type="button" aria-expanded="false" aria-label="Open planner settings">
                   <span aria-hidden="true">&#9881;</span>
                 </button>
               </div>
@@ -238,14 +238,14 @@
 
           <div id="settingsMenu" class="settings-menu hidden">
             <div class="settings-menu-header">
-              <strong>Advisor Settings</strong>
+              <strong>Planner Settings</strong>
               <span id="chatMeta" class="section-meta">0 messages</span>
             </div>
             <div class="settings-grid">
               <label>
                 Agent profile
                 <select id="agentProfileSelect">
-                  <option value="imagery-sourcing" selected>Imagery Sourcing</option>
+                  <option value="imagery-sourcing" selected>Local Source Planning</option>
                   <option value="tera-atak-live">TERA ATAK Link</option>
                   <option value="terrain-route">Terrain Route</option>
                   <option value="map-analysis">Map Analysis</option>
@@ -259,7 +259,7 @@
                 </select>
               </label>
               <label>
-                Imagery stream
+                Map imagery
                 <select id="imagerySelect">
                   <option value="ion-satellite">Cesium World Imagery</option>
                   <option value="usgs-imagery">USGS Imagery Only</option>
@@ -268,19 +268,19 @@
                 </select>
               </label>
               <label>
-                Terrain stream
+                Map terrain display
                 <select id="terrainSelect">
-                  <option value="cesium-world">Cesium World Terrain</option>
+                  <option value="cesium-world">Cesium terrain display</option>
                   <option value="ellipsoid">Ellipsoid Only</option>
                 </select>
               </label>
               <label class="span-2">
-                Sourcing policy
-                <textarea id="systemInput" name="system" class="short-input" placeholder="Optional planner instruction, e.g. favor open global sources or keep package size minimal."></textarea>
+                Agent policy
+                <textarea id="systemInput" name="system" class="short-input" placeholder="Optional local instruction, e.g. answer from OSM and DTED only and keep route output compact."></textarea>
               </label>
               <label class="checkbox-row span-2">
                 <input id="includeMapContext" type="checkbox" checked />
-                <span>Include current map/AOI context</span>
+                <span>Include TAK map/AOI context</span>
               </label>
             </div>
             <div class="settings-subsection">
@@ -299,7 +299,7 @@
                   <dd id="cameraPosition">Initializing</dd>
                 </div>
                 <div>
-                  <dt>Imagery source</dt>
+                  <dt>Map imagery</dt>
                   <dd id="imageryStatus">Loading</dd>
                 </div>
               </dl>
@@ -324,10 +324,10 @@
           </section>
 
           <form id="promptForm" class="chat-composer" autocomplete="off">
-            <textarea id="promptInput" name="prompt" placeholder="We need an offline package for a patrol to find the nearest reliable water source while avoiding steep exposed terrain." required></textarea>
+            <textarea id="promptInput" name="prompt" placeholder="Route me to the nearest freshwater source within 5 km, on foot, using covered terrain and avoiding exposed ridgelines." required></textarea>
             <div class="composer-actions">
               <div class="composer-hint">Enter sends. Shift+Enter inserts a new line.</div>
-              <button id="submitBtn" class="primary-button" type="submit">Ask Advisor</button>
+              <button id="submitBtn" class="primary-button" type="submit">Send Mission</button>
             </div>
           </form>
         </section>

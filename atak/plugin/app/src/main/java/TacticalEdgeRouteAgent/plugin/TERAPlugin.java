@@ -472,22 +472,26 @@ public class TERAPlugin implements IPlugin {
 
         String endpoint = host.trim();
         if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
-            if (!endpoint.contains(":")) {
-                endpoint = endpoint + ":8080";
-            }
             endpoint = "http://" + endpoint;
         }
         int schemeIndex = endpoint.indexOf("://");
         int pathStart = schemeIndex >= 0
                 ? endpoint.indexOf("/", schemeIndex + 3)
                 : endpoint.indexOf("/");
-        if (pathStart < 0 || pathStart == endpoint.length() - 1) {
-            if (endpoint.endsWith("/")) {
-                endpoint = endpoint.substring(0, endpoint.length() - 1);
-            }
-            endpoint = endpoint + pluginContext.getString(R.string.endpoint_path);
+        String base = pathStart >= 0 ? endpoint.substring(0, pathStart) : endpoint;
+        String path = pathStart >= 0 ? endpoint.substring(pathStart) : "";
+        int authorityStart = schemeIndex >= 0 ? schemeIndex + 3 : 0;
+        String authority = base.substring(Math.min(authorityStart, base.length()));
+        int bracketEnd = authority.indexOf("]");
+        int portColon = authority.lastIndexOf(":");
+        boolean hasPort = portColon >= 0 && portColon > bracketEnd;
+        if (!hasPort) {
+            base = base + ":8080";
         }
-        return endpoint;
+        if (path.isEmpty() || "/".equals(path)) {
+            return base + pluginContext.getString(R.string.endpoint_path);
+        }
+        return base + path;
     }
 
     private void clearActiveRoute() {
