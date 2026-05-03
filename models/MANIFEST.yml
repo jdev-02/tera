@@ -1,0 +1,63 @@
+# models/MANIFEST.yml — SHA-256 supply-chain pin for every external model asset.
+#
+# Add an entry here whenever a new model file is introduced.
+# Run `make model-integrity` to verify all pinned hashes before demo.
+#
+# Fields:
+#   path     : path relative to repo root (must match the actual download location)
+#   sha256   : lowercase hex digest. Compute with: sha256sum <file> or
+#              python -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" <file>
+#   required : true  => CI fails if file is missing or hash mismatches
+#              false => CI skips if file absent (large runtime asset, downloaded separately)
+#   note     : human-readable description + origin URL
+
+models:
+
+  # ---------------------------------------------------------------------------
+  # LLM weights (GGUF — loaded via llama-cpp, NOT torch.load)
+  # ---------------------------------------------------------------------------
+  - path: models/gemma-2b-q4_k_m.gguf
+    sha256: PLACEHOLDER_run_sha256sum_after_download
+    required: false
+    note: "Gemma-2B Q4_K_M quantised weights. Download: https://huggingface.co/google/gemma-2b-GGUF"
+
+  - path: models/gemma3-4b-q4_k_m.gguf
+    sha256: PLACEHOLDER_run_sha256sum_after_download
+    required: false
+    note: "Gemma3-4B Q4_K_M quantised weights for Jetson deployment."
+
+  # ---------------------------------------------------------------------------
+  # Piper TTS voice metadata (JSON — committed, hash pinned)
+  # ---------------------------------------------------------------------------
+  - path: models/piper/en_GB-alan-low.onnx.json
+    sha256: c8164cc04b6ce102c651ce4a1e788e8429fa638501fca0723860718d4b44637e
+    required: true
+    note: "Piper TTS voice config — Alan (GB, low). Committed to repo."
+
+  - path: models/piper/en_US-bryce-medium.onnx.json
+    sha256: 7ceb1bc4af6d4e41b6d1edbb86c67e91e01eaa71f66db4cd0ae92ac704d415be
+    required: true
+    note: "Piper TTS voice config — Bryce (US, medium). Committed to repo."
+
+  - path: models/piper/en_US-libritts_r-medium.onnx.json
+    sha256: b471dc60d2d8335e819c393d196d6fbf792817f40051257b269878505bc9afb3
+    required: true
+    note: "Piper TTS voice config — LibriTTS-R (US, medium). Committed to repo."
+
+  - path: models/piper/en_US-ryan-high.onnx.json
+    sha256: c6d3b98f08315cb4bebf0d49d50fc4ff491b503c64b940cd3d5ca28543b48011
+    required: true
+    note: "Piper TTS voice config — Ryan (US, high). Committed to repo."
+
+  # ---------------------------------------------------------------------------
+  # Piper TTS ONNX weights (downloaded separately, gitignored)
+  # ---------------------------------------------------------------------------
+  - path: models/piper/en_US-ryan-high.onnx
+    sha256: PLACEHOLDER_run_sha256sum_after_download
+    required: false
+    note: "Piper TTS ONNX weights — Ryan voice. Downloaded by install-voice."
+
+  - path: models/piper/en_US-bryce-medium.onnx
+    sha256: PLACEHOLDER_run_sha256sum_after_download
+    required: false
+    note: "Piper TTS ONNX weights — Bryce voice. Downloaded by install-voice."
