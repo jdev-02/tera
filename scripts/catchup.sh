@@ -97,39 +97,84 @@ if echo "$CHANGED_FILES" | grep -qE '^(AGENTS\.md|\.agents/)'; then
 fi
 
 # --- 9. Show your open issues ----------------------------------------
+# Bug fix (issue from 17:50 catchup output): the previous version queried
+# `gh issue list --label "lane:a,lane:b,lane:c"` which means AND, not OR --
+# returns ~0 issues for anyone whose lanes don't all overlap on a single
+# ticket. The right question is 'what is assigned to ME', so query
+# --assignee @me. If that's empty, fall back to lane-tagged issues using
+# Python set-intersection (true OR semantics).
 title "Your open issues"
 if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+    PY="${PY_CMD:-python3}"
+
+    # Pass 1: issues directly assigned to the current user.
+    ASSIGNED_JSON=$(gh issue list --assignee @me --state open \
+        --json number,title,labels --limit 30 2>/dev/null || echo "[]")
+
+    # Pass 2: issues tagged with this teammate's lane labels (OR semantics).
+    # Only used as a fallback display when assigned is empty, OR appended
+    # when there are unassigned lane issues that might be next-up pickups.
     NAME=""
-    if [[ -f .git/wayfinder-name || -f .git/tera-name ]]; then
+    if [[ -f .git/tera-name || -f .git/wayfinder-name ]]; then
         NAME=$(cat .git/tera-name 2>/dev/null || cat .git/wayfinder-name 2>/dev/null)
     fi
     if [[ -z "$NAME" ]]; then
-        # Best-effort: derive from git config user.name -> first name lowercase
         FN=$(git config user.name 2>/dev/null | awk '{print tolower($1)}' || echo "")
         case "$FN" in
             jon|satriyo|kyle|ben) NAME="$FN" ;;
         esac
     fi
-    LABELS=""
+    LANES_JSON="[]"
     case "$NAME" in
-        jon)     LABELS="lane:agent,lane:ontology,lane:voice,lane:eval" ;;
-        satriyo) LABELS="lane:security,lane:crypto,lane:infra,lane:ci" ;;
-        kyle)    LABELS="lane:hardware,lane:deploy,lane:models,lane:mesh" ;;
-        ben)     LABELS="lane:atak,lane:routing,lane:data" ;;
+        jon)     LANES='["lane:agent","lane:ontology","lane:voice","lane:eval"]' ;;
+        satriyo) LANES='["lane:security","lane:crypto","lane:infra","lane:ci"]' ;;
+        kyle)    LANES='["lane:hardware","lane:deploy","lane:models","lane:mesh"]' ;;
+        ben)     LANES='["lane:atak","lane:routing","lane:data"]' ;;
+        *)       LANES='[]' ;;
     esac
-    if [[ -n "$LABELS" ]]; then
-        gh issue list --label "$LABELS" --state open --json number,title,labels --limit 10 2>/dev/null \
-            | "${PY_CMD:-python3}" -c "
-import json, sys
-data = json.load(sys.stdin)
-for i in data:
-    labels = [l['name'] for l in i['labels']]
-    pri = next((l for l in labels if l.startswith('priority:')), 'priority:?')
-    print(f\"  #{i['number']:>2}  [{pri:<11}] {i['title']}\")
-" || warn "couldn't fetch issues"
-    else
-        warn "name not detected -- run 'echo <yourname> > .git/tera-name' to remember"
+    if [[ "$LANES" != "[]" ]]; then
+        # Fetch all open issues once; filter in Python for OR semantics.
+        LANES_JSON=$(gh issue list --state open \
+            --json number,title,labels,assignees --limit 100 2>/dev/null || echo "[]")
     fi
+
+    ASSIGNED_JSON="$ASSIGNED_JSON" LANES_JSON="$LANES_JSON" LANES="$LANES" \
+        "$PY" -c "
+import json, os
+def fmt(i):
+    labels = [l['name'] for l in i.get('labels', [])]
+    pri = next((l for l in labels if l.startswith('priority:')), 'priority:?')
+    return f\"  #{i['number']:>3}  [{pri:<12}] {i['title']}\"
+
+assigned = json.loads(os.environ.get('ASSIGNED_JSON') or '[]')
+lanes_all = json.loads(os.environ.get('LANES_JSON') or '[]')
+lane_set = set(json.loads(os.environ.get('LANES') or '[]'))
+
+if assigned:
+    print('Assigned to you:')
+    for i in assigned:
+        print(fmt(i))
+else:
+    print('  (nothing currently assigned to you)')
+
+if lane_set:
+    assigned_nums = {i['number'] for i in assigned}
+    pickups = []
+    for i in lanes_all:
+        nums_match = any((l['name'] in lane_set) for l in i.get('labels', []))
+        if not nums_match:
+            continue
+        if i['number'] in assigned_nums:
+            continue
+        if i.get('assignees'):
+            continue
+        pickups.append(i)
+    if pickups:
+        print('')
+        print('Unassigned in your lane(s) -- candidates to pick up:')
+        for i in pickups[:10]:
+            print(fmt(i))
+" || warn "couldn't fetch issues"
 else
     warn "gh not authed; skipping issue summary"
 fi
