@@ -8,7 +8,7 @@ Map-centric local LLM workspace kept entirely inside `llm_dev_kmh`.
 - exposes an operator sidebar tailored for TERA map and source-planning workflows
 - lists locally installed Ollama models
 - sends prompt requests to local Ollama via `/api/prompt`
-- lets the operator click terrain to include a pinned map point in prompt context
+- lets the operator draw and resize an AO rectangle for source package coverage
 
 ## Run it directly
 

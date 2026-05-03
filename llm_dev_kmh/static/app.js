@@ -3,7 +3,6 @@ const state = {
   viewer: null,
   clickHandler: null,
   resizeObserver: null,
-  selectedPoint: null,
   selectedArea: null,
   areaEntity: null,
   areaHandleEntities: [],
@@ -12,8 +11,6 @@ const state = {
   areaResizeHandle: null,
   areaResizeAnchorPoint: null,
   areaStartPoint: null,
-  suppressNextClick: false,
-  markerEntity: null,
   cameraText: "",
   chatCount: 0,
   imageryMode: "esri",
@@ -56,20 +53,18 @@ const els = {
   promptInput: document.getElementById("promptInput"),
   modelSelect: document.getElementById("modelSelect"),
   systemInput: document.getElementById("systemInput"),
-  includeMapPoint: document.getElementById("includeMapPoint"),
+  includeMapContext: document.getElementById("includeMapContext"),
   submitBtn: document.getElementById("submitBtn"),
   clearChatBtn: document.getElementById("clearChatBtn"),
   requestStatus: document.getElementById("requestStatus"),
   modelsStatus: document.getElementById("modelsStatus"),
   modelsList: document.getElementById("modelsList"),
-  selectedPoint: document.getElementById("selectedPoint"),
   selectedArea: document.getElementById("selectedArea"),
   cameraPosition: document.getElementById("cameraPosition"),
   imageryStatus: document.getElementById("imageryStatus"),
   terrainStatus: document.getElementById("terrainStatus"),
   chatLog: document.getElementById("chatLog"),
   chatMeta: document.getElementById("chatMeta"),
-  mapHint: document.getElementById("mapHint"),
   sourceCount: document.getElementById("sourceCount"),
   workflowEmpty: document.getElementById("workflowEmpty"),
   workflowCarousel: document.getElementById("workflowCarousel"),
@@ -641,14 +636,6 @@ function buildMapContext() {
     context.selected_area = { ...state.selectedArea };
   }
 
-  if (state.selectedPoint) {
-    context.selected_point = {
-      lat: state.selectedPoint.lat,
-      lon: state.selectedPoint.lon,
-      height_m: state.selectedPoint.heightM,
-    };
-  }
-
   if (state.viewer) {
     const camera = state.viewer.camera.positionCartographic;
     context.camera = {
@@ -723,7 +710,6 @@ function resetPlannerWorkflow() {
   hidePackageOutput();
   renderSourceList();
   els.packageStatus.textContent = "No sources selected yet. Send a mission description to infer the needed package.";
-  els.mapHint.textContent = "Click the map to pin context. AO drawing unlocks after source confirmation.";
   updateWorkflowPanel();
 }
 
@@ -736,9 +722,6 @@ function confirmSources() {
   hidePackageOutput();
   setWorkflowStage(3);
   els.packageStatus.textContent = "Sources confirmed. Draw or adjust the AO rectangle for the data package.";
-  els.mapHint.textContent = state.selectedArea
-    ? "Drag a rectangle corner to adjust AO coverage."
-    : "Use Draw AO to drag a rectangle for package coverage.";
 }
 
 function clearChat() {
@@ -755,7 +738,9 @@ function applyPanelState() {
   document.body.classList.toggle("panel-collapsed", state.panelCollapsed);
   els.panelToggleBtn.textContent = state.panelCollapsed ? "Expand Planner" : "Collapse Planner";
   els.panelToggleBtn.setAttribute("aria-expanded", String(!state.panelCollapsed));
-  if (!state.panelCollapsed) {
+  if (state.panelCollapsed) {
+    els.workspaceShell.style.removeProperty("--panel-width");
+  } else {
     els.workspaceShell.style.setProperty("--panel-width", `${state.panelWidth}px`);
   }
   requestAnimationFrame(() => {
@@ -763,12 +748,19 @@ function applyPanelState() {
       state.viewer.resize();
       state.viewer.scene.requestRender();
     }
+    requestAnimationFrame(() => {
+      if (state.viewer) {
+        state.viewer.resize();
+        state.viewer.scene.requestRender();
+      }
+    });
   });
 }
 
 function clampPanelWidth(width) {
-  const maxWidth = Math.max(380, Math.min(window.innerWidth * 0.5, 720));
-  return Math.min(Math.max(width, 380), maxWidth);
+  const minWidth = 320;
+  const maxWidth = Math.max(520, Math.min(window.innerWidth * 0.58, 860));
+  return Math.min(Math.max(width, minWidth), maxWidth);
 }
 
 function formatPoint(lat, lon, height = null) {
@@ -794,18 +786,6 @@ function clampNumber(value, min, max) {
 
 function normalizeDegrees(degrees) {
   return ((degrees % 360) + 360) % 360;
-}
-
-function updateSelectedPoint() {
-  if (!state.selectedPoint) {
-    els.selectedPoint.textContent = "No point selected";
-    return;
-  }
-  els.selectedPoint.textContent = formatPoint(
-    state.selectedPoint.lat,
-    state.selectedPoint.lon,
-    state.selectedPoint.heightM,
-  );
 }
 
 function updateSelectedArea() {
@@ -907,8 +887,8 @@ async function loadModels() {
   }
 }
 
-function makeSelectedPointContext() {
-  if (!els.includeMapPoint.checked) {
+function makeMapContextAppendix() {
+  if (!els.includeMapContext.checked) {
     return "";
   }
 
@@ -916,11 +896,6 @@ function makeSelectedPointContext() {
   if (state.selectedArea) {
     lines.push(
       `Selected AO west ${state.selectedArea.west.toFixed(6)}, south ${state.selectedArea.south.toFixed(6)}, east ${state.selectedArea.east.toFixed(6)}, north ${state.selectedArea.north.toFixed(6)}.`,
-    );
-  }
-  if (state.selectedPoint) {
-    lines.push(
-      `Selected point latitude ${state.selectedPoint.lat.toFixed(6)}, longitude ${state.selectedPoint.lon.toFixed(6)}, terrain height ${state.selectedPoint.heightM.toFixed(1)} meters.`,
     );
   }
   if (!lines.length) {
@@ -1020,8 +995,8 @@ async function submitPrompt(event) {
   const system = els.systemInput.value.trim();
   const model = els.modelSelect.value.trim();
   const agentProfile = els.agentProfileSelect.value;
-  const finalPrompt = `${prompt}${makeSelectedPointContext()}`;
-  const mapContext = els.includeMapPoint.checked ? buildMapContext() : null;
+  const finalPrompt = `${prompt}${makeMapContextAppendix()}`;
+  const mapContext = els.includeMapContext.checked ? buildMapContext() : null;
   els.requestStatus.textContent = "Inferring source package...";
   try {
     await inferSourcesFromMission(prompt, mapContext);
@@ -1221,22 +1196,12 @@ async function resolveTerrainProvider() {
   }
 }
 
-function setMarker(point) {
-  if (!state.viewer) {
-    return;
-  }
-  if (state.markerEntity) {
-    state.viewer.entities.remove(state.markerEntity);
-  }
-  state.markerEntity = state.viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.heightM + 12),
-    point: {
-      pixelSize: 12,
-      color: Cesium.Color.fromCssColorString("#d6b06d"),
-      outlineColor: Cesium.Color.fromCssColorString("#111820"),
-      outlineWidth: 2,
-    },
-  });
+function cssColor(variableName) {
+  return getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
+}
+
+function cesiumCssColor(variableName) {
+  return Cesium.Color.fromCssColorString(cssColor(variableName));
 }
 
 function getCartographicFromScreenPosition(position) {
@@ -1310,8 +1275,8 @@ function updateAreaHandles(bounds) {
       position,
       point: {
         pixelSize: 11,
-        color: Cesium.Color.fromCssColorString("#f0c982"),
-        outlineColor: Cesium.Color.fromCssColorString("#111820"),
+        color: cesiumCssColor("--color-accent-gold"),
+        outlineColor: cesiumCssColor("--color-bg-primary"),
         outlineWidth: 2,
         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
@@ -1357,9 +1322,9 @@ function setAreaEntityBounds(bounds) {
     state.areaEntity = state.viewer.entities.add({
       rectangle: {
         coordinates: rectangleFromBounds(bounds),
-        material: Cesium.Color.fromCssColorString("#d6b06d").withAlpha(0.18),
+        material: cesiumCssColor("--color-accent-gold").withAlpha(0.18),
         outline: true,
-        outlineColor: Cesium.Color.fromCssColorString("#f0c982"),
+        outlineColor: cesiumCssColor("--color-accent-gold"),
         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
       },
     });
@@ -1375,7 +1340,6 @@ function setSelectedArea(bounds) {
   setAreaEntityBounds(bounds);
   updateSelectedArea();
   hidePackageOutput();
-  els.mapHint.textContent = "AO rectangle selected. New recommendations and manifests will use this area.";
 }
 
 function clearSelectedArea() {
@@ -1391,7 +1355,6 @@ function clearSelectedArea() {
   clearAreaHandles();
   updateSelectedArea();
   hidePackageOutput();
-  els.mapHint.textContent = "AO cleared. Camera view will be used unless you draw a new rectangle.";
 }
 
 function setAreaSelectMode(active) {
@@ -1404,11 +1367,6 @@ function setAreaSelectMode(active) {
   els.mapStage.classList.toggle("is-drawing-area", active);
   els.drawAreaBtn.textContent = active ? "Drawing AO" : "Draw AO";
   els.drawAreaBtn.setAttribute("aria-pressed", String(active));
-  els.mapHint.textContent = active
-    ? "Drag on the map to draw an AO rectangle."
-    : state.sourceConfirmed
-      ? "Use Draw AO to drag a rectangle, or click once to pin a point."
-      : "Click the map to pin context. AO drawing unlocks after source confirmation.";
 }
 
 function setCameraDragEnabled(enabled) {
@@ -1440,13 +1398,10 @@ function finishAreaResize(position) {
     if (state.selectedArea) {
       setAreaEntityBounds(state.selectedArea);
     }
-    els.mapHint.textContent = "AO corner adjustment was too small.";
     return;
   }
 
-  state.suppressNextClick = true;
   setSelectedArea(bounds);
-  els.mapHint.textContent = `AO ${handleKey.toUpperCase()} corner adjusted.`;
 }
 
 function finishAreaDrawing(position) {
@@ -1470,11 +1425,9 @@ function finishAreaDrawing(position) {
       state.areaEntity = null;
     }
     setAreaSelectMode(false);
-    els.mapHint.textContent = "AO drag was too small. Draw a larger rectangle.";
     return;
   }
 
-  state.suppressNextClick = true;
   setAreaSelectMode(false);
   setSelectedArea(bounds);
 }
@@ -1492,10 +1445,8 @@ function wireMapInteraction() {
       state.areaResizeHandle = pickedHandle;
       state.areaResizeAnchorPoint = getResizeAnchorPoint(pickedHandle);
       state.areaDrawing = false;
-      state.suppressNextClick = true;
       setAreaSelectMode(false);
       setCameraDragEnabled(false);
-      els.mapHint.textContent = `Drag the ${pickedHandle.toUpperCase()} AO corner to adjust coverage.`;
       return;
     }
 
@@ -1539,30 +1490,6 @@ function wireMapInteraction() {
     finishAreaDrawing(movement.position);
   }, Cesium.ScreenSpaceEventType.LEFT_UP);
 
-  handler.setInputAction((movement) => {
-    if (state.suppressNextClick) {
-      state.suppressNextClick = false;
-      return;
-    }
-    if (state.areaSelectActive || state.areaDrawing) {
-      return;
-    }
-    const cartesian = state.viewer.scene.pickPosition(movement.position)
-      || state.viewer.camera.pickEllipsoid(movement.position, state.viewer.scene.globe.ellipsoid);
-    if (!cartesian) {
-      return;
-    }
-    const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-    state.selectedPoint = {
-      lat: Cesium.Math.toDegrees(cartographic.latitude),
-      lon: Cesium.Math.toDegrees(cartographic.longitude),
-      heightM: cartographic.height,
-    };
-    setMarker(state.selectedPoint);
-    updateSelectedPoint();
-    els.mapHint.textContent = "AO point pinned. Manifest and advisor prompts can include this context.";
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-
   state.viewer.camera.changed.addEventListener(updateCameraText);
   updateCameraText();
 }
@@ -1575,7 +1502,6 @@ async function buildViewer() {
       state.clickHandler = null;
     }
     state.viewer.destroy();
-    state.markerEntity = null;
     state.areaEntity = null;
     state.areaHandleEntities = [];
   }
@@ -1627,13 +1553,9 @@ async function buildViewer() {
   state.viewer.resize();
   state.viewer.scene.requestRender();
   wireMapInteraction();
-  if (state.selectedPoint) {
-    setMarker(state.selectedPoint);
-  }
   if (state.selectedArea) {
     setAreaEntityBounds(state.selectedArea);
   }
-  updateSelectedPoint();
   updateSelectedArea();
   updateMapInstruments();
 }
