@@ -10,8 +10,10 @@ import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.text.InputType;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -208,12 +210,15 @@ public class TERAPlugin implements IPlugin {
 
         EditText hostEdit = new EditText(hostButton.getContext());
         hostEdit.setSingleLine(true);
+        hostEdit.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_URI
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         hostEdit.setHint(R.string.host_input_hint);
         hostEdit.setText(hostState.toString());
         hostEdit.setTextSize(13);
-        hostEdit.setTextColor(Color.WHITE);
-        hostEdit.setHintTextColor(pluginContext.getResources().getColor(R.color.muted_gray));
-        hostEdit.setBackgroundResource(R.drawable.chat_icon_button_bg);
+        hostEdit.setTextColor(Color.BLACK);
+        hostEdit.setHintTextColor(Color.GRAY);
+        hostEdit.setBackgroundResource(R.drawable.host_input_bg);
         hostEdit.setPadding(dp(10), 0, dp(10), 0);
         hostEdit.setSelectAllOnFocus(false);
 
@@ -237,14 +242,15 @@ public class TERAPlugin implements IPlugin {
         content.addView(title);
         content.addView(hostEdit, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+                dp(38)));
         content.addView(actions);
 
         PopupWindow popup = new PopupWindow(content, dp(280),
                 LinearLayout.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
-        popup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        popup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
 
         apply.setOnClickListener(v -> {
@@ -267,6 +273,14 @@ public class TERAPlugin implements IPlugin {
         });
 
         popup.showAsDropDown(hostButton, -dp(160), dp(6));
+        hostEdit.requestFocus();
+        mainHandler.postDelayed(() -> {
+            InputMethodManager imm = (InputMethodManager) pluginContext.getSystemService(
+                    Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(hostEdit, InputMethodManager.SHOW_IMPLICIT);
+            }
+        }, 100);
     }
 
     private void toggleVoiceInput(View voiceButton, EditText chatInput, TextView status,
