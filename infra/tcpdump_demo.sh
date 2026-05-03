@@ -31,7 +31,7 @@ touch "$TEXT_LOG" "$SUMMARY_LOG"
 
 # The firewall already blocks egress in the hero demo. The capture filter is a
 # second proof surface: it ignores loopback and TAK multicast so local runtime
-# traffic does not obscure external outbound attempts.
+# traffic does not obscure extenal outbound attempts.
 BPF_FILTER="${WAYFINDER_TCPDUMP_FILTER:-not (host 127.0.0.1 or host ::1 or dst net 224.0.0.0/4 or dst host 239.2.3.1)}"
 DIRECTION_ARGS=()
 if tcpdump -h 2>&1 | grep -q -- "-Q "; then
