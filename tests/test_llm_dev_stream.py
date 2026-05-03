@@ -371,6 +371,10 @@ def test_map_location_search_sets_context_and_center_grid() -> None:
     assert "/api/location-search" in js
     assert "flyToLocationSuggestion" in js
     assert "latLonToUtm" in js
+    assert "latLonToMgrs" in js
+    assert "utmToMgrs" in js
+    assert "MGRS " in js
+    assert "MGRS_COLUMN_LETTER_SETS" in js
     assert "updateCenterGrid()" in js
     assert "location_confirmed" in js
     assert "location_focus_label" in js
