@@ -14,6 +14,8 @@ CoT -> local IP -> ATAK plugin render.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import structlog
@@ -35,10 +37,36 @@ log = structlog.get_logger(__name__)
 PHASE = os.getenv("TERA_PHASE", "1")
 PROFILE = os.getenv("TERA_DEVICE_PROFILE", "austere")
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Startup/shutdown hook.
+
+    On startup, ensure this device's public key is in the trust list. PRD
+    line 293-294 mandates verify-on-ingest against a trust list. Without a
+    bootstrap, a fresh Jetson (`make jetson-compose-refresh`) would sign
+    valid routes whose own key_id is not in the trust list -> /plan/verify
+    rejects -> plugin refuses to render. The orchestrator also bootstraps on
+    first sign as belt-and-suspenders, but doing it here as well guarantees
+    the file exists before any verify call can land.
+    """
+    try:
+        from agent.orchestrator import _bootstrap_device_trust
+        from crypto.ml_dsa_signer import create_signer
+
+        signer = create_signer()
+        _bootstrap_device_trust(signer.key_id)
+        log.info("trust_list_bootstrapped", key_id=signer.key_id)
+    except Exception as e:  # noqa: BLE001 -- degrade gracefully
+        log.warning("trust_list_bootstrap_skipped", error=str(e))
+    yield
+
+
 app = FastAPI(
     title="TERA Agent",
     version="0.1.0",
     description="Tactical Edge Route Agent. PRD: docs/PRD.md. By Team TruePoint.",
+    lifespan=_lifespan,
 )
 
 
