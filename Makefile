@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run demo eval clean
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch
 .DEFAULT_GOAL := help
 
 PY := python3.11
@@ -82,6 +82,24 @@ ci: lint test security ## Full CI gate (must pass before push)
 
 run: install ## Start the agent service locally (stub)
 	$(VENV)/bin/uvicorn agent.app:app --host 0.0.0.0 --port 8000 --reload
+
+tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
+	@bash infra/security_demo_monitors.sh
+
+audit-log: ## Tail structured security audit events
+	@bash infra/audit_log_scroll.sh
+
+demo-proofs: ## Open 3-pane proof display: tcpdump + audit log + signed CoT (issue #15)
+	@bash infra/security_demo_monitors.sh $(if $(INTERFACE),$(INTERFACE),)
+
+inject-demo: install ## Demo pitch beat: unsigned CoT rejected, signed CoT accepted (issue, PRD §12 3:00-3:30)
+	$(PYTHON) security/cot_inject_demo.py
+
+sign-bench: install ## Sign + verify 1000 CoT round-trips, assert < 5 ms avg (issue #12)
+	$(PYTHON) crypto/sign_bench.py
+
+protect-branch: ## Lock main branch protection via GitHub API (needs GITHUB_TOKEN env var)
+	@bash infra/protect_branch.sh
 
 demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
 	@echo "make demo: not yet wired - will run hero scenario E2E by Sun 0500"
