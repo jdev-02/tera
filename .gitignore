@@ -56,3 +56,25 @@ deploy/secrets/
 
 valhalla_tiles/
 *.gph
+
+# ---------------------------------------------------------------------------
+# ATAK SDK is a developer prerequisite, NOT source.
+# Never commit the vendored SDK tree. See atak/REBASE_RUNBOOK.md for layout.
+# Download SDK separately from PAR Government / TAK Product Center.
+# ---------------------------------------------------------------------------
+atak/ATAK-CIV-*-SDK/
+atak/**/atak-gradle-takdev.jar
+atak/**/atak-javadoc.jar
+atak/**/main.jar
+
+# Android signing keys NEVER in git (public repo = world-readable).
+*.keystore
+*.jks
+**/android_keystore
+local.properties
+
+# Android / gradle build output
+**/app/build/
+**/.gradle/
+*.apk
+*.aab
