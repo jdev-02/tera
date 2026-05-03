@@ -6,7 +6,13 @@ services:
       - "8080:8080"
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma2:2b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-6}
+      TERA_ATAK_MODEL: ${TERA_ATAK_MODEL:-gemma3:4b}
+      TERA_ATAK_AGENT_PROFILE: ${TERA_ATAK_AGENT_PROFILE:-tera-atak-live}
+      TERA_ATAK_DEVICE_URL: ${TERA_ATAK_DEVICE_URL:-}
+      TERA_ATAK_AGENT_COMMAND: ${TERA_ATAK_AGENT_COMMAND:-}
       REQUEST_TIMEOUT_S: ${REQUEST_TIMEOUT_S:-120}
       CESIUM_ION_TOKEN: ${CESIUM_ION_TOKEN:-}
     extra_hosts:
