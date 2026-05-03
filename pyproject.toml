@@ -91,6 +91,8 @@ ignore = [
 "crypto/*" = ["T201"]
 # eval/runner.py is a CLI tool that prints to stdout intentionally.
 "eval/runner.py" = ["T201"]
+# scripts/ are CLI demo tools that print to stdout intentionally.
+"scripts/*" = ["T201"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology"]

@@ -17,10 +17,10 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import defusedxml.ElementTree
 
 # Allow running from repo root or from security/ directory.
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -58,6 +58,7 @@ SAMPLE_ROUTE = CotRoute(
 # Output helpers (ASCII-safe for Windows cp1252 + Linux UTF-8)
 # ---------------------------------------------------------------------------
 
+
 def _line(char: str = "-", width: int = 60) -> str:
     return char * width
 
@@ -76,6 +77,7 @@ def _print_result(label: str, r: VerificationResult, expect_valid: bool) -> bool
 # ---------------------------------------------------------------------------
 # Demo
 # ---------------------------------------------------------------------------
+
 
 def demo() -> None:
     print()
@@ -103,7 +105,9 @@ def demo() -> None:
     print("This is what every legacy device on the mesh already sends.")
     print()
     r = verify_cot(SAMPLE_COT)
-    all_passed &= _print_result("unsigned CoT from legacy device / adversary", r, expect_valid=False)
+    all_passed &= _print_result(
+        "unsigned CoT from legacy device / adversary", r, expect_valid=False
+    )
 
     # ------------------------------------------------------------------
     # Scenario 2: Tampered CoT -- valid signature, wrong lat/lon
@@ -118,13 +122,15 @@ def demo() -> None:
     signed_dict = sign_cot(SAMPLE_ROUTE)
     signed_xml = _embed(SAMPLE_COT, signed_dict)
     # Tamper: change point lat in the outer CoT envelope after signing
-    root = ET.fromstring(signed_xml)  # safe -- we just built it
+    root = defusedxml.ElementTree.fromstring(signed_xml)  # safe -- we just built it
     point = root.find("point")
     assert point is not None
     point.set("lat", "99.999")  # attacker moves the destination
-    tampered_xml = ET.tostring(root, encoding="unicode")
+    tampered_xml = defusedxml.ElementTree.tostring(root, encoding="unicode")
     r = verify_cot(tampered_xml)
-    all_passed &= _print_result("tampered CoT (destination moved by attacker)", r, expect_valid=False)
+    all_passed &= _print_result(
+        "tampered CoT (destination moved by attacker)", r, expect_valid=False
+    )
 
     # ------------------------------------------------------------------
     # Scenario 3: Properly signed route from Jetson
@@ -141,7 +147,7 @@ def demo() -> None:
     r = verify_cot(valid_xml)
     print(f"  Algorithm : {signed_dict2['algorithm']}")
     print(f"  Key ID    : {signed_dict2['key_id']}")
-    short_sig = signed_dict2['signature'][:32] + "..."
+    short_sig = signed_dict2["signature"][:32] + "..."
     print(f"  Sig (hex) : {short_sig}")
     print()
     all_passed &= _print_result("signed CoT from Jetson", r, expect_valid=True)

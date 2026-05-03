@@ -96,7 +96,13 @@ class OperatorSignature(BaseModel):
 
 
 class PlanResponse(BaseModel):
-    """Returned from POST /plan. The route + rationale + trust + signature."""
+    """Returned from POST /plan. The route + rationale + trust + signature.
+
+    `audio_b64` holds an optional base64-encoded WAV of the rationale spoken
+    in operator cadence (Piper TTS, voice/tts.py). Populated when the request
+    arrives with `?tts=true` AND Piper is available locally; null otherwise.
+    Field is optional so a missing TTS layer never breaks the route response.
+    """
 
     request_id: str
     route: dict[str, Any]  # GeoJSON Feature with LineString geometry
@@ -105,6 +111,7 @@ class PlanResponse(BaseModel):
     cost_breakdown: dict[str, float] = Field(default_factory=dict)
     trust: dict[str, Any] = Field(default_factory=dict)  # from security/route_trust_score
     signature: Signature | None = None
+    audio_b64: str | None = None
 
 
 class PlanBlocked(BaseModel):
