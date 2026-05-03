@@ -66,6 +66,7 @@ atak/ATAK-CIV-*-SDK/
 atak/**/atak-gradle-takdev.jar
 atak/**/atak-javadoc.jar
 atak/**/main.jar
+atak/**/mapping.txt
 
 # Android signing keys NEVER in git (public repo = world-readable).
 *.keystore
@@ -76,5 +77,6 @@ local.properties
 # Android / gradle build output
 **/app/build/
 **/.gradle/
+**/.takdev/
 *.apk
 *.aab
