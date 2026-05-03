@@ -288,7 +288,6 @@ public class TERAPlugin implements IPlugin {
             connect.setEnabled(false);
             connect.setText("...");
             connectionStatus.setText(R.string.connection_connecting);
-            status.setText("Testing Jetson connection...");
             result.setVisibility(View.VISIBLE);
             result.setText("Testing:\n" + endpoint);
             TeraPlanClient.checkJetson(endpoint, new TeraPlanClient.Callback() {
@@ -300,7 +299,6 @@ public class TERAPlugin implements IPlugin {
                         connectionStatus.setText(ok
                                 ? R.string.connection_online
                                 : R.string.connection_error);
-                        status.setText(message);
                         result.setText(message + "\n\nEndpoint:\n" + endpoint);
                         if (ok) {
                             hostState.setLength(0);
