@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import math
 import os
 import re
+import shutil
+import subprocess
+import zipfile
+import xml.etree.ElementTree as ET
 from difflib import SequenceMatcher
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
+from typing import Any, Iterable, Literal
+from urllib.parse import quote, urljoin
 from uuid import uuid4
 
 import httpx
@@ -16,6 +25,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from llm_dev_kmh.geo_algorithms import algorithm_catalog
 
 log = structlog.get_logger(__name__)
 
@@ -26,6 +37,11 @@ IMAGERY_SOURCING_PROMPT_FILE = (
 )
 INDEX_FILE = BASE_DIR / "static" / "index.html"
 STATIC_DIR = BASE_DIR / "static"
+DEFAULT_OFFLINE_PACKAGE_ROOT = BASE_DIR / "offline_packages"
+ESRI_TILE_EXPORT_POLL_INTERVAL_S = float(os.getenv("ESRI_TILE_EXPORT_POLL_INTERVAL_S", "3"))
+ESRI_TILE_EXPORT_MAX_POLLS = int(os.getenv("ESRI_TILE_EXPORT_MAX_POLLS", "120"))
+CESIUM_ARCHIVE_POLL_INTERVAL_S = float(os.getenv("CESIUM_ARCHIVE_POLL_INTERVAL_S", "3"))
+CESIUM_ARCHIVE_MAX_POLLS = int(os.getenv("CESIUM_ARCHIVE_MAX_POLLS", "240"))
 
 
 def _load_dotenv_file(path: Path) -> None:
@@ -69,24 +85,36 @@ ANTHROPIC_API_URL = os.getenv(
     "ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages"
 )
 ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 CLAUDE_MODEL_ALIASES = {
-    "claude-sonnet-4-6": "claude-sonnet-4-6",
-    "claude-sonnet-4.6": "claude-sonnet-4-6",
-    "claude sonnet 4.6": "claude-sonnet-4-6",
-    "sonnet 4.6": "claude-sonnet-4-6",
-    "claude-sonnet-4": "claude-sonnet-4-6",
-    "claude sonnet 4": "claude-sonnet-4-6",
-    "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+    "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
+    "claude-sonnet-4-0": "claude-sonnet-4-20250514",
+    "claude-sonnet-4-6": "claude-sonnet-4-20250514",
+    "claude-sonnet-4.6": "claude-sonnet-4-20250514",
+    "claude sonnet 4.6": "claude-sonnet-4-20250514",
+    "sonnet 4.6": "claude-sonnet-4-20250514",
+    "claude-sonnet-4": "claude-sonnet-4-20250514",
+    "claude sonnet 4": "claude-sonnet-4-20250514",
     "claude-opus-4-7": "claude-opus-4-7",
     "claude opus 4.7": "claude-opus-4-7",
     "opus 4.7": "claude-opus-4-7",
+    "claude-opus-4": "claude-opus-4-20250514",
+    "claude opus 4": "claude-opus-4-20250514",
+    "opus 4": "claude-opus-4-20250514",
+    "claude-opus-4-20250514": "claude-opus-4-20250514",
     "claude-opus-4-1-20250805": "claude-opus-4-1-20250805",
     "claude-haiku-4-5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
     "claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
     "claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
 }
+CLAUDE_MODEL_FALLBACKS = (
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-1-20250805",
+    "claude-opus-4-20250514",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-haiku-20241022",
+)
 REQUEST_TIMEOUT_S = float(os.getenv("REQUEST_TIMEOUT_S", "120"))
 LOCATION_SEARCH_TIMEOUT_S = float(os.getenv("LOCATION_SEARCH_TIMEOUT_S", "4"))
 LOCATION_SEARCH_URL = os.getenv(
@@ -122,6 +150,14 @@ CESIUM_ION_TOKEN = (
     or os.getenv("CESIUM_ION_ACCESS_TOKEN")
     or ""
 ).strip()
+ESRI_TOKEN_CONFIGURED = bool(
+    (
+        os.getenv("ESRI_ARCGIS_TOKEN")
+        or os.getenv("ARCGIS_TOKEN")
+        or os.getenv("ESRI_ACCESS_TOKEN")
+        or ""
+    ).strip()
+)
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
@@ -170,6 +206,7 @@ class ModelsResponse(BaseModel):
 
 class RuntimeConfigResponse(BaseModel):
     cesium_ion_token: str
+    esri_token_configured: bool
     default_model: str
     claude_default_model: str
     anthropic_api_key_configured: bool
@@ -221,6 +258,28 @@ class MapContext(BaseModel):
     location_confirmed: bool = False
 
 
+class SourceDownloadMethod(BaseModel):
+    id: str
+    label: str
+    endpoint: str
+    method: str = "GET"
+    output_format: str
+    local_artifact_template: str
+    params: dict[str, object] = Field(default_factory=dict)
+    requires_token_env: str | None = None
+    requires_account: bool = False
+    terms_url: str | None = None
+    notes: str = ""
+
+
+class JetsonQueryFormat(BaseModel):
+    artifact_type: str
+    local_path_template: str
+    query_interfaces: list[str]
+    feeds_algorithms: list[str]
+    notes: str = ""
+
+
 class SourceOption(BaseModel):
     id: str
     name: str
@@ -235,6 +294,10 @@ class SourceOption(BaseModel):
     required_for: list[str] = Field(default_factory=list)
     recommended_for: list[str] = Field(default_factory=list)
     derived_layers: list[str] = Field(default_factory=list)
+    source_url: str | None = None
+    license_or_terms: str | None = None
+    download_methods: list[SourceDownloadMethod] = Field(default_factory=list)
+    jetson_query_formats: list[JetsonQueryFormat] = Field(default_factory=list)
     notes: str = ""
 
 
@@ -267,6 +330,16 @@ class DownloadPlanRequest(BaseModel):
     package_name: str | None = Field(default=None, max_length=120)
 
 
+class StorageInfoResponse(BaseModel):
+    package_root: str
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    reserved_bytes: int
+    usable_bytes: int
+    existing_package_bytes: int
+
+
 class DownloadPlanResponse(BaseModel):
     package_id: str
     package_name: str
@@ -275,6 +348,52 @@ class DownloadPlanResponse(BaseModel):
     manifest: dict[str, object]
     warnings: list[str]
     download_url: str
+    execute_url: str
+    status_url: str
+    artifacts_url: str
+    estimated_bytes: int
+    storage_fit: bool
+    storage: StorageInfoResponse
+    storage_warning: str | None = None
+
+
+class PackageExecuteResponse(BaseModel):
+    package_id: str
+    state: str
+    status_url: str
+    artifacts_url: str
+    storage: StorageInfoResponse
+    message: str
+
+
+class TerrainQueryRequest(BaseModel):
+    query_type: Literal["sample", "window", "summary"] = "sample"
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lon: float | None = Field(default=None, ge=-180, le=180)
+    bbox: ViewBounds | None = None
+    max_cells: int = Field(default=10000, ge=1, le=250000)
+
+
+class AlgorithmRequest(BaseModel):
+    algorithm_id: str = Field(min_length=1, max_length=80)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class PackageRouteRequest(BaseModel):
+    start: MapPoint
+    end: MapPoint
+    profile: str = Field(default="foot_covered", max_length=80)
+    avoid: list[str] = Field(default_factory=list)
+    mission_type: str = Field(default="terrain_route", max_length=80)
+
+
+class PackageCotRequest(BaseModel):
+    route_id: str | None = Field(default=None, max_length=120)
+    route: dict[str, Any] | None = None
+    waypoints: list[MapPoint] = Field(default_factory=list)
+    cot_type: Literal["route", "track"] = "route"
+    mission_type: str = Field(default="terrain_route", max_length=80)
+    rationale: str = Field(default="TERA generated route.", max_length=1000)
 
 
 def _extract_prompt_code_block(markdown: str) -> str:
@@ -303,13 +422,43 @@ def _load_imagery_sourcing_prompt() -> str:
         return fallback
 
 
+ESRI_TERMS_URL = "https://www.esri.com/en-us/legal/terms/full-master-agreement"
+ESRI_WORLD_IMAGERY_EXPORT_URL = (
+    "https://tiledbasemaps.arcgis.com/arcgis/rest/services/World_Imagery/MapServer"
+)
+ESRI_WORLD_ELEVATION_TERRAIN_URL = (
+    "https://elevation.arcgis.com/arcgis/rest/services/WorldElevation/Terrain/ImageServer"
+)
+EARTH_SEARCH_STAC_SEARCH_URL = "https://earth-search.aws.element84.com/v1/search"
+CESIUM_ION_ARCHIVES_URL = "https://api.cesium.com/v1/archives"
+CESIUM_ION_ARCHIVE_INFO_URL = "https://api.cesium.com/v1/archives/{archive_id}"
+CESIUM_ION_ARCHIVE_DOWNLOAD_URL = "https://api.cesium.com/v1/archives/{archive_id}/download"
+NAIP_AWS_BUCKET_URL_TEMPLATE = "https://{bucket}.s3.amazonaws.com"
+NAIP_AWS_DEFAULT_BUCKET = "naip-analytic"
+GEOFABRIK_BASE_URL = "https://download.geofabrik.de"
+COPERNICUS_DEM_30M_BASE_URL = "https://copernicus-dem-30m.s3.amazonaws.com"
+USGS_EARTHEXPLORER_URL = "https://earthexplorer.usgs.gov"
+USGS_IMAGERY_ONLY_TILE_URL = (
+    "https://basemap.nationalmap.gov/ArcGIS/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
+)
+NRL_NAIP_TILE_URL = (
+    "https://geoint.nrlssc.navy.mil/nrltileserver/wmts2?"
+    "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=NAIP&STYLE=_null&"
+    "TILEMATRIXSET=GoogleMapsCompatible&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&"
+    "FORMAT=image%2Fpng&WIDTH=256&HEIGHT=256"
+)
+
+
 SOURCE_CATALOG: list[SourceOption] = [
     SourceOption(
         id="esri_world_imagery",
         name="Esri World Imagery",
         provider="Esri ArcGIS Online",
         category="imagery",
-        purpose="High-resolution visual basemap for AO inspection and imagery context.",
+        purpose=(
+            "Optional visual imagery stream for AO inspection when an Esri account is "
+            "available."
+        ),
         useful_for=[
             "visual AO verification",
             "roads and tracks visible in imagery",
@@ -317,31 +466,301 @@ SOURCE_CATALOG: list[SourceOption] = [
             "vegetation and water body sanity checks",
         ],
         analysis_role=(
-            "Display stream only in this app; cache tiles for offline visualization and "
-            "pair with analytical imagery or vector extracts for database queries."
+            "Display-only fallback. Do not select for downloads unless the Jetson has "
+            "an ArcGIS token; use Sentinel-2 COGs or NAIP/open imagery for free offline files."
         ),
         stream_status="streamable",
-        download_status="manifest-only",
+        download_status="export-tiles-with-account",
         stream_layer="esri",
-        required_for=["imagery-preview"],
-        recommended_for=["terrain-routing", "water-access", "sar-planning", "evacuation"],
-        derived_layers=["visual_aoi_reference"],
-        notes="Do not use the visual tile stream as the sole analytical source.",
+        recommended_for=["licensed-imagery-preview"],
+        derived_layers=["cached_esri_imagery_tiles", "visual_aoi_reference"],
+        source_url=ESRI_WORLD_IMAGERY_EXPORT_URL,
+        license_or_terms=(
+            "Esri World Imagery for Export requires an ArcGIS organizational or "
+            "developer account and must be used under Esri terms."
+        ),
+        download_methods=[
+            SourceDownloadMethod(
+                id="esri_world_imagery_export_tiles",
+                label="ArcGIS Export Tiles job",
+                endpoint=f"{ESRI_WORLD_IMAGERY_EXPORT_URL}/exportTiles",
+                method="POST",
+                output_format="TPKX tile package",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/tiles/esri_world_imagery/world_imagery.tpkx"
+                ),
+                params={
+                    "tilePackage": "true",
+                    "storageFormatType": "esriMapCacheStorageModeCompactV2",
+                    "exportBy": "LevelID",
+                    "levels": "{imagery_level_range}",
+                    "exportExtent": "{aoi_wgs84_json}",
+                    "optimizeTilesForSize": "true",
+                    "compressionQuality": 75,
+                    "f": "json",
+                    "token": "${ESRI_ARCGIS_TOKEN}",
+                },
+                requires_token_env="ESRI_ARCGIS_TOKEN",
+                requires_account=True,
+                terms_url=ESRI_TERMS_URL,
+                notes=(
+                    "Use the World Imagery for Export service rather than scraping "
+                    "individual stream tiles. Keep exports under Esri service limits."
+                ),
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="esri_tpkx_imagery_package",
+                local_path_template=(
+                    "offline_packages/{package_id}/tiles/esri_world_imagery/world_imagery.tpkx"
+                ),
+                query_interfaces=[
+                    "package_metadata()",
+                    "tile_package_bounds()",
+                    "imagery_metadata_at(lat, lon)",
+                ],
+                feeds_algorithms=["visual_aoi_reference", "operator_route_review"],
+                notes=(
+                    "RGB basemap tiles are queryable for display and human sanity checks; "
+                    "do not use them as the sole source for slope, hydrology, or graph routing."
+                ),
+            )
+        ],
+        notes=(
+            "Not selected by default because this workflow only has a Cesium token. "
+            "Keep it as an optional licensed source."
+        ),
     ),
     SourceOption(
         id="cesium_world_imagery",
         name="Cesium World Imagery",
         provider="Cesium ion",
         category="imagery",
-        purpose="Token-backed global imagery stream for Cesium preview.",
+        purpose="Token-backed global imagery stream for Cesium preview using the token available on this Jetson.",
         useful_for=["3D mission preview", "route visualization backdrop", "AO briefing"],
-        analysis_role="Display layer; pre-cache selected tiles for disconnected demos.",
+        analysis_role=(
+            "Primary stream/display imagery in the web app. It is not treated as the "
+            "free downloadable analysis source; Sentinel-2 COGs fill that role."
+        ),
         stream_status="streamable-with-token",
-        download_status="cache-via-cesium-pipeline",
+        download_status="stream-only-no-offline-copy",
         stream_layer="ion-satellite",
-        recommended_for=["imagery-preview", "terrain-routing"],
-        derived_layers=["cached_imagery_tiles"],
-        notes="Phase 3 runtime must read cached tiles rather than calling Cesium online.",
+        recommended_for=["imagery-preview", "terrain-routing", "water-access", "sar-planning", "evacuation"],
+        derived_layers=["preview_only_imagery_stream"],
+        notes=(
+            "Use for online preview with CESIUM_ION_TOKEN only. Do not download or "
+            "cache Cesium ion data into the Jetson package unless a Cesium license "
+            "explicitly grants offline clips/archives."
+        ),
+    ),
+    SourceOption(
+        id="cesium_ion_archive",
+        name="Cesium ion Offline Archive",
+        provider="Cesium ion",
+        category="imagery-terrain-archive",
+        purpose=(
+            "Licensed/user-owned Cesium ion archive or AO clip downloaded to the "
+            "Jetson for local preview, tile serving, and archive metadata queries."
+        ),
+        useful_for=[
+            "local Cesium preview",
+            "3D Tiles archive import",
+            "offline imagery/terrain clip validation",
+            "operator route review",
+        ],
+        analysis_role=(
+            "Download an already-created Cesium archive by id, or create an AO "
+            "clip from configured ion asset ids, then extract and index the files "
+            "under the Jetson package root. This is the only Cesium download path; "
+            "it does not scrape World Imagery or World Terrain stream tiles."
+        ),
+        stream_status="not-streamed",
+        download_status="download-required",
+        required_for=[],
+        recommended_for=["imagery-preview", "terrain-routing", "signal-planning"],
+        derived_layers=[
+            "cesium_archive_zip",
+            "cesium_tileset_index",
+            "cesium_layer_json",
+            "local_cesium_file_server",
+        ],
+        source_url=CESIUM_ION_ARCHIVES_URL,
+        license_or_terms=(
+            "Requires a Cesium ion token and an archive/export or clippable "
+            "user-owned asset that is permitted for offline use."
+        ),
+        download_methods=[
+            SourceDownloadMethod(
+                id="cesium_ion_archive_download",
+                label="Cesium ion archive download",
+                endpoint=CESIUM_ION_ARCHIVE_DOWNLOAD_URL,
+                output_format="Cesium archive ZIP",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/cesium/archive/cesium_ion_archive.zip"
+                ),
+                params={
+                    "archive_id": "${CESIUM_ION_ARCHIVE_ID}",
+                    "token": "${CESIUM_ION_TOKEN}",
+                    "extract": True,
+                },
+                requires_token_env="CESIUM_ION_TOKEN",
+                requires_account=True,
+                terms_url="https://cesium.com/learn/ion/cesium-ion-archives-and-exports/",
+                notes=(
+                    "Set CESIUM_ION_ARCHIVE_ID to a completed archive id. The token "
+                    "is sent as an OAuth Bearer credential at download time and is "
+                    "not written to the manifest or artifact registry."
+                ),
+            ),
+            SourceDownloadMethod(
+                id="cesium_ion_clip_create_download",
+                label="Cesium ion AO clip create and download",
+                endpoint=CESIUM_ION_ARCHIVES_URL,
+                method="POST",
+                output_format="Cesium 3D Tiles archive ZIP",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/cesium/archive/cesium_ion_clip.zip"
+                ),
+                params={
+                    "asset_ids": "${CESIUM_ION_ASSET_IDS}",
+                    "token": "${CESIUM_ION_TOKEN}",
+                    "type": "CLIP_LATITUDE_LONGITUDE_RECTANGLE",
+                    "format": "TILESET",
+                    "clip_region": "{aoi_bbox_radians}",
+                    "extract": True,
+                },
+                requires_token_env="CESIUM_ION_TOKEN",
+                requires_account=True,
+                terms_url="https://cesium.com/learn/ion/cesium-ion-archives-and-exports/",
+                notes=(
+                    "Creates a bounded clip when CESIUM_ION_ASSET_IDS identifies "
+                    "archive/export-permitted ion assets. This will fail for assets "
+                    "that Cesium does not allow to be archived or clipped."
+                ),
+            ),
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="cesium_offline_archive_index",
+                local_path_template=(
+                    "offline_packages/{package_id}/cesium/archive/cesium_archive_index.json"
+                ),
+                query_interfaces=[
+                    "cesium_archive_metadata()",
+                    "cesium_file(relative_path)",
+                    "tileset_json()",
+                    "layer_json()",
+                ],
+                feeds_algorithms=[
+                    "local_cesium_preview",
+                    "operator_route_review",
+                    "terrain_visual_context",
+                ],
+                notes=(
+                    "Archive metadata and 3D Tiles/terrain descriptors are queryable "
+                    "locally. DEM algorithms still prefer GeoTIFF/COG elevation unless "
+                    "a quantized-mesh terrain decoder is added."
+                ),
+            )
+        ],
+        notes=(
+            "Use this when the Jetson must actually download Cesium content. A plain "
+            "World Imagery/Terrain stream token is not treated as offline download permission."
+        ),
+    ),
+    SourceOption(
+        id="usgs_imagery_only",
+        name="USGS Imagery Only",
+        provider="USGS The National Map",
+        category="imagery",
+        purpose="Free U.S. imagery tile stream from The National Map for AO preview and offline visual tile cache.",
+        useful_for=["U.S. visual AO verification", "roads and clearings", "offline background tiles"],
+        analysis_role=(
+            "Free visual imagery layer from the WinTAK source folder. Cache bounded AO tiles "
+            "to the Jetson for offline TAK/planner display; use Sentinel-2 COGs for raster analysis."
+        ),
+        stream_status="streamable",
+        download_status="cache-tiles",
+        stream_layer="usgs-imagery",
+        recommended_for=["imagery-preview", "terrain-routing", "sar-planning", "evacuation"],
+        derived_layers=["cached_usgs_imagery_tiles", "visual_aoi_reference"],
+        source_url=USGS_IMAGERY_ONLY_TILE_URL,
+        license_or_terms="U.S. public basemap imagery source; verify local attribution and cache policy before broad redistribution.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="usgs_imagery_tile_cache",
+                label="USGS imagery AO tile cache",
+                endpoint=USGS_IMAGERY_ONLY_TILE_URL,
+                output_format="XYZ PNG tile cache",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/tiles/usgs_imagery_only/{z}/{x}/{y}.png"
+                ),
+                params={
+                    "tile_url_template": USGS_IMAGERY_ONLY_TILE_URL,
+                    "levels": "{imagery_level_range}",
+                    "min_zoom": 0,
+                    "max_zoom": 15,
+                },
+                notes="Caches only AO-intersecting tiles under the Jetson package root.",
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="xyz_imagery_tile_cache",
+                local_path_template="offline_packages/{package_id}/tiles/usgs_imagery_only/{z}/{x}/{y}.png",
+                query_interfaces=["tile(z, x, y)", "tiles_intersecting_bbox(west, south, east, north, zoom)"],
+                feeds_algorithms=["visual_aoi_reference", "operator_route_review"],
+                notes="Visual tiles are queryable for display, not for DEM/routing math.",
+            )
+        ],
+        notes="Imported from the WinTAK imagery source list as a free U.S. visual imagery stream.",
+    ),
+    SourceOption(
+        id="nrl_naip_conus",
+        name="NRL NAIP (CONUS)",
+        provider="NRL / USDA NAIP",
+        category="imagery",
+        purpose="Free CONUS NAIP tile stream from the WinTAK imagery folder for high-detail U.S. AO review.",
+        useful_for=["CONUS aerial imagery", "small clearings", "roads and tracks", "offline visual review"],
+        analysis_role=(
+            "High-detail U.S. visual imagery tile cache. Useful for operator review and feature sanity checks; "
+            "not a substitute for COG bands or DEMs in deterministic algorithms."
+        ),
+        stream_status="streamable",
+        download_status="cache-tiles",
+        recommended_for=["imagery-preview", "sar-planning", "evacuation"],
+        derived_layers=["cached_naip_tiles", "high_detail_aerial_reference"],
+        source_url=NRL_NAIP_TILE_URL,
+        license_or_terms="NAIP imagery is public-domain with attribution; confirm NRL tile service use/caching constraints.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="nrl_naip_tile_cache",
+                label="NRL NAIP AO tile cache",
+                endpoint=NRL_NAIP_TILE_URL,
+                output_format="XYZ PNG tile cache",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/tiles/nrl_naip_conus/{z}/{x}/{y}.png"
+                ),
+                params={
+                    "tile_url_template": NRL_NAIP_TILE_URL,
+                    "levels": "{imagery_level_range}",
+                    "min_zoom": 0,
+                    "max_zoom": 18,
+                },
+                notes="Caches AO-intersecting NAIP tiles to the Jetson for disconnected display.",
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="xyz_imagery_tile_cache",
+                local_path_template="offline_packages/{package_id}/tiles/nrl_naip_conus/{z}/{x}/{y}.png",
+                query_interfaces=["tile(z, x, y)", "tiles_intersecting_bbox(west, south, east, north, zoom)"],
+                feeds_algorithms=["visual_aoi_reference", "operator_route_review"],
+                notes="Visual cache for ATAK/planner background layers.",
+            )
+        ],
+        notes="Useful when the AO is in CONUS and high-detail visual context matters.",
     ),
     SourceOption(
         id="cesium_world_terrain",
@@ -352,11 +771,14 @@ SOURCE_CATALOG: list[SourceOption] = [
         useful_for=["3D landform awareness", "ridge/valley interpretation", "visual route review"],
         analysis_role="Display terrain; use DEM sources for deterministic slope and viewshed.",
         stream_status="streamable-with-token",
-        download_status="cache-via-cesium-pipeline",
+        download_status="stream-only-no-offline-copy",
         stream_layer="cesium-world",
         recommended_for=["terrain-routing", "signal-planning", "imagery-preview"],
-        derived_layers=["cached_terrain_tiles"],
-        notes="Good for visualization, not a substitute for indexed DEM rasters.",
+        derived_layers=["preview_only_terrain_stream"],
+        notes=(
+            "Good for online visualization, not a substitute for indexed DEM rasters. "
+            "Do not download Cesium World Terrain into offline packages by default."
+        ),
     ),
     SourceOption(
         id="esri_world_elevation",
@@ -364,8 +786,8 @@ SOURCE_CATALOG: list[SourceOption] = [
         provider="Esri ArcGIS Online / Living Atlas",
         category="terrain",
         purpose=(
-            "Queryable online elevation terrain source for AO sampling and DEM "
-            "fallback when authoritative DEM downloads are unavailable."
+            "Primary queryable terrain source for AO elevation export, terrain sampling, "
+            "slope, hillshade, viewshed, hydrology, and cost-surface preflight."
         ),
         useful_for=[
             "elevation sampling",
@@ -375,23 +797,106 @@ SOURCE_CATALOG: list[SourceOption] = [
             "terrain sanity checks",
         ],
         analysis_role=(
-            "Download or cache clipped AO elevation tiles/samples so the server "
-            "database can answer terrain queries offline when primary DEMs are "
-            "missing or delayed."
+            "Export clipped AO elevation rasters or LERC tiles, convert them to "
+            "Cloud Optimized GeoTIFFs, and build derived rasters so the Jetson can "
+            "answer terrain queries offline."
         ),
         stream_status="queryable-online",
         download_status="download-required",
         required_for=["terrain-routing", "signal-planning"],
         recommended_for=["water-access", "sar-planning", "evacuation"],
         derived_layers=[
+            "dem_cog",
             "elevation_samples",
             "slope_degrees",
+            "aspect",
+            "roughness",
+            "curvature",
+            "flow_accumulation",
             "hillshade",
             "viewshed_surfaces",
+            "walking_cost_surface",
+        ],
+        source_url=ESRI_WORLD_ELEVATION_TERRAIN_URL,
+        license_or_terms=(
+            "Use under ArcGIS Online/Living Atlas service terms with an authorized "
+            "ArcGIS account or token."
+        ),
+        download_methods=[
+            SourceDownloadMethod(
+                id="esri_world_elevation_export_image_tiff",
+                label="ArcGIS ImageServer exportImage",
+                endpoint=f"{ESRI_WORLD_ELEVATION_TERRAIN_URL}/exportImage",
+                method="POST",
+                output_format="GeoTIFF DEM",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/rasters/esri_world_elevation/dem.tif"
+                ),
+                params={
+                    "bbox": "{aoi_bbox_wgs84}",
+                    "bboxSR": 4326,
+                    "imageSR": 4326,
+                    "size": "{terrain_export_size}",
+                    "format": "tiff",
+                    "pixelType": "F32",
+                    "interpolation": "RSP_BilinearInterpolation",
+                    "f": "image",
+                    "token": "${ESRI_ARCGIS_TOKEN}",
+                },
+                requires_token_env="ESRI_ARCGIS_TOKEN",
+                requires_account=True,
+                terms_url=ESRI_TERMS_URL,
+                notes=(
+                    "Use for clipped DEM files that become local COG inputs for "
+                    "slope, flow, cost-distance, and viewshed algorithms."
+                ),
+            ),
+            SourceDownloadMethod(
+                id="esri_world_elevation_get_samples",
+                label="ArcGIS ImageServer getSamples",
+                endpoint=f"{ESRI_WORLD_ELEVATION_TERRAIN_URL}/getSamples",
+                method="POST",
+                output_format="JSON elevation samples",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/samples/esri_world_elevation/grid_samples.json"
+                ),
+                params={
+                    "geometry": "{sample_points_multipoint_json}",
+                    "geometryType": "esriGeometryMultipoint",
+                    "returnFirstValueOnly": "true",
+                    "f": "json",
+                    "token": "${ESRI_ARCGIS_TOKEN}",
+                },
+                requires_token_env="ESRI_ARCGIS_TOKEN",
+                requires_account=True,
+                terms_url=ESRI_TERMS_URL,
+                notes="Use for quick AO preflight and point checks; prefer GeoTIFF export for full routing.",
+            ),
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="cloud_optimized_geotiff_dem",
+                local_path_template=(
+                    "offline_packages/{package_id}/rasters/esri_world_elevation/dem_cog.tif"
+                ),
+                query_interfaces=[
+                    "sample_dem(lat, lon)",
+                    "read_window(west, south, east, north)",
+                    "derive_slope_aspect_roughness(bounds)",
+                ],
+                feeds_algorithms=[
+                    "terrain_derivatives",
+                    "flow_accumulation_d8",
+                    "raster_cost_distance",
+                    "viewshed",
+                    "isochrone_masks",
+                ],
+                notes="Main terrain artifact consumed by deterministic Jetson algorithms.",
+            )
         ],
         notes=(
-            "Treat as a queryable fallback or validation layer; prefer USGS 3DEP "
-            "or Copernicus DEM when available for authoritative analysis."
+            "Main terrain source for this planner. Supplement with USGS 3DEP or "
+            "Copernicus DEM when the AO needs an open authoritative DEM mirror."
         ),
     ),
     SourceOption(
@@ -412,21 +917,71 @@ SOURCE_CATALOG: list[SourceOption] = [
     SourceOption(
         id="osm_extract",
         name="OpenStreetMap PBF Extract",
-        provider="OpenStreetMap / Geofabrik / regional extract",
+        provider="Geofabrik / OpenStreetMap contributors",
         category="vector",
-        purpose="Local vector extract for roads, trails, paths, waterways, buildings, POIs, and barriers.",
+        purpose=(
+            "Geofabrik regional OSM PBF downloaded to the Jetson and clipped to "
+            "the selected AOI for roads, trails, waterways, buildings, POIs, and barriers."
+        ),
         useful_for=[
             "routable graph",
             "nearest road or trail",
             "waterway and POI lookup",
             "barrier and bridge/crossing context",
         ],
-        analysis_role="Primary local vector dataset for database-backed graph and feature queries.",
+        analysis_role=(
+            "Primary local vector dataset for database-backed graph, POI, hydro, "
+            "access, and Valhalla tile-build queries."
+        ),
         stream_status="not-streamed",
         download_status="download-required",
         required_for=["terrain-routing", "water-access", "evacuation", "sar-planning"],
         recommended_for=["access-control", "signal-planning"],
         derived_layers=["routable_graph", "poi_index", "waterway_index", "barrier_index"],
+        source_url=GEOFABRIK_BASE_URL,
+        license_or_terms="OpenStreetMap data from Geofabrik is under the Open Database License.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="osm_geofabrik_pbf",
+                label="Geofabrik regional PBF download and AOI clip",
+                endpoint="{geofabrik_osm_pbf_url}",
+                output_format="OSM PBF",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/vectors/osm/aoi.osm.pbf"
+                ),
+                params={
+                    "region_url": "{geofabrik_osm_pbf_url}",
+                    "region_slug": "{geofabrik_region_slug}",
+                    "clip_bbox": "{aoi_bbox_wgs84}",
+                    "clip_with_osmium": True,
+                },
+                terms_url="https://www.geofabrik.de/en/data/download.html",
+                notes=(
+                    "Downloads the AO's Geofabrik state/region extract. If osmium is "
+                    "installed on the Jetson, it clips to AOI; otherwise it registers "
+                    "the regional PBF and marks clipping as pending."
+                ),
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="osm_pbf_extract",
+                local_path_template="offline_packages/{package_id}/vectors/osm/aoi.osm.pbf",
+                query_interfaces=[
+                    "osmium tags-filter",
+                    "pyosmium scan",
+                    "valhalla_build_tiles",
+                    "find_pois(osm_tags, bbox)",
+                ],
+                feeds_algorithms=[
+                    "routable_graph",
+                    "nearest_feature",
+                    "water_source_lookup",
+                    "evacuation_route",
+                ],
+                notes="Main vector artifact for deterministic route and POI algorithms.",
+            )
+        ],
         notes="Clip tightly to AO and preserve source/version metadata.",
     ),
     SourceOption(
@@ -453,18 +1008,128 @@ SOURCE_CATALOG: list[SourceOption] = [
     ),
     SourceOption(
         id="copernicus_dem",
-        name="Copernicus DEM",
+        name="Copernicus DEM GLO-30 COG",
         provider="Copernicus",
         category="terrain",
-        purpose="Strong global DEM when U.S. 3DEP is unavailable.",
-        useful_for=["global slope", "viewshed", "terrain cost", "AO outside U.S."],
-        analysis_role="Primary or fallback analysis DEM for non-U.S. mission areas.",
+        purpose=(
+            "Free no-account 30 m terrain COG tiles from the public Copernicus DEM "
+            "S3 mirror for slope, viewshed, hydrology, and terrain-cost analysis."
+        ),
+        useful_for=["global slope", "viewshed", "terrain cost", "AO outside U.S.", "no-login terrain"],
+        analysis_role=(
+            "Main no-login terrain download path. Select 1-degree GLO-30 COG tiles "
+            "intersecting the AOI and store them under the Jetson package root."
+        ),
         stream_status="not-streamed",
         download_status="download-required",
         required_for=["terrain-routing", "signal-planning"],
         recommended_for=["water-access", "sar-planning"],
-        derived_layers=["slope_degrees", "roughness", "flow_accumulation", "viewshed_surfaces"],
-        notes="Confirm coverage, license, and void handling for the AO before packaging.",
+        derived_layers=[
+            "dem_cog",
+            "slope_degrees",
+            "aspect",
+            "roughness",
+            "flow_accumulation",
+            "viewshed_surfaces",
+            "walking_cost_surface",
+        ],
+        source_url=COPERNICUS_DEM_30M_BASE_URL,
+        license_or_terms="Copernicus DEM GLO-30 Public is free for public use under Copernicus DEM terms.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="copernicus_dem_glo30_cog",
+                label="Copernicus GLO-30 public S3 COG tiles",
+                endpoint=COPERNICUS_DEM_30M_BASE_URL,
+                output_format="Cloud Optimized GeoTIFF DEM tiles",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/rasters/copernicus_dem/{tile_id}.tif"
+                ),
+                params={
+                    "tile_urls": "{copernicus_dem_tile_urls}",
+                    "bbox": "{aoi_bbox_wgs84}",
+                    "resolution_arc_seconds": 10,
+                },
+                terms_url="https://copernicus-dem-30m.s3.amazonaws.com/readme.html",
+                notes=(
+                    "Downloads only AO-intersecting 1-degree COG tiles. Missing ocean "
+                    "or unreleased tiles are recorded in the DEM index."
+                ),
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="copernicus_dem_cog_index",
+                local_path_template="offline_packages/{package_id}/rasters/copernicus_dem/copernicus_dem_index.json",
+                query_interfaces=[
+                    "sample_dem(lat, lon)",
+                    "read_window(west, south, east, north)",
+                    "derive_slope_aspect_roughness(bounds)",
+                ],
+                feeds_algorithms=[
+                    "terrain_derivatives",
+                    "flow_accumulation_d8",
+                    "raster_cost_distance",
+                    "viewshed",
+                ],
+                notes="COG tiles are local raster inputs for deterministic terrain algorithms.",
+            )
+        ],
+        notes="Use as the default no-login terrain source; add DTED when an EarthExplorer DTED package is staged.",
+    ),
+    SourceOption(
+        id="dted_earth_explorer",
+        name="DTED from USGS EarthExplorer",
+        provider="USGS EarthExplorer",
+        category="terrain",
+        purpose=(
+            "Operator-staged DTED-2/DTED cells from EarthExplorer imported to the "
+            "Jetson package and converted to GeoTIFF when GDAL is installed."
+        ),
+        useful_for=["DTED-2 30 m terrain", "military terrain interchange", "offline DEM fallback"],
+        analysis_role=(
+            "EarthExplorer requires account login, so the web app imports a local "
+            "staging directory of downloaded .dt0/.dt1/.dt2 files. It then converts "
+            "each file with gdal_translate when available and registers both raw "
+            "DTED and GeoTIFF artifacts."
+        ),
+        stream_status="not-streamed",
+        download_status="manual-stage-import",
+        recommended_for=["terrain-routing", "signal-planning"],
+        derived_layers=["dted_cells", "geotiff_dem", "slope_degrees", "viewshed_surfaces"],
+        source_url=USGS_EARTHEXPLORER_URL,
+        license_or_terms="Use under USGS EarthExplorer dataset terms for the downloaded DTED product.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="dted_earthexplorer_import_convert",
+                label="Import staged EarthExplorer DTED and convert with GDAL",
+                endpoint="${DTED_SOURCE_DIR}",
+                output_format="DTED cells and GeoTIFF DEMs",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/rasters/dted/dted_index.json"
+                ),
+                params={
+                    "source_dir": "${DTED_SOURCE_DIR}",
+                    "bbox": "{aoi_bbox_wgs84}",
+                    "convert_to_geotiff": True,
+                },
+                requires_account=True,
+                terms_url="https://www.usgs.gov/tools/earthexplorer",
+                notes=(
+                    "Set DTED_SOURCE_DIR to the folder containing EarthExplorer .dt2 "
+                    "downloads. gdal_translate input.dt2 output.tif is used when present."
+                ),
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="dted_geotiff_index",
+                local_path_template="offline_packages/{package_id}/rasters/dted/dted_index.json",
+                query_interfaces=["sample_dem(lat, lon)", "read_window(west, south, east, north)", "gdalinfo"],
+                feeds_algorithms=["terrain_derivatives", "raster_cost_distance", "viewshed"],
+                notes="Converted GeoTIFFs are preferred; raw DTED remains available for GDAL readers.",
+            )
+        ],
+        notes="Use when the operator has already pulled DTED from EarthExplorer; otherwise prefer Copernicus GLO-30.",
     ),
     SourceOption(
         id="srtm",
@@ -583,16 +1248,70 @@ SOURCE_CATALOG: list[SourceOption] = [
     SourceOption(
         id="sentinel_2",
         name="Sentinel-2 Multispectral",
-        provider="ESA Copernicus",
+        provider="ESA Copernicus / Element 84 Earth Search",
         category="imagery-analysis",
-        purpose="Multispectral imagery for vegetation, water, burn, and surface-condition indices.",
+        purpose=(
+            "Free global multispectral COG imagery for offline AO context, vegetation, "
+            "water, burn, and surface-condition indices."
+        ),
         useful_for=["NDVI", "NDWI", "water detection", "vegetation condition", "recent surface context"],
-        analysis_role="Analysis imagery source for derived indices, not just visual backdrop.",
+        analysis_role=(
+            "Primary free downloadable imagery source for this planner. Download selected "
+            "COG assets from the public Earth Search STAC API to the Jetson package root."
+        ),
         stream_status="not-streamed",
         download_status="download-required",
-        recommended_for=["water-access", "sar-planning", "imagery-preview"],
-        derived_layers=["ndvi", "ndwi", "vegetation_condition", "water_detection"],
-        notes="Cloud cover and date filtering matter; preserve acquisition timestamp.",
+        required_for=["imagery-preview"],
+        recommended_for=["terrain-routing", "water-access", "sar-planning", "evacuation"],
+        derived_layers=["sentinel2_visual_cog", "ndvi", "ndwi", "vegetation_condition", "water_detection"],
+        source_url=EARTH_SEARCH_STAC_SEARCH_URL,
+        license_or_terms="Sentinel data access is free, full, and open under Copernicus terms.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="sentinel_2_stac_cog",
+                label="Earth Search Sentinel-2 COG STAC download",
+                endpoint=EARTH_SEARCH_STAC_SEARCH_URL,
+                method="POST",
+                output_format="COG GeoTIFF bands",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/imagery/sentinel_2/{item_id}_{asset}.tif"
+                ),
+                params={
+                    "collections": ["sentinel-2-l2a"],
+                    "bbox": "{aoi_bbox_array}",
+                    "datetime": "{recent_24_month_interval}",
+                    "limit": 1,
+                    "query": {"eo:cloud_cover": {"lt": 30}},
+                    "sortby": [{"field": "properties.datetime", "direction": "desc"}],
+                    "assets": ["visual", "red", "green", "blue", "nir", "scl"],
+                },
+                terms_url="https://registry.opendata.aws/sentinel-2-l2a-cogs/",
+                notes=(
+                    "No Esri token or AWS account is required for Earth Search HTTP COG hrefs. "
+                    "The Jetson downloads only selected scene assets intersecting the AO."
+                ),
+            )
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="sentinel2_cog_band_stack",
+                local_path_template="offline_packages/{package_id}/imagery/sentinel_2/*.tif",
+                query_interfaces=[
+                    "read_band_window(asset, west, south, east, north)",
+                    "compute_ndvi(red, nir)",
+                    "compute_ndwi(green, nir)",
+                    "visual_chip(west, south, east, north)",
+                ],
+                feeds_algorithms=[
+                    "vegetation_condition",
+                    "water_detection",
+                    "operator_route_review",
+                    "sar_probability_context",
+                ],
+                notes="Free imagery COGs are queryable by raster windows on the Jetson.",
+            )
+        ],
+        notes="Cloud cover and date filtering matter; preserve acquisition timestamp and STAC metadata.",
     ),
     SourceOption(
         id="landsat_collection_2",
@@ -611,15 +1330,86 @@ SOURCE_CATALOG: list[SourceOption] = [
     SourceOption(
         id="naip",
         name="NAIP Aerial Imagery",
-        provider="USDA",
+        provider="USDA / USGS EarthExplorer / AWS Open Data",
         category="imagery-analysis",
-        purpose="High-resolution U.S. aerial imagery for detailed visual feature extraction.",
-        useful_for=["small roads/tracks", "buildings", "clearings", "agricultural features"],
-        analysis_role="Analysis imagery and offline basemap source for U.S. AO detail.",
+        purpose=(
+            "High-resolution U.S. aerial imagery downloaded to the Jetson from "
+            "EarthExplorer GeoTIFF staging or NAIP public S3 prefixes."
+        ),
+        useful_for=["small roads/tracks", "buildings", "clearings", "agricultural features", "offline AO imagery"],
+        analysis_role=(
+            "Primary high-detail U.S. imagery source for this workflow. Use "
+            "EarthExplorer GeoTIFFs when staged, or pull public NAIP AWS state/year/"
+            "resolution prefixes with requester-pays headers for local query and serving."
+        ),
         stream_status="not-streamed",
         download_status="download-required",
-        recommended_for=["imagery-preview", "sar-planning", "evacuation"],
-        derived_layers=["high_detail_aerial_reference", "feature_extraction_review"],
+        required_for=["imagery-preview"],
+        recommended_for=["sar-planning", "evacuation", "terrain-routing"],
+        derived_layers=["naip_local_imagery", "high_detail_aerial_reference", "feature_extraction_review"],
+        source_url="https://registry.opendata.aws/naip/",
+        license_or_terms="NAIP on AWS is public domain with attribution; EarthExplorer downloads follow USGS terms.",
+        download_methods=[
+            SourceDownloadMethod(
+                id="naip_aws_public_prefix",
+                label="NAIP AWS public S3 prefix download",
+                endpoint=NAIP_AWS_BUCKET_URL_TEMPLATE,
+                output_format="NAIP MRF/GeoTIFF/COG files",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/imagery/naip/aws/naip_index.json"
+                ),
+                params={
+                    "bucket": "{naip_aws_bucket}",
+                    "prefix": "{naip_s3_prefix}",
+                    "state": "{naip_state}",
+                    "year": "{naip_year}",
+                    "resolution": "{naip_resolution}",
+                    "bandset": "{naip_bandset}",
+                    "max_files": "{naip_max_files}",
+                    "request_payer": "requester",
+                },
+                terms_url="https://registry.opendata.aws/naip/",
+                notes=(
+                    "Mirrors the operator workflow `aws s3 cp s3://naip-analytic/"
+                    "<state>/<year>/<resolution>/rgbir/ ... --recursive`. Limit "
+                    "max files and confirm storage before pulling large state prefixes."
+                ),
+            ),
+            SourceDownloadMethod(
+                id="naip_earthexplorer_geotiff_import",
+                label="Import staged EarthExplorer NAIP GeoTIFFs",
+                endpoint="${NAIP_EARTHEXPLORER_DIR}",
+                output_format="NAIP GeoTIFF imagery",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/imagery/naip/earthexplorer/naip_earthexplorer_index.json"
+                ),
+                params={
+                    "source_dir": "${NAIP_EARTHEXPLORER_DIR}",
+                    "bbox": "{aoi_bbox_wgs84}",
+                    "max_files": "{naip_max_files}",
+                },
+                requires_account=True,
+                terms_url="https://www.usgs.gov/tools/earthexplorer",
+                notes=(
+                    "Set NAIP_EARTHEXPLORER_DIR to the folder containing downloaded "
+                    "NAIP GeoTIFFs from EarthExplorer."
+                ),
+            ),
+        ],
+        jetson_query_formats=[
+            JetsonQueryFormat(
+                artifact_type="naip_imagery_index",
+                local_path_template="offline_packages/{package_id}/imagery/naip/**/naip*_index.json",
+                query_interfaces=[
+                    "imagery_file(relative_path)",
+                    "rasterio.open()",
+                    "read_window(west, south, east, north)",
+                    "visual_chip(west, south, east, north)",
+                ],
+                feeds_algorithms=["operator_route_review", "feature_extraction_review", "sar_probability_context"],
+                notes="Local NAIP files are served to the planner/TERA plugin and can be read by GDAL/rasterio.",
+            )
+        ],
         notes="Check acquisition date; may be stale for fast-changing environments.",
     ),
     SourceOption(
@@ -766,8 +1556,14 @@ SOURCE_CATALOG: list[SourceOption] = [
 ]
 
 SOURCE_BY_ID: dict[str, SourceOption] = {source.id: source for source in SOURCE_CATALOG}
-PRIMARY_STREAM_SOURCE_IDS = ["esri_world_imagery", "cesium_world_terrain", "osm_basemap"]
+PRIMARY_STREAM_SOURCE_IDS = [
+    "cesium_world_imagery",
+    "usgs_imagery_only",
+    "cesium_world_terrain",
+    "osm_basemap",
+]
 PACKAGE_MANIFESTS: dict[str, dict[str, object]] = {}
+PACKAGE_TASKS: dict[str, asyncio.Task[None]] = {}
 
 FOCUS_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("water-access", ("water", "stream", "river", "spring", "lake", "potable", "hydrate")),
@@ -993,6 +1789,2824 @@ def _format_manifest_bounds(map_context: MapContext | None) -> dict[str, float |
     }
 
 
+def _manifest_bounds_from_context(map_context: MapContext | None) -> ViewBounds | None:
+    if map_context is None:
+        return None
+    return map_context.selected_area or map_context.view_bounds
+
+
+def _format_wgs84_extent_json(bounds: ViewBounds | None) -> dict[str, object] | str:
+    if bounds is None:
+        return "{aoi_wgs84_json}"
+    return {
+        "xmin": bounds.west,
+        "ymin": bounds.south,
+        "xmax": bounds.east,
+        "ymax": bounds.north,
+        "spatialReference": {"wkid": 4326},
+    }
+
+
+def _format_bbox_csv(bounds: ViewBounds | None) -> str:
+    if bounds is None:
+        return "{aoi_bbox_wgs84}"
+    return f"{bounds.west},{bounds.south},{bounds.east},{bounds.north}"
+
+
+def _format_bbox_array(bounds: ViewBounds | None) -> list[float] | str:
+    if bounds is None:
+        return "{aoi_bbox_array}"
+    return [bounds.west, bounds.south, bounds.east, bounds.north]
+
+
+def _format_bbox_radians(bounds: ViewBounds | None) -> list[float] | str:
+    if bounds is None:
+        return "{aoi_bbox_radians}"
+    return [
+        math.radians(bounds.west),
+        math.radians(bounds.south),
+        math.radians(bounds.east),
+        math.radians(bounds.north),
+    ]
+
+
+US_STATE_BBOXES: dict[str, tuple[str, str, tuple[float, float, float, float]]] = {
+    "al": ("alabama", "al", (-88.6, 30.1, -84.9, 35.1)),
+    "az": ("arizona", "az", (-114.9, 31.2, -109.0, 37.1)),
+    "ar": ("arkansas", "ar", (-94.7, 33.0, -89.6, 36.6)),
+    "ca": ("california", "ca", (-124.5, 32.4, -114.1, 42.1)),
+    "co": ("colorado", "co", (-109.1, 36.9, -102.0, 41.1)),
+    "ct": ("connecticut", "ct", (-73.8, 40.9, -71.7, 42.1)),
+    "de": ("delaware", "de", (-75.9, 38.4, -75.0, 39.9)),
+    "fl": ("florida", "fl", (-87.7, 24.4, -80.0, 31.1)),
+    "ga": ("georgia", "ga", (-85.7, 30.3, -80.8, 35.1)),
+    "id": ("idaho", "id", (-117.3, 42.0, -111.0, 49.1)),
+    "il": ("illinois", "il", (-91.6, 36.9, -87.5, 42.6)),
+    "in": ("indiana", "in", (-88.2, 37.7, -84.7, 41.8)),
+    "ia": ("iowa", "ia", (-96.7, 40.3, -90.1, 43.6)),
+    "ks": ("kansas", "ks", (-102.1, 36.9, -94.5, 40.1)),
+    "ky": ("kentucky", "ky", (-89.6, 36.4, -81.9, 39.2)),
+    "la": ("louisiana", "la", (-94.1, 28.8, -88.7, 33.1)),
+    "me": ("maine", "me", (-71.2, 43.0, -66.8, 47.5)),
+    "md": ("maryland", "md", (-79.6, 37.8, -75.0, 39.8)),
+    "ma": ("massachusetts", "ma", (-73.6, 41.1, -69.8, 42.9)),
+    "mi": ("michigan", "mi", (-90.5, 41.6, -82.1, 48.4)),
+    "mn": ("minnesota", "mn", (-97.3, 43.4, -89.4, 49.4)),
+    "ms": ("mississippi", "ms", (-91.8, 30.1, -88.0, 35.1)),
+    "mo": ("missouri", "mo", (-95.8, 35.9, -89.0, 40.7)),
+    "mt": ("montana", "mt", (-116.1, 44.3, -104.0, 49.1)),
+    "ne": ("nebraska", "ne", (-104.1, 39.9, -95.3, 43.1)),
+    "nv": ("nevada", "nv", (-120.1, 35.0, -114.0, 42.1)),
+    "nh": ("new-hampshire", "nh", (-72.6, 42.6, -70.6, 45.4)),
+    "nj": ("new-jersey", "nj", (-75.6, 38.8, -73.8, 41.4)),
+    "nm": ("new-mexico", "nm", (-109.1, 31.2, -103.0, 37.1)),
+    "ny": ("new-york", "ny", (-79.8, 40.4, -71.8, 45.1)),
+    "nc": ("north-carolina", "nc", (-84.4, 33.7, -75.4, 36.7)),
+    "nd": ("north-dakota", "nd", (-104.1, 45.9, -96.5, 49.1)),
+    "oh": ("ohio", "oh", (-84.9, 38.3, -80.5, 42.1)),
+    "ok": ("oklahoma", "ok", (-103.1, 33.5, -94.4, 37.1)),
+    "or": ("oregon", "or", (-124.7, 41.9, -116.4, 46.4)),
+    "pa": ("pennsylvania", "pa", (-80.6, 39.7, -74.6, 42.6)),
+    "ri": ("rhode-island", "ri", (-71.9, 41.1, -71.1, 42.1)),
+    "sc": ("south-carolina", "sc", (-83.4, 32.0, -78.5, 35.3)),
+    "sd": ("south-dakota", "sd", (-104.1, 42.4, -96.4, 45.9)),
+    "tn": ("tennessee", "tn", (-90.4, 34.9, -81.6, 36.8)),
+    "tx": ("texas", "tx", (-106.7, 25.8, -93.5, 36.6)),
+    "ut": ("utah", "ut", (-114.1, 36.9, -109.0, 42.1)),
+    "vt": ("vermont", "vt", (-73.5, 42.7, -71.4, 45.1)),
+    "va": ("virginia", "va", (-83.8, 36.5, -75.2, 39.5)),
+    "wa": ("washington", "wa", (-124.9, 45.5, -116.9, 49.1)),
+    "wv": ("west-virginia", "wv", (-82.7, 37.1, -77.7, 40.7)),
+    "wi": ("wisconsin", "wi", (-92.9, 42.4, -86.7, 47.1)),
+    "wy": ("wyoming", "wy", (-111.1, 40.9, -104.0, 45.1)),
+}
+
+
+def _infer_us_state(bounds: ViewBounds | None) -> tuple[str, str] | None:
+    if bounds is None:
+        return None
+    lat = bounds.center_lat if bounds.center_lat is not None else (bounds.south + bounds.north) / 2
+    lon = bounds.center_lon if bounds.center_lon is not None else (bounds.west + bounds.east) / 2
+    candidates: list[tuple[float, str, str]] = []
+    for slug, code, (west, south, east, north) in US_STATE_BBOXES.values():
+        if west <= lon <= east and south <= lat <= north:
+            candidates.append(((east - west) * (north - south), slug, code))
+    if not candidates:
+        return None
+    _area, slug, code = sorted(candidates)[0]
+    return slug, code
+
+
+def _naip_state_code(bounds: ViewBounds | None) -> str:
+    configured = os.getenv("NAIP_AWS_STATE", "").strip().lower()
+    if configured:
+        return configured
+    inferred = _infer_us_state(bounds)
+    return inferred[1] if inferred else "nv"
+
+
+def _naip_year() -> str:
+    return os.getenv("NAIP_AWS_YEAR", "2022").strip() or "2022"
+
+
+def _naip_resolution() -> str:
+    return os.getenv("NAIP_AWS_RESOLUTION", "60cm").strip() or "60cm"
+
+
+def _naip_bandset() -> str:
+    return os.getenv("NAIP_AWS_BANDSET", "rgbir").strip() or "rgbir"
+
+
+def _naip_bucket() -> str:
+    return os.getenv("NAIP_AWS_BUCKET", NAIP_AWS_DEFAULT_BUCKET).strip() or NAIP_AWS_DEFAULT_BUCKET
+
+
+def _naip_s3_prefix(bounds: ViewBounds | None) -> str:
+    configured = os.getenv("NAIP_AWS_PREFIX", "").strip().strip("/")
+    if configured:
+        return f"{configured}/"
+    return f"{_naip_state_code(bounds)}/{_naip_year()}/{_naip_resolution()}/{_naip_bandset()}/"
+
+
+def _geofabrik_region_slug(bounds: ViewBounds | None) -> str:
+    configured = os.getenv("GEOFABRIK_REGION_SLUG", "").strip().strip("/")
+    if configured:
+        return configured
+    inferred = _infer_us_state(bounds)
+    return f"north-america/us/{inferred[0]}" if inferred else "north-america/us/nevada"
+
+
+def _geofabrik_osm_pbf_url(bounds: ViewBounds | None) -> str:
+    configured = os.getenv("GEOFABRIK_PBF_URL", "").strip()
+    if configured:
+        return configured
+    return f"{GEOFABRIK_BASE_URL}/{_geofabrik_region_slug(bounds)}-latest.osm.pbf"
+
+
+def _format_lat_token(lat_floor: int) -> str:
+    return ("N" if lat_floor >= 0 else "S") + f"{abs(lat_floor):02d}_00"
+
+
+def _format_lon_token(lon_floor: int) -> str:
+    return ("E" if lon_floor >= 0 else "W") + f"{abs(lon_floor):03d}_00"
+
+
+def _copernicus_dem_tiles(bounds: ViewBounds | None) -> list[dict[str, object]]:
+    if bounds is None:
+        return []
+    lat_start = math.floor(bounds.south)
+    lat_end = math.ceil(bounds.north) - 1
+    lon_start = math.floor(bounds.west)
+    lon_end = math.ceil(bounds.east) - 1
+    tiles: list[dict[str, object]] = []
+    for lat_floor in range(lat_start, lat_end + 1):
+        for lon_floor in range(lon_start, lon_end + 1):
+            lat_token = _format_lat_token(lat_floor)
+            lon_token = _format_lon_token(lon_floor)
+            tile_id = f"Copernicus_DSM_COG_10_{lat_token}_{lon_token}_DEM"
+            tiles.append(
+                {
+                    "tile_id": tile_id,
+                    "lat_floor": lat_floor,
+                    "lon_floor": lon_floor,
+                    "url": f"{COPERNICUS_DEM_30M_BASE_URL}/{tile_id}/{tile_id}.tif",
+                }
+            )
+    return tiles
+
+
+def _env_path(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+
+def _recent_interval(days: int = 730) -> str:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    return f"{start.date().isoformat()}/{end.date().isoformat()}"
+
+
+def _bbox_area_km2(bounds: ViewBounds | None) -> float:
+    if bounds is None:
+        return 0.0
+    mid_lat = ((bounds.south + bounds.north) / 2.0) * math.pi / 180.0
+    width_km = abs(bounds.east - bounds.west) * 111.32 * max(0.1, math.cos(mid_lat))
+    height_km = abs(bounds.north - bounds.south) * 111.32
+    return width_km * height_km
+
+
+def _lon_to_tile_x(lon: float, zoom: int) -> int:
+    return int((lon + 180.0) / 360.0 * (2**zoom))
+
+
+def _lat_to_tile_y(lat: float, zoom: int) -> int:
+    lat = max(min(lat, 85.05112878), -85.05112878)
+    lat_rad = math.radians(lat)
+    return int(
+        (1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi)
+        / 2.0
+        * (2**zoom)
+    )
+
+
+def _estimate_slippy_tile_count(bounds: ViewBounds | None, levels: Iterable[int]) -> int:
+    if bounds is None:
+        return 0
+    total = 0
+    for zoom in levels:
+        x_min = _lon_to_tile_x(bounds.west, zoom)
+        x_max = _lon_to_tile_x(bounds.east, zoom)
+        y_min = _lat_to_tile_y(bounds.north, zoom)
+        y_max = _lat_to_tile_y(bounds.south, zoom)
+        total += (abs(x_max - x_min) + 1) * (abs(y_max - y_min) + 1)
+    return total
+
+
+def _choose_imagery_levels(bounds: ViewBounds | None) -> list[int]:
+    area_km2 = _bbox_area_km2(bounds)
+    if area_km2 <= 0:
+        return [10, 11, 12, 13, 14]
+    if area_km2 <= 25:
+        return [12, 13, 14, 15, 16]
+    if area_km2 <= 150:
+        return [11, 12, 13, 14, 15]
+    if area_km2 <= 800:
+        return [10, 11, 12, 13, 14]
+    return [8, 9, 10, 11, 12]
+
+
+def _levels_to_range(levels: list[int]) -> str:
+    if not levels:
+        return ""
+    return f"{min(levels)}-{max(levels)}"
+
+
+def _parse_level_range(value: object) -> list[int]:
+    if isinstance(value, list):
+        levels = []
+        for item in value:
+            try:
+                levels.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return levels
+    text = str(value or "").strip()
+    if not text:
+        return []
+    if "-" in text:
+        left, _separator, right = text.partition("-")
+        try:
+            start = int(left)
+            end = int(right)
+        except ValueError:
+            return []
+        return list(range(min(start, end), max(start, end) + 1))
+    try:
+        return [int(text)]
+    except ValueError:
+        return []
+
+
+def _tile_ranges(bounds: ViewBounds, levels: Iterable[int]) -> list[tuple[int, range, range]]:
+    ranges: list[tuple[int, range, range]] = []
+    for zoom in levels:
+        x_min = min(_lon_to_tile_x(bounds.west, zoom), _lon_to_tile_x(bounds.east, zoom))
+        x_max = max(_lon_to_tile_x(bounds.west, zoom), _lon_to_tile_x(bounds.east, zoom))
+        y_min = min(_lat_to_tile_y(bounds.north, zoom), _lat_to_tile_y(bounds.south, zoom))
+        y_max = max(_lat_to_tile_y(bounds.north, zoom), _lat_to_tile_y(bounds.south, zoom))
+        ranges.append((zoom, range(x_min, x_max + 1), range(y_min, y_max + 1)))
+    return ranges
+
+
+def _choose_terrain_export_size(bounds: ViewBounds | None) -> str:
+    area_km2 = _bbox_area_km2(bounds)
+    if area_km2 <= 25:
+        return "1024,1024"
+    if area_km2 <= 150:
+        return "1536,1536"
+    if area_km2 <= 800:
+        return "2048,2048"
+    return "4096,4096"
+
+
+def _sample_points_placeholder(bounds: ViewBounds | None) -> dict[str, object] | str:
+    if bounds is None:
+        return "{sample_points_multipoint_json}"
+    center_lat = bounds.center_lat if bounds.center_lat is not None else (bounds.south + bounds.north) / 2
+    center_lon = bounds.center_lon if bounds.center_lon is not None else (bounds.west + bounds.east) / 2
+    return {
+        "points": [
+            [bounds.west, bounds.south],
+            [bounds.east, bounds.south],
+            [bounds.east, bounds.north],
+            [bounds.west, bounds.north],
+            [center_lon, center_lat],
+        ],
+        "spatialReference": {"wkid": 4326},
+    }
+
+
+def _substitute_download_params(
+    params: dict[str, object],
+    *,
+    bounds: ViewBounds | None,
+    imagery_levels: list[int],
+) -> dict[str, object]:
+    substituted: dict[str, object] = {}
+    for key, value in params.items():
+        if value == "{imagery_level_range}":
+            substituted[key] = _levels_to_range(imagery_levels)
+        elif value == "{aoi_wgs84_json}":
+            substituted[key] = _format_wgs84_extent_json(bounds)
+        elif value == "{aoi_bbox_wgs84}":
+            substituted[key] = _format_bbox_csv(bounds)
+        elif value == "{aoi_bbox_array}":
+            substituted[key] = _format_bbox_array(bounds)
+        elif value == "{aoi_bbox_radians}":
+            substituted[key] = _format_bbox_radians(bounds)
+        elif value == "{geofabrik_osm_pbf_url}":
+            substituted[key] = _geofabrik_osm_pbf_url(bounds)
+        elif value == "{geofabrik_region_slug}":
+            substituted[key] = _geofabrik_region_slug(bounds)
+        elif value == "{naip_aws_bucket}":
+            substituted[key] = _naip_bucket()
+        elif value == "{naip_s3_prefix}":
+            substituted[key] = _naip_s3_prefix(bounds)
+        elif value == "{naip_state}":
+            substituted[key] = _naip_state_code(bounds)
+        elif value == "{naip_year}":
+            substituted[key] = _naip_year()
+        elif value == "{naip_resolution}":
+            substituted[key] = _naip_resolution()
+        elif value == "{naip_bandset}":
+            substituted[key] = _naip_bandset()
+        elif value == "{naip_max_files}":
+            substituted[key] = int(os.getenv("NAIP_MAX_FILES", "50"))
+        elif value == "{copernicus_dem_tile_urls}":
+            substituted[key] = _copernicus_dem_tiles(bounds)
+        elif value == "{terrain_export_size}":
+            substituted[key] = _choose_terrain_export_size(bounds)
+        elif value == "{sample_points_multipoint_json}":
+            substituted[key] = _sample_points_placeholder(bounds)
+        elif value == "{recent_24_month_interval}":
+            substituted[key] = _recent_interval()
+        else:
+            substituted[key] = value
+    return substituted
+
+
+def _substitute_download_endpoint(endpoint: str, bounds: ViewBounds | None) -> str:
+    return (
+        endpoint.replace("{geofabrik_osm_pbf_url}", _geofabrik_osm_pbf_url(bounds))
+        .replace("{bucket}", _naip_bucket())
+        .replace("${NAIP_EARTHEXPLORER_DIR}", "${NAIP_EARTHEXPLORER_DIR}")
+        .replace("${DTED_SOURCE_DIR}", "${DTED_SOURCE_DIR}")
+    )
+
+
+def _build_source_download_operations(
+    *,
+    package_id: str,
+    sources: list[SourceOption],
+    bounds: ViewBounds | None,
+) -> list[dict[str, object]]:
+    imagery_levels = _choose_imagery_levels(bounds)
+    estimated_imagery_tiles = _estimate_slippy_tile_count(bounds, imagery_levels)
+    operations: list[dict[str, object]] = []
+
+    for source in sources:
+        for method in source.download_methods:
+            if source.id == "cesium_ion_archive":
+                archive_id_configured = bool(_get_cesium_archive_id())
+                asset_ids_configured = bool(
+                    (
+                        os.getenv("CESIUM_ION_ASSET_IDS")
+                        or os.getenv("CESIUM_ASSET_IDS")
+                        or os.getenv("CESIUM_ION_ASSET_ID")
+                        or ""
+                    ).strip()
+                )
+                if method.id == "cesium_ion_archive_download" and not archive_id_configured:
+                    continue
+                if method.id == "cesium_ion_clip_create_download" and (
+                    archive_id_configured or not asset_ids_configured
+                ):
+                    continue
+            if method.id == "naip_earthexplorer_geotiff_import" and not _env_path("NAIP_EARTHEXPLORER_DIR"):
+                continue
+            if method.id == "dted_earthexplorer_import_convert" and not _env_path("DTED_SOURCE_DIR"):
+                continue
+            local_artifact = method.local_artifact_template.replace("{package_id}", package_id)
+            operation: dict[str, object] = {
+                "id": method.id,
+                "source_id": source.id,
+                "source_name": source.name,
+                "label": method.label,
+                "method": method.method,
+                "endpoint": _substitute_download_endpoint(method.endpoint, bounds),
+                "params": _substitute_download_params(
+                    method.params,
+                    bounds=bounds,
+                    imagery_levels=imagery_levels,
+                ),
+                "output_format": method.output_format,
+                "local_artifact": local_artifact,
+                "requires_token_env": method.requires_token_env,
+                "requires_account": method.requires_account,
+                "terms_url": method.terms_url,
+                "notes": method.notes,
+            }
+            if source.id == "esri_world_imagery":
+                operation["estimated_tile_count"] = estimated_imagery_tiles
+                operation["tile_limit_warning"] = (
+                    "Estimated AO exceeds Esri's common 100,000 tile export limit; "
+                    "reduce AO or zoom levels."
+                    if estimated_imagery_tiles > 100000
+                    else ""
+                )
+            if source.id == "sentinel_2":
+                operation["free_imagery_source"] = True
+                operation["requires_account"] = False
+            if method.id in {"usgs_imagery_tile_cache", "nrl_naip_tile_cache"}:
+                levels = _parse_level_range(operation["params"].get("levels") if isinstance(operation.get("params"), dict) else "")
+                if isinstance(operation.get("params"), dict):
+                    max_zoom = int(operation["params"].get("max_zoom") or max(levels or [0]))
+                    levels = [level for level in levels if level <= max_zoom]
+                operation["estimated_tile_count"] = _estimate_slippy_tile_count(bounds, levels)
+                operation["free_imagery_source"] = True
+                operation["tile_limit_warning"] = (
+                    "Estimated tile cache is large; reduce AO or zoom levels before Jetson download."
+                    if int(operation["estimated_tile_count"]) > int(os.getenv("MAX_TILE_DOWNLOAD_COUNT", "5000"))
+                    else ""
+                )
+            operations.append(operation)
+
+    return operations
+
+
+def _build_jetson_query_contracts(
+    *,
+    package_id: str,
+    sources: list[SourceOption],
+) -> list[dict[str, object]]:
+    contracts: list[dict[str, object]] = []
+    for source in sources:
+        for query_format in source.jetson_query_formats:
+            contracts.append(
+                {
+                    "source_id": source.id,
+                    "source_name": source.name,
+                    "artifact_type": query_format.artifact_type,
+                    "local_path": query_format.local_path_template.replace(
+                        "{package_id}",
+                        package_id,
+                    ),
+                    "query_interfaces": query_format.query_interfaces,
+                    "feeds_algorithms": query_format.feeds_algorithms,
+                    "notes": query_format.notes,
+                }
+            )
+    return contracts
+
+
+def _offline_package_root() -> Path:
+    configured = os.getenv("OFFLINE_PACKAGE_ROOT", "").strip()
+    return Path(configured).expanduser().resolve() if configured else DEFAULT_OFFLINE_PACKAGE_ROOT.resolve()
+
+
+def _package_reserve_bytes() -> int:
+    gb = float(os.getenv("PACKAGE_MIN_FREE_GB", "10"))
+    return max(0, int(gb * 1024 * 1024 * 1024))
+
+
+def _safe_package_id(package_id: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_.-]+", "-", package_id).strip(".-")
+    if not safe:
+        raise HTTPException(status_code=400, detail="Invalid package id.")
+    return safe[:120]
+
+
+def _package_dir(package_id: str) -> Path:
+    root = _offline_package_root()
+    package_path = (root / _safe_package_id(package_id)).resolve()
+    if root not in (package_path, *package_path.parents):
+        raise HTTPException(status_code=400, detail="Package path escapes package root.")
+    return package_path
+
+
+def _existing_disk_path(path: Path) -> Path:
+    cursor = path
+    while not cursor.exists() and cursor.parent != cursor:
+        cursor = cursor.parent
+    return cursor
+
+
+def _directory_size_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _storage_info(package_id: str | None = None) -> StorageInfoResponse:
+    root = _offline_package_root()
+    usage = shutil.disk_usage(_existing_disk_path(root))
+    reserved = _package_reserve_bytes()
+    existing = _directory_size_bytes(_package_dir(package_id)) if package_id else (
+        _directory_size_bytes(root) if root.exists() else 0
+    )
+    usable = max(0, int(usage.free) - reserved)
+    return StorageInfoResponse(
+        package_root=str(root),
+        total_bytes=int(usage.total),
+        used_bytes=int(usage.used),
+        free_bytes=int(usage.free),
+        reserved_bytes=reserved,
+        usable_bytes=usable,
+        existing_package_bytes=existing,
+    )
+
+
+def _parse_size_param(value: object) -> tuple[int, int]:
+    if isinstance(value, str):
+        left, _separator, right = value.partition(",")
+        try:
+            return max(1, int(left)), max(1, int(right))
+        except ValueError:
+            return 1024, 1024
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return max(1, int(value[0])), max(1, int(value[1]))
+        except (TypeError, ValueError):
+            return 1024, 1024
+    return 1024, 1024
+
+
+def _estimate_operation_bytes(operation: dict[str, object]) -> int:
+    operation_id = str(operation.get("id", ""))
+    if operation_id in {"usgs_imagery_tile_cache", "nrl_naip_tile_cache"}:
+        tile_count = int(operation.get("estimated_tile_count") or 0)
+        avg_tile_bytes = int(os.getenv("OPEN_TILE_ESTIMATED_BYTES", "80000"))
+        return max(10 * 1024 * 1024, tile_count * avg_tile_bytes)
+    if operation_id == "sentinel_2_stac_cog":
+        params = operation.get("params")
+        assets = params.get("assets") if isinstance(params, dict) else []
+        asset_count = len(assets) if isinstance(assets, list) else 4
+        avg_asset_bytes = int(os.getenv("SENTINEL2_ESTIMATED_ASSET_BYTES", str(80 * 1024 * 1024)))
+        return max(100 * 1024 * 1024, asset_count * avg_asset_bytes)
+    if operation_id == "esri_world_imagery_export_tiles":
+        tile_count = int(operation.get("estimated_tile_count") or 0)
+        avg_tile_bytes = int(os.getenv("ESRI_ESTIMATED_TILE_BYTES", "50000"))
+        return max(20 * 1024 * 1024, tile_count * avg_tile_bytes)
+    if operation_id == "esri_world_elevation_export_image_tiff":
+        params = operation.get("params")
+        width, height = _parse_size_param(params.get("size") if isinstance(params, dict) else None)
+        return int(width * height * 4 * 1.5) + (8 * 1024 * 1024)
+    if operation_id == "esri_world_elevation_get_samples":
+        return 512 * 1024
+    if operation_id in {"cesium_ion_archive_download", "cesium_ion_clip_create_download"}:
+        return int(os.getenv("CESIUM_ARCHIVE_ESTIMATED_BYTES", str(2 * 1024 * 1024 * 1024)))
+    if operation_id == "naip_aws_public_prefix":
+        params = operation.get("params")
+        max_files_value = params.get("max_files") if isinstance(params, dict) else None
+        max_files = int(max_files_value or os.getenv("NAIP_MAX_FILES", "50"))
+        avg_bytes = int(os.getenv("NAIP_ESTIMATED_FILE_BYTES", str(25 * 1024 * 1024)))
+        return max(50 * 1024 * 1024, max_files * avg_bytes)
+    if operation_id == "naip_earthexplorer_geotiff_import":
+        max_files = int(os.getenv("NAIP_MAX_FILES", "50"))
+        avg_bytes = int(os.getenv("NAIP_ESTIMATED_FILE_BYTES", str(25 * 1024 * 1024)))
+        return max(50 * 1024 * 1024, max_files * avg_bytes)
+    if operation_id == "osm_geofabrik_pbf":
+        return int(os.getenv("GEOFABRIK_ESTIMATED_BYTES", str(750 * 1024 * 1024)))
+    if operation_id == "copernicus_dem_glo30_cog":
+        params = operation.get("params")
+        tiles = params.get("tile_urls") if isinstance(params, dict) else []
+        tile_count = len(tiles) if isinstance(tiles, list) else 1
+        avg_bytes = int(os.getenv("COPERNICUS_DEM_ESTIMATED_TILE_BYTES", str(25 * 1024 * 1024)))
+        return max(25 * 1024 * 1024, tile_count * avg_bytes)
+    if operation_id == "dted_earthexplorer_import_convert":
+        max_files = int(os.getenv("DTED_IMPORT_MAX_FILES", "100"))
+        avg_bytes = int(os.getenv("DTED_ESTIMATED_FILE_BYTES", str(25 * 1024 * 1024)))
+        return max(25 * 1024 * 1024, max_files * avg_bytes)
+    return 0
+
+
+def _estimate_manifest_bytes(manifest: dict[str, object]) -> int:
+    operations = manifest.get("download_operations")
+    if not isinstance(operations, list):
+        return 0
+    return sum(
+        _estimate_operation_bytes(operation)
+        for operation in operations
+        if isinstance(operation, dict)
+    )
+
+
+def _storage_warning(estimated_bytes: int, storage: StorageInfoResponse) -> str | None:
+    if estimated_bytes <= storage.usable_bytes:
+        return None
+    shortage = estimated_bytes - storage.usable_bytes
+    return (
+        "Estimated package size exceeds Jetson usable storage after reserve "
+        f"by {shortage} bytes."
+    )
+
+
+def _relative_artifact_path(local_artifact: object, package_id: str) -> Path:
+    raw = str(local_artifact or "").replace("\\", "/").strip("/")
+    parts = [part for part in raw.split("/") if part and part not in {".", ".."}]
+    if package_id in parts:
+        parts = parts[parts.index(package_id) + 1 :]
+    elif parts[:2] == ["offline_packages", package_id]:
+        parts = parts[2:]
+    if not parts:
+        parts = ["artifacts", "artifact.bin"]
+    return Path(*parts)
+
+
+def _artifact_path(package_id: str, local_artifact: object) -> Path:
+    package_path = _package_dir(package_id)
+    artifact_path = (package_path / _relative_artifact_path(local_artifact, package_id)).resolve()
+    if package_path not in (artifact_path, *artifact_path.parents):
+        raise HTTPException(status_code=400, detail="Artifact path escapes package root.")
+    return artifact_path
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _manifest_path(package_id: str) -> Path:
+    return _package_dir(package_id) / "manifest.json"
+
+
+def _status_path(package_id: str) -> Path:
+    return _package_dir(package_id) / "status.json"
+
+
+def _artifacts_path(package_id: str) -> Path:
+    return _package_dir(package_id) / "artifacts.json"
+
+
+def _routes_dir(package_id: str) -> Path:
+    return _package_dir(package_id) / "routes"
+
+
+def _cot_dir(package_id: str) -> Path:
+    return _package_dir(package_id) / "cot"
+
+
+def _load_package_manifest(package_id: str) -> dict[str, Any] | None:
+    manifest = PACKAGE_MANIFESTS.get(package_id)
+    if isinstance(manifest, dict):
+        return manifest
+    disk_manifest = _read_json(_manifest_path(package_id))
+    if disk_manifest is not None:
+        PACKAGE_MANIFESTS[package_id] = disk_manifest
+    return disk_manifest
+
+
+def _persist_package_manifest(package_id: str, manifest: dict[str, object]) -> None:
+    package_path = _package_dir(package_id)
+    package_path.mkdir(parents=True, exist_ok=True)
+    _write_json(_manifest_path(package_id), manifest)
+
+
+def _empty_artifact_registry(package_id: str) -> dict[str, Any]:
+    manifest = _load_package_manifest(package_id) or {}
+    return {
+        "package_id": package_id,
+        "package_name": manifest.get("package_name", package_id),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "artifacts": [],
+    }
+
+
+def _load_artifact_registry(package_id: str) -> dict[str, Any]:
+    registry = _read_json(_artifacts_path(package_id))
+    if registry is None:
+        return _empty_artifact_registry(package_id)
+    registry.setdefault("artifacts", [])
+    return registry
+
+
+def _save_artifact_registry(package_id: str, registry: dict[str, Any]) -> None:
+    registry["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_json(_artifacts_path(package_id), registry)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _operation_status(
+    operation: dict[str, object],
+    *,
+    state: str = "planned",
+    message: str = "",
+) -> dict[str, object]:
+    return {
+        "id": operation.get("id"),
+        "source_id": operation.get("source_id"),
+        "source_name": operation.get("source_name"),
+        "state": state,
+        "message": message,
+        "estimated_bytes": _estimate_operation_bytes(operation),
+        "bytes_written": 0,
+        "artifact_path": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _initial_package_status(package_id: str, manifest: dict[str, object]) -> dict[str, Any]:
+    operations = [
+        _operation_status(operation)
+        for operation in manifest.get("download_operations", [])
+        if isinstance(operation, dict)
+    ]
+    return {
+        "package_id": package_id,
+        "package_name": manifest.get("package_name", package_id),
+        "state": "planned",
+        "message": "Package manifest is ready. Downloads have not started.",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "estimated_bytes": _estimate_manifest_bytes(manifest),
+        "bytes_written": 0,
+        "operations": operations,
+    }
+
+
+def _load_package_status(package_id: str) -> dict[str, Any]:
+    status = _read_json(_status_path(package_id))
+    if status is not None:
+        return status
+    manifest = _load_package_manifest(package_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    return _initial_package_status(package_id, manifest)
+
+
+def _save_package_status(package_id: str, status: dict[str, Any]) -> None:
+    status["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_json(_status_path(package_id), status)
+
+
+def _update_operation_status(
+    status: dict[str, Any],
+    operation_id: str,
+    *,
+    state: str,
+    message: str = "",
+    bytes_written: int | None = None,
+    artifact_path: str | None = None,
+) -> None:
+    for operation in status.get("operations", []):
+        if operation.get("id") == operation_id:
+            operation["state"] = state
+            operation["message"] = message
+            operation["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if bytes_written is not None:
+                operation["bytes_written"] = bytes_written
+            if artifact_path is not None:
+                operation["artifact_path"] = artifact_path
+            break
+    status["bytes_written"] = sum(
+        int(operation.get("bytes_written") or 0)
+        for operation in status.get("operations", [])
+        if isinstance(operation, dict)
+    )
+
+
+def _get_esri_token() -> str:
+    return (
+        os.getenv("ESRI_ARCGIS_TOKEN")
+        or os.getenv("ARCGIS_TOKEN")
+        or os.getenv("ESRI_ACCESS_TOKEN")
+        or ""
+    ).strip()
+
+
+def _get_cesium_token() -> str:
+    return (
+        os.getenv("CESIUM_ION_TOKEN")
+        or os.getenv("CESIUM_TOKEN")
+        or os.getenv("CESIUM_ACCESS_TOKEN")
+        or os.getenv("CESIUM_ION_ACCESS_TOKEN")
+        or ""
+    ).strip()
+
+
+def _get_cesium_archive_id() -> str:
+    return (os.getenv("CESIUM_ION_ARCHIVE_ID") or os.getenv("CESIUM_ARCHIVE_ID") or "").strip()
+
+
+def _get_cesium_asset_ids() -> list[int]:
+    raw = (
+        os.getenv("CESIUM_ION_ASSET_IDS")
+        or os.getenv("CESIUM_ASSET_IDS")
+        or os.getenv("CESIUM_ION_ASSET_ID")
+        or ""
+    )
+    asset_ids: list[int] = []
+    for item in re.split(r"[,;\s]+", raw.strip()):
+        if not item:
+            continue
+        try:
+            asset_ids.append(int(item))
+        except ValueError as error:
+            raise RuntimeError(f"Invalid Cesium asset id: {item}") from error
+    return asset_ids
+
+
+def _params_with_runtime_token(params: dict[str, object]) -> dict[str, object]:
+    materialized: dict[str, object] = {}
+    for key, value in params.items():
+        if value == "${ESRI_ARCGIS_TOKEN}":
+            token = _get_esri_token()
+            if not token:
+                raise RuntimeError("ESRI_ARCGIS_TOKEN is required on the Jetson for Esri downloads.")
+            materialized[key] = token
+        elif value == "${CESIUM_ION_TOKEN}":
+            token = _get_cesium_token()
+            if not token:
+                raise RuntimeError("CESIUM_ION_TOKEN is required on the Jetson for Cesium archive downloads.")
+            materialized[key] = token
+        elif value == "${CESIUM_ION_ARCHIVE_ID}":
+            archive_id = _get_cesium_archive_id()
+            if not archive_id:
+                raise RuntimeError(
+                    "CESIUM_ION_ARCHIVE_ID is required to download a prebuilt Cesium archive."
+                )
+            materialized[key] = archive_id
+        elif value == "${CESIUM_ION_ASSET_IDS}":
+            asset_ids = _get_cesium_asset_ids()
+            if not asset_ids:
+                raise RuntimeError(
+                    "CESIUM_ION_ASSET_IDS is required to create and download a Cesium AO clip."
+                )
+            materialized[key] = asset_ids
+        elif value == "${NAIP_EARTHEXPLORER_DIR}":
+            source_dir = _env_path("NAIP_EARTHEXPLORER_DIR")
+            if not source_dir:
+                raise RuntimeError("NAIP_EARTHEXPLORER_DIR is required to import staged NAIP GeoTIFFs.")
+            materialized[key] = source_dir
+        elif value == "${DTED_SOURCE_DIR}":
+            source_dir = _env_path("DTED_SOURCE_DIR")
+            if not source_dir:
+                raise RuntimeError("DTED_SOURCE_DIR is required to import staged EarthExplorer DTED files.")
+            materialized[key] = source_dir
+        else:
+            materialized[key] = json.dumps(value) if isinstance(value, dict) else value
+    return materialized
+
+
+def _raise_for_esri_error(payload: dict[str, Any]) -> None:
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("details") or "Esri service error."
+        raise RuntimeError(str(message))
+
+
+def _extract_url_recursive(value: Any, base_url: str) -> str | None:
+    if isinstance(value, str):
+        lower = value.lower()
+        if lower.startswith("http://") or lower.startswith("https://"):
+            return value
+        if any(suffix in lower for suffix in (".tpkx", ".tpk", ".zip", ".tif", ".tiff")):
+            return urljoin(base_url, value)
+    if isinstance(value, dict):
+        for key in ("url", "href", "value", "itemUrl", "resultUrl", "paramUrl"):
+            found = _extract_url_recursive(value.get(key), base_url)
+            if found:
+                return found
+        for child in value.values():
+            found = _extract_url_recursive(child, base_url)
+            if found:
+                return found
+    if isinstance(value, list):
+        for child in value:
+            found = _extract_url_recursive(child, base_url)
+            if found:
+                return found
+    return None
+
+
+async def _request_esri_json(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    params: dict[str, object],
+) -> dict[str, Any]:
+    if method.upper() == "POST":
+        response = await client.post(url, data=params)
+    else:
+        response = await client.get(url, params=params)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("Esri response was not a JSON object.")
+    _raise_for_esri_error(payload)
+    return payload
+
+
+async def _download_binary(
+    client: httpx.AsyncClient,
+    url: str,
+    path: Path,
+    *,
+    params: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bytes_written = 0
+    async with client.stream("GET", url, params=params, headers=headers) as response:
+        response.raise_for_status()
+        with path.open("wb") as handle:
+            async for chunk in response.aiter_bytes():
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                bytes_written += len(chunk)
+    return bytes_written
+
+
+async def _poll_esri_export_job(
+    client: httpx.AsyncClient,
+    *,
+    operation_endpoint: str,
+    job_id: str,
+    token: str,
+) -> dict[str, Any]:
+    service_url = operation_endpoint.rsplit("/exportTiles", 1)[0]
+    job_url = f"{service_url}/jobs/{job_id}"
+    for _attempt in range(ESRI_TILE_EXPORT_MAX_POLLS):
+        payload = await _request_esri_json(
+            client,
+            "GET",
+            job_url,
+            {"f": "json", "token": token},
+        )
+        job_status = str(payload.get("jobStatus") or payload.get("status") or "").lower()
+        if "failed" in job_status or "cancelled" in job_status:
+            raise RuntimeError(f"Esri export job {job_id} ended with {job_status}.")
+        if "succeeded" in job_status or "completed" in job_status:
+            return payload
+        await asyncio.sleep(ESRI_TILE_EXPORT_POLL_INTERVAL_S)
+    raise RuntimeError(f"Timed out waiting for Esri export job {job_id}.")
+
+
+def _copy_or_create_cog(src_path: Path, cog_path: Path) -> bool:
+    cog_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import rasterio
+
+        with rasterio.open(src_path) as src:
+            profile = src.profile.copy()
+            profile.update(
+                driver="GTiff",
+                tiled=True,
+                blockxsize=256,
+                blockysize=256,
+                compress="deflate",
+                BIGTIFF="IF_SAFER",
+            )
+            with rasterio.open(cog_path, "w", **profile) as dst:
+                for index in range(1, src.count + 1):
+                    dst.write(src.read(index), index)
+        return True
+    except Exception as error:
+        log.warning("cog_conversion_fallback", error=str(error))
+        shutil.copyfile(src_path, cog_path)
+        return False
+
+
+def _artifact_record(
+    *,
+    package_id: str,
+    operation: dict[str, object],
+    path: Path,
+    artifact_type: str,
+    output_format: str,
+    query_interfaces: list[str] | None = None,
+    feeds_algorithms: list[str] | None = None,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    package_path = _package_dir(package_id)
+    relative_path = path.resolve().relative_to(package_path).as_posix()
+    return {
+        "artifact_id": f"{operation.get('id')}-{hashlib.sha256(relative_path.encode()).hexdigest()[:8]}",
+        "source_id": operation.get("source_id"),
+        "source_name": operation.get("source_name"),
+        "operation_id": operation.get("id"),
+        "artifact_type": artifact_type,
+        "format": output_format,
+        "path": str(path),
+        "relative_path": relative_path,
+        "bytes": path.stat().st_size if path.exists() else 0,
+        "sha256": _sha256_file(path) if path.exists() and path.is_file() else "",
+        "query_interfaces": query_interfaces or [],
+        "feeds_algorithms": feeds_algorithms or [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "metadata": metadata or {},
+    }
+
+
+def _query_contract_for_operation(
+    manifest: dict[str, object],
+    operation: dict[str, object],
+) -> dict[str, object] | None:
+    source_id = operation.get("source_id")
+    contracts = manifest.get("jetson_query_contracts")
+    if not isinstance(contracts, list):
+        return None
+    for contract in contracts:
+        if isinstance(contract, dict) and contract.get("source_id") == source_id:
+            return contract
+    return None
+
+
+async def _execute_esri_imagery_export(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    manifest: dict[str, object],
+    operation: dict[str, object],
+) -> dict[str, object]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    endpoint = str(operation["endpoint"])
+    submit_payload = await _request_esri_json(client, str(operation.get("method", "POST")), endpoint, params)
+    package_url = _extract_url_recursive(submit_payload, endpoint)
+    job_id = str(submit_payload.get("jobId") or submit_payload.get("job_id") or "").strip()
+    if not package_url and job_id:
+        poll_payload = await _poll_esri_export_job(
+            client,
+            operation_endpoint=endpoint,
+            job_id=job_id,
+            token=str(params["token"]),
+        )
+        package_url = _extract_url_recursive(poll_payload, endpoint)
+    if not package_url:
+        raise RuntimeError("Esri imagery export did not return a downloadable tile package URL.")
+
+    path = _artifact_path(package_id, operation.get("local_artifact"))
+    await _download_binary(client, package_url, path, params={"token": params["token"]})
+    contract = _query_contract_for_operation(manifest, operation) or {}
+    return _artifact_record(
+        package_id=package_id,
+        operation=operation,
+        path=path,
+        artifact_type=str(contract.get("artifact_type") or "esri_tpkx_imagery_package"),
+        output_format=str(operation.get("output_format") or "TPKX tile package"),
+        query_interfaces=list(contract.get("query_interfaces") or ["package_metadata()"]),
+        feeds_algorithms=list(contract.get("feeds_algorithms") or ["operator_route_review"]),
+        metadata={
+            "download_url_redacted": True,
+            "job_id": job_id or None,
+            "estimated_tile_count": operation.get("estimated_tile_count"),
+            "tile_limit_warning": operation.get("tile_limit_warning"),
+        },
+    )
+
+
+async def _execute_esri_terrain_export(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    manifest: dict[str, object],
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    endpoint = str(operation["endpoint"])
+    raw_path = _artifact_path(package_id, operation.get("local_artifact"))
+    if str(operation.get("method", "POST")).upper() == "POST":
+        response = await client.post(endpoint, data=params)
+    else:
+        response = await client.get(endpoint, params=params)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    if "json" in content_type:
+        payload = response.json()
+        _raise_for_esri_error(payload)
+        href = _extract_url_recursive(payload, endpoint)
+        if not href:
+            raise RuntimeError("Esri terrain export returned JSON without a raster URL.")
+        await _download_binary(client, href, raw_path, params={"token": params["token"]})
+    else:
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_bytes(response.content)
+
+    cog_path = raw_path.with_name("dem_cog.tif")
+    cog_native = _copy_or_create_cog(raw_path, cog_path)
+    contract = _query_contract_for_operation(manifest, operation) or {}
+    common_metadata = {
+        "bbox": params.get("bbox"),
+        "bboxSR": params.get("bboxSR"),
+        "imageSR": params.get("imageSR"),
+        "size": params.get("size"),
+        "pixelType": params.get("pixelType"),
+    }
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=raw_path,
+            artifact_type="geotiff_dem",
+            output_format="GeoTIFF DEM",
+            query_interfaces=["rasterio.open()", "read_window()"],
+            feeds_algorithms=["terrain_derivatives"],
+            metadata=common_metadata,
+        ),
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=cog_path,
+            artifact_type=str(contract.get("artifact_type") or "cloud_optimized_geotiff_dem"),
+            output_format="COG GeoTIFF DEM" if cog_native else "GeoTIFF DEM copied to COG path",
+            query_interfaces=list(contract.get("query_interfaces") or ["sample_dem(lat, lon)", "read_window(west, south, east, north)"]),
+            feeds_algorithms=list(contract.get("feeds_algorithms") or ["terrain_derivatives", "raster_cost_distance", "viewshed"]),
+            metadata={**common_metadata, "cog_native": cog_native},
+        ),
+    ]
+
+
+async def _execute_esri_samples(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> dict[str, object]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    endpoint = str(operation["endpoint"])
+    payload = await _request_esri_json(client, str(operation.get("method", "POST")), endpoint, params)
+    path = _artifact_path(package_id, operation.get("local_artifact"))
+    _write_json(path, payload)
+    return _artifact_record(
+        package_id=package_id,
+        operation=operation,
+        path=path,
+        artifact_type="elevation_samples_json",
+        output_format="JSON elevation samples",
+        query_interfaces=["sample_points()"],
+        feeds_algorithms=["terrain_preflight"],
+        metadata={"sample_count": len(payload.get("samples", [])) if isinstance(payload.get("samples"), list) else None},
+    )
+
+
+async def _execute_sentinel2_stac_cogs(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    search_payload = {key: value for key, value in params.items() if key != "assets"}
+    requested_assets = params.get("assets")
+    asset_names = requested_assets if isinstance(requested_assets, list) else ["visual", "red", "green", "blue", "nir"]
+    response = await client.post(str(operation["endpoint"]), json=search_payload)
+    response.raise_for_status()
+    payload = response.json()
+    features = payload.get("features", []) if isinstance(payload, dict) else []
+    if not features:
+        raise RuntimeError("Earth Search returned no Sentinel-2 scenes for the AO/date/cloud filters.")
+    item = features[0]
+    if not isinstance(item, dict):
+        raise RuntimeError("Earth Search returned an invalid Sentinel-2 item.")
+    item_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(item.get("id") or "sentinel2")).strip("-")
+    assets = item.get("assets", {})
+    if not isinstance(assets, dict):
+        raise RuntimeError("Sentinel-2 STAC item does not contain assets.")
+
+    base_dir = _package_dir(package_id) / "imagery" / "sentinel_2"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = base_dir / f"{item_id}_stac_item.json"
+    _write_json(metadata_path, item)
+    records = [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=metadata_path,
+            artifact_type="sentinel2_stac_item",
+            output_format="STAC Item JSON",
+            query_interfaces=["stac_metadata()"],
+            feeds_algorithms=["imagery_provenance"],
+            metadata={
+                "collection": item.get("collection"),
+                "datetime": (item.get("properties") or {}).get("datetime")
+                if isinstance(item.get("properties"), dict)
+                else None,
+            },
+        )
+    ]
+
+    for asset_name in asset_names:
+        asset = assets.get(str(asset_name))
+        if not isinstance(asset, dict):
+            continue
+        href = str(asset.get("href") or "")
+        if not href.lower().startswith(("http://", "https://")):
+            continue
+        suffix = ".tif"
+        if href.lower().split("?", 1)[0].endswith(".jp2"):
+            suffix = ".jp2"
+        asset_path = base_dir / f"{item_id}_{asset_name}{suffix}"
+        await _download_binary(client, href, asset_path)
+        records.append(
+            _artifact_record(
+                package_id=package_id,
+                operation=operation,
+                path=asset_path,
+                artifact_type="sentinel2_cog_band",
+                output_format=str(asset.get("type") or "Cloud Optimized GeoTIFF"),
+                query_interfaces=["rasterio.open()", "read_window(west, south, east, north)"],
+                feeds_algorithms=["visual_aoi_reference", "ndvi", "ndwi", "water_detection"],
+                metadata={
+                    "stac_item_id": item_id,
+                    "asset": asset_name,
+                    "title": asset.get("title"),
+                    "datetime": (item.get("properties") or {}).get("datetime")
+                    if isinstance(item.get("properties"), dict)
+                    else None,
+                    "cloud_cover": (item.get("properties") or {}).get("eo:cloud_cover")
+                    if isinstance(item.get("properties"), dict)
+                    else None,
+                },
+            )
+        )
+
+    if len(records) == 1:
+        raise RuntimeError("No downloadable Sentinel-2 COG assets were found in the STAC item.")
+    return records
+
+
+def _s3_request_headers(request_payer: object = None) -> dict[str, str]:
+    if str(request_payer or "").lower() == "requester":
+        return {"x-amz-request-payer": "requester"}
+    return {}
+
+
+def _parse_s3_list_response(xml_text: str) -> tuple[list[dict[str, object]], str | None]:
+    root = ET.fromstring(xml_text)
+    namespace = ""
+    if root.tag.startswith("{"):
+        namespace = root.tag.split("}", 1)[0] + "}"
+    objects: list[dict[str, object]] = []
+    for contents in root.findall(f".//{namespace}Contents"):
+        key = contents.findtext(f"{namespace}Key")
+        size_text = contents.findtext(f"{namespace}Size") or "0"
+        if not key:
+            continue
+        try:
+            size = int(size_text)
+        except ValueError:
+            size = 0
+        objects.append({"key": key, "size": size})
+    token = root.findtext(f"{namespace}NextContinuationToken")
+    return objects, token
+
+
+def _downloadable_naip_key(key: str) -> bool:
+    suffixes = (
+        ".tif",
+        ".tiff",
+        ".mrf",
+        ".idx",
+        ".lrc",
+        ".xml",
+        ".aux",
+        ".json",
+        ".txt",
+    )
+    return key.lower().endswith(suffixes)
+
+
+async def _execute_naip_aws_prefix(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    bucket = str(params.get("bucket") or _naip_bucket()).strip()
+    prefix = str(params.get("prefix") or "").strip().lstrip("/")
+    max_files = int(params.get("max_files") or os.getenv("NAIP_MAX_FILES", "50"))
+    endpoint = str(operation.get("endpoint") or NAIP_AWS_BUCKET_URL_TEMPLATE).replace("{bucket}", bucket)
+    headers = _s3_request_headers(params.get("request_payer"))
+
+    listed: list[dict[str, object]] = []
+    continuation: str | None = None
+    while len(listed) < max_files:
+        list_params: dict[str, object] = {
+            "list-type": "2",
+            "prefix": prefix,
+            "max-keys": min(1000, max_files - len(listed)),
+        }
+        if continuation:
+            list_params["continuation-token"] = continuation
+        response = await client.get(endpoint, params=list_params, headers=headers)
+        response.raise_for_status()
+        objects, continuation = _parse_s3_list_response(response.text)
+        listed.extend(
+            item
+            for item in objects
+            if isinstance(item.get("key"), str) and _downloadable_naip_key(str(item["key"]))
+        )
+        if not continuation or not objects:
+            break
+
+    if not listed:
+        raise RuntimeError(
+            f"NAIP S3 prefix {bucket}/{prefix} returned no downloadable files. "
+            "Check NAIP_AWS_STATE, NAIP_AWS_YEAR, NAIP_AWS_RESOLUTION, and bucket."
+        )
+
+    package_path = _package_dir(package_id)
+    base_dir = package_path / "imagery" / "naip" / "aws"
+    downloaded: list[dict[str, object]] = []
+    errors: list[str] = []
+    for item in listed[:max_files]:
+        key = str(item["key"])
+        relative_key = key[len(prefix) :].lstrip("/") if key.startswith(prefix) else key
+        relative_key = relative_key or Path(key).name
+        target = (base_dir / relative_key).resolve()
+        if base_dir.resolve() not in (target, *target.parents):
+            raise RuntimeError("NAIP S3 key escapes NAIP package directory.")
+        url = f"https://{bucket}.s3.amazonaws.com/{quote(key)}"
+        try:
+            bytes_written = await _download_binary(client, url, target, headers=headers)
+            downloaded.append(
+                {
+                    "key": key,
+                    "relative_path": target.relative_to(package_path).as_posix(),
+                    "bytes": bytes_written,
+                    "query_url": (
+                        f"/api/source-package/{package_id}/query/imagery/files/"
+                        f"{target.relative_to(package_path).as_posix()}"
+                    ),
+                }
+            )
+        except Exception as error:
+            if len(errors) < 10:
+                errors.append(f"{key}: {error}")
+
+    if not downloaded:
+        raise RuntimeError(f"NAIP S3 prefix listed files but downloads failed: {'; '.join(errors)}")
+
+    index_path = _artifact_path(package_id, operation.get("local_artifact"))
+    _write_json(
+        index_path,
+        {
+            "source_id": operation.get("source_id"),
+            "source_name": operation.get("source_name"),
+            "bucket": bucket,
+            "prefix": prefix,
+            "request_payer": params.get("request_payer"),
+            "state": params.get("state"),
+            "year": params.get("year"),
+            "resolution": params.get("resolution"),
+            "bandset": params.get("bandset"),
+            "max_files": max_files,
+            "listed_file_count": len(listed),
+            "downloaded_file_count": len(downloaded),
+            "files": downloaded,
+            "errors": errors,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="naip_imagery_index",
+            output_format="JSON NAIP imagery index",
+            query_interfaces=["imagery_file(relative_path)", "rasterio.open()", "read_window(west, south, east, north)"],
+            feeds_algorithms=["operator_route_review", "feature_extraction_review"],
+            metadata={
+                "bucket": bucket,
+                "prefix": prefix,
+                "downloaded_file_count": len(downloaded),
+                "errors": errors,
+            },
+        )
+    ]
+
+
+async def _execute_naip_earthexplorer_import(
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    source_dir = Path(str(params["source_dir"])).expanduser().resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise RuntimeError(f"NAIP_EARTHEXPLORER_DIR does not exist or is not a directory: {source_dir}")
+    max_files = int(params.get("max_files") or os.getenv("NAIP_MAX_FILES", "50"))
+    files = [
+        path
+        for path in sorted(source_dir.rglob("*"))
+        if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
+    ][:max_files]
+    if not files:
+        raise RuntimeError("No NAIP GeoTIFF files found in NAIP_EARTHEXPLORER_DIR.")
+
+    package_path = _package_dir(package_id)
+    dest_dir = package_path / "imagery" / "naip" / "earthexplorer"
+    copied: list[dict[str, object]] = []
+    for src in files:
+        target = dest_dir / src.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+        copied.append(
+            {
+                "source_name": src.name,
+                "relative_path": target.relative_to(package_path).as_posix(),
+                "bytes": target.stat().st_size,
+                "query_url": (
+                    f"/api/source-package/{package_id}/query/imagery/files/"
+                    f"{target.relative_to(package_path).as_posix()}"
+                ),
+            }
+        )
+
+    index_path = _artifact_path(package_id, operation.get("local_artifact"))
+    _write_json(
+        index_path,
+        {
+            "source_dir": str(source_dir),
+            "file_count": len(copied),
+            "files": copied,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="naip_imagery_index",
+            output_format="JSON NAIP EarthExplorer import index",
+            query_interfaces=["imagery_file(relative_path)", "rasterio.open()"],
+            feeds_algorithms=["operator_route_review", "feature_extraction_review"],
+            metadata={"file_count": len(copied), "source_dir": str(source_dir)},
+        )
+    ]
+
+
+async def _execute_xyz_tile_cache(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    template = str(params.get("tile_url_template") or operation.get("endpoint") or "")
+    levels = _parse_level_range(params.get("levels"))
+    min_zoom = int(params.get("min_zoom") or 0)
+    max_zoom = int(params.get("max_zoom") or max(levels or [0]))
+    levels = [level for level in levels if min_zoom <= level <= max_zoom]
+    manifest = _load_package_manifest(package_id) or {}
+    aoi = manifest.get("aoi") if isinstance(manifest.get("aoi"), dict) else {}
+    bounds_data = aoi.get("selected_area") or aoi.get("view_bounds") if isinstance(aoi, dict) else None
+    if not isinstance(bounds_data, dict):
+        raise RuntimeError("Tile cache download requires AO bounds in the package manifest.")
+    bounds = ViewBounds(**bounds_data)
+    tile_limit = int(os.getenv("MAX_TILE_DOWNLOAD_COUNT", "5000"))
+    tile_count = _estimate_slippy_tile_count(bounds, levels)
+    if tile_count > tile_limit:
+        raise RuntimeError(
+            f"Tile cache would download {tile_count} tiles, above MAX_TILE_DOWNLOAD_COUNT={tile_limit}."
+        )
+
+    package_path = _package_dir(package_id)
+    relative_template = _relative_artifact_path(operation.get("local_artifact"), package_id).as_posix()
+    downloaded = 0
+    bytes_written = 0
+    errors: list[str] = []
+    for zoom, xs, ys in _tile_ranges(bounds, levels):
+        for x in xs:
+            for y in ys:
+                url = template.replace("{z}", str(zoom)).replace("{x}", str(x)).replace("{y}", str(y))
+                url = url.replace("{$z}", str(zoom)).replace("{$x}", str(x)).replace("{$y}", str(y))
+                relative = (
+                    relative_template.replace("{z}", str(zoom))
+                    .replace("{x}", str(x))
+                    .replace("{y}", str(y))
+                )
+                path = (package_path / relative).resolve()
+                if package_path not in (path, *path.parents):
+                    raise RuntimeError("Tile cache path escapes package root.")
+                try:
+                    bytes_written += await _download_binary(client, url, path)
+                    downloaded += 1
+                except Exception as error:
+                    if len(errors) < 5:
+                        errors.append(f"{zoom}/{x}/{y}: {error}")
+
+    index_path = package_path / "tiles" / str(operation.get("source_id")) / "tile_index.json"
+    _write_json(
+        index_path,
+        {
+            "source_id": operation.get("source_id"),
+            "source_name": operation.get("source_name"),
+            "url_template_redacted": False,
+            "url_template": template,
+            "levels": levels,
+            "aoi": bounds.model_dump(),
+            "estimated_tile_count": tile_count,
+            "downloaded_tile_count": downloaded,
+            "errors": errors,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="xyz_imagery_tile_cache",
+            output_format=str(operation.get("output_format") or "XYZ tile cache"),
+            query_interfaces=["tile(z, x, y)", "tiles_intersecting_bbox(west, south, east, north, zoom)"],
+            feeds_algorithms=["visual_aoi_reference", "operator_route_review"],
+            metadata={
+                "levels": levels,
+                "estimated_tile_count": tile_count,
+                "downloaded_tile_count": downloaded,
+                "bytes_written": bytes_written,
+                "errors": errors,
+            },
+        )
+    ]
+
+
+def _cesium_headers(token: object) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _request_cesium_json(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    token: object,
+    payload: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    headers = _cesium_headers(token)
+    if method.upper() == "POST":
+        response = await client.post(url, json=payload or {}, headers=headers)
+    else:
+        response = await client.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("Cesium ion response was not a JSON object.")
+    return data
+
+
+async def _poll_cesium_archive(
+    client: httpx.AsyncClient,
+    *,
+    archive_id: object,
+    token: object,
+) -> dict[str, Any]:
+    info_url = CESIUM_ION_ARCHIVE_INFO_URL.replace("{archive_id}", str(archive_id))
+    last_payload: dict[str, Any] = {}
+    for _attempt in range(CESIUM_ARCHIVE_MAX_POLLS):
+        payload = await _request_cesium_json(client, "GET", info_url, token=token)
+        last_payload = payload
+        status = str(payload.get("status") or "").upper()
+        if status in {"COMPLETE", "COMPLETED"}:
+            return payload
+        if status in {"FAILED", "CANCELLED", "CANCELED"}:
+            raise RuntimeError(f"Cesium archive {archive_id} ended with status {status}.")
+        await asyncio.sleep(CESIUM_ARCHIVE_POLL_INTERVAL_S)
+    raise RuntimeError(
+        f"Timed out waiting for Cesium archive {archive_id}; last status={last_payload.get('status')!r}."
+    )
+
+
+def _safe_extract_zip(zip_path: Path, extract_dir: Path) -> list[Path]:
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    extracted: list[Path] = []
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for member in archive.infolist():
+                target = (extract_dir / member.filename).resolve()
+                if extract_dir not in (target, *target.parents):
+                    raise RuntimeError("Cesium archive contains a path outside the extract directory.")
+            archive.extractall(extract_dir)
+    except zipfile.BadZipFile as error:
+        raise RuntimeError("Cesium archive download was not a valid ZIP file.") from error
+
+    for path in extract_dir.rglob("*"):
+        if path.is_file():
+            extracted.append(path)
+    return extracted
+
+
+def _read_descriptor_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _index_cesium_archive(
+    *,
+    package_id: str,
+    operation: dict[str, object],
+    archive_path: Path,
+    archive_info: dict[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    package_path = _package_dir(package_id)
+    extract_dir = package_path / "cesium" / "archive" / "extracted"
+    extracted_files = _safe_extract_zip(archive_path, extract_dir)
+
+    files: list[dict[str, object]] = []
+    tilesets: list[dict[str, object]] = []
+    terrain_layers: list[dict[str, object]] = []
+    imagery_layers: list[dict[str, object]] = []
+    for path in sorted(extracted_files):
+        relative_path = path.resolve().relative_to(package_path).as_posix()
+        name = path.name.lower()
+        item: dict[str, object] = {
+            "relative_path": relative_path,
+            "bytes": path.stat().st_size,
+            "query_url": f"/api/source-package/{package_id}/query/cesium/files/{relative_path}",
+        }
+        files.append(item)
+        if name == "tileset.json":
+            descriptor = _read_descriptor_json(path) or {}
+            tilesets.append(
+                {
+                    **item,
+                    "root_refine": (descriptor.get("root") or {}).get("refine")
+                    if isinstance(descriptor.get("root"), dict)
+                    else None,
+                    "asset_version": (descriptor.get("asset") or {}).get("version")
+                    if isinstance(descriptor.get("asset"), dict)
+                    else None,
+                }
+            )
+        elif name == "layer.json":
+            descriptor = _read_descriptor_json(path) or {}
+            layer_record = {
+                **item,
+                "format": descriptor.get("format"),
+                "version": descriptor.get("version"),
+                "attribution": descriptor.get("attribution"),
+            }
+            if str(descriptor.get("format") or "").lower() in {"quantized-mesh-1.0", "heightmap-1.0"}:
+                terrain_layers.append(layer_record)
+            else:
+                imagery_layers.append(layer_record)
+
+    index = {
+        "package_id": package_id,
+        "source_id": operation.get("source_id"),
+        "source_name": operation.get("source_name"),
+        "operation_id": operation.get("id"),
+        "archive_id": archive_info.get("id"),
+        "archive_name": archive_info.get("name"),
+        "archive_type": archive_info.get("type"),
+        "archive_format": archive_info.get("format"),
+        "archive_status": archive_info.get("status"),
+        "bytes_archived": archive_info.get("bytesArchived"),
+        "archive_zip": archive_path.resolve().relative_to(package_path).as_posix(),
+        "files": files,
+        "tilesets": tilesets,
+        "terrain_layers": terrain_layers,
+        "imagery_layers": imagery_layers,
+        "query_interfaces": [
+            "GET /api/source-package/{package_id}/query/cesium",
+            "GET /api/source-package/{package_id}/query/cesium/files/{relative_path}",
+        ],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    index_path = package_path / "cesium" / "archive" / "cesium_archive_index.json"
+    _write_json(index_path, index)
+    return index_path, index
+
+
+async def _execute_cesium_archive_download(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    manifest: dict[str, object],
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    token = params["token"]
+    archive_id = params["archive_id"]
+    archive_info = await _poll_cesium_archive(client, archive_id=archive_id, token=token)
+    download_url = CESIUM_ION_ARCHIVE_DOWNLOAD_URL.replace("{archive_id}", str(archive_id))
+    archive_path = _artifact_path(package_id, operation.get("local_artifact"))
+    await _download_binary(client, download_url, archive_path, headers=_cesium_headers(token))
+    index_path, index = _index_cesium_archive(
+        package_id=package_id,
+        operation=operation,
+        archive_path=archive_path,
+        archive_info=archive_info,
+    )
+    contract = _query_contract_for_operation(manifest, operation) or {}
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=archive_path,
+            artifact_type="cesium_archive_zip",
+            output_format=str(operation.get("output_format") or "Cesium archive ZIP"),
+            query_interfaces=["downloaded_archive_zip()"],
+            feeds_algorithms=["local_cesium_preview"],
+            metadata={
+                "archive_id": archive_info.get("id"),
+                "archive_status": archive_info.get("status"),
+                "bytes_archived": archive_info.get("bytesArchived"),
+            },
+        ),
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type=str(contract.get("artifact_type") or "cesium_offline_archive_index"),
+            output_format="JSON Cesium archive index",
+            query_interfaces=list(
+                contract.get("query_interfaces")
+                or ["cesium_archive_metadata()", "cesium_file(relative_path)"]
+            ),
+            feeds_algorithms=list(contract.get("feeds_algorithms") or ["local_cesium_preview"]),
+            metadata={
+                "archive_id": archive_info.get("id"),
+                "file_count": len(index.get("files", [])),
+                "tileset_count": len(index.get("tilesets", [])),
+                "terrain_layer_count": len(index.get("terrain_layers", [])),
+                "imagery_layer_count": len(index.get("imagery_layers", [])),
+            },
+        ),
+    ]
+
+
+async def _execute_cesium_clip_create_download(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    manifest: dict[str, object],
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    token = params["token"]
+    if not isinstance(params.get("asset_ids"), list):
+        raise RuntimeError("Cesium AO clip requires CESIUM_ION_ASSET_IDS.")
+    if not isinstance(params.get("clip_region"), list):
+        raise RuntimeError("Cesium AO clip requires confirmed AO bounds.")
+    payload = {
+        "assetIds": params["asset_ids"],
+        "format": params.get("format", "TILESET"),
+        "type": params.get("type", "CLIP_LATITUDE_LONGITUDE_RECTANGLE"),
+        "clipRegion": params["clip_region"],
+    }
+    archive_info = await _request_cesium_json(
+        client,
+        "POST",
+        str(operation["endpoint"]),
+        token=token,
+        payload=payload,
+    )
+    archive_id = archive_info.get("id")
+    if archive_id is None:
+        raise RuntimeError("Cesium ion did not return an archive id for the AO clip.")
+
+    download_operation = {**operation}
+    download_operation["params"] = {
+        "archive_id": str(archive_id),
+        "token": "${CESIUM_ION_TOKEN}",
+        "extract": True,
+    }
+    records = await _execute_cesium_archive_download(
+        client,
+        package_id=package_id,
+        manifest=manifest,
+        operation=download_operation,
+    )
+    for record in records:
+        metadata = record.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["created_from_asset_ids"] = params["asset_ids"]
+            metadata["clip_region_radians"] = params["clip_region"]
+    return records
+
+
+def _run_subprocess(args: list[str]) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False)
+    except OSError as error:
+        return False, str(error)
+    output = (result.stdout or "") + (result.stderr or "")
+    return result.returncode == 0, output.strip()
+
+
+async def _execute_osm_geofabrik_pbf(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    region_url = str(params.get("region_url") or operation.get("endpoint") or "").strip()
+    if not region_url:
+        raise RuntimeError("Geofabrik OSM operation did not include a region URL.")
+    package_path = _package_dir(package_id)
+    vector_dir = package_path / "vectors" / "osm"
+    region_path = vector_dir / "geofabrik_region.osm.pbf"
+    clipped_path = _artifact_path(package_id, operation.get("local_artifact"))
+    await _download_binary(client, region_url, region_path)
+
+    clip_bbox = str(params.get("clip_bbox") or "").strip()
+    clipped = False
+    clip_message = "osmium not available; regional PBF registered without AO clip."
+    osmium = shutil.which("osmium")
+    if osmium and clip_bbox and "{" not in clip_bbox:
+        clipped_path.parent.mkdir(parents=True, exist_ok=True)
+        ok, output = _run_subprocess(
+            [
+                osmium,
+                "extract",
+                f"--bbox={clip_bbox}",
+                str(region_path),
+                "-o",
+                str(clipped_path),
+                "--overwrite",
+            ]
+        )
+        clipped = ok and clipped_path.exists()
+        clip_message = output or ("AO clip created." if clipped else "osmium extract failed.")
+    if not clipped:
+        clipped_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(region_path, clipped_path)
+
+    index_path = vector_dir / "osm_index.json"
+    _write_json(
+        index_path,
+        {
+            "source_id": operation.get("source_id"),
+            "source_name": operation.get("source_name"),
+            "region_url": region_url,
+            "region_slug": params.get("region_slug"),
+            "clip_bbox": clip_bbox,
+            "clipped_with_osmium": clipped,
+            "clip_message": clip_message,
+            "region_pbf": region_path.relative_to(package_path).as_posix(),
+            "aoi_pbf": clipped_path.relative_to(package_path).as_posix(),
+            "query_interfaces": [
+                "osmium tags-filter",
+                "pyosmium scan",
+                "valhalla_build_tiles",
+                "find_pois(osm_tags, bbox)",
+            ],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=clipped_path,
+            artifact_type="osm_pbf_extract",
+            output_format="OSM PBF",
+            query_interfaces=["osmium tags-filter", "pyosmium scan", "valhalla_build_tiles"],
+            feeds_algorithms=["routable_graph", "nearest_feature", "water_source_lookup"],
+            metadata={
+                "region_url": region_url,
+                "clip_bbox": clip_bbox,
+                "clipped_with_osmium": clipped,
+                "clip_message": clip_message,
+            },
+        ),
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="osm_query_index",
+            output_format="JSON OSM package index",
+            query_interfaces=["osm_artifacts()", "osm_file(relative_path)"],
+            feeds_algorithms=["routable_graph", "nearest_feature"],
+            metadata={"region_url": region_url, "clipped_with_osmium": clipped},
+        ),
+    ]
+
+
+async def _execute_copernicus_dem_cogs(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    tiles = params.get("tile_urls") if isinstance(params.get("tile_urls"), list) else []
+    if not tiles:
+        raise RuntimeError("Copernicus DEM download requires AO bounds to derive tile URLs.")
+    package_path = _package_dir(package_id)
+    dem_dir = package_path / "rasters" / "copernicus_dem"
+    downloaded: list[dict[str, object]] = []
+    errors: list[str] = []
+    records: list[dict[str, object]] = []
+    for tile in tiles:
+        if not isinstance(tile, dict):
+            continue
+        tile_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(tile.get("tile_id") or "copernicus_dem"))
+        url = str(tile.get("url") or "")
+        if not url:
+            continue
+        path = dem_dir / f"{tile_id}.tif"
+        try:
+            await _download_binary(client, url, path)
+        except Exception as error:
+            if len(errors) < 10:
+                errors.append(f"{tile_id}: {error}")
+            continue
+        downloaded.append(
+            {
+                "tile_id": tile_id,
+                "url": url,
+                "relative_path": path.relative_to(package_path).as_posix(),
+                "bytes": path.stat().st_size,
+                "query_url": f"/api/source-package/{package_id}/query/terrain/files/{path.relative_to(package_path).as_posix()}",
+            }
+        )
+        records.append(
+            _artifact_record(
+                package_id=package_id,
+                operation=operation,
+                path=path,
+                artifact_type="copernicus_dem_cog",
+                output_format="Cloud Optimized GeoTIFF DEM",
+                query_interfaces=["sample_dem(lat, lon)", "read_window(west, south, east, north)", "rasterio.open()"],
+                feeds_algorithms=["terrain_derivatives", "raster_cost_distance", "viewshed"],
+                metadata={"tile_id": tile_id, "url": url, "bbox": params.get("bbox")},
+            )
+        )
+
+    if not downloaded:
+        raise RuntimeError(f"No Copernicus DEM tiles downloaded. Errors: {'; '.join(errors)}")
+
+    index_path = dem_dir / "copernicus_dem_index.json"
+    _write_json(
+        index_path,
+        {
+            "source_id": operation.get("source_id"),
+            "source_name": operation.get("source_name"),
+            "bbox": params.get("bbox"),
+            "requested_tiles": tiles,
+            "downloaded_tiles": downloaded,
+            "errors": errors,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    records.append(
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="copernicus_dem_cog_index",
+            output_format="JSON Copernicus DEM tile index",
+            query_interfaces=["terrain_artifacts()", "terrain_file(relative_path)"],
+            feeds_algorithms=["terrain_derivatives", "raster_cost_distance", "viewshed"],
+            metadata={"tile_count": len(downloaded), "errors": errors},
+        )
+    )
+    return records
+
+
+def _dted_matches_aoi(path: Path, tiles: list[dict[str, object]]) -> bool:
+    name = path.as_posix().lower()
+    for tile in tiles:
+        lat_floor = int(tile.get("lat_floor", 999))
+        lon_floor = int(tile.get("lon_floor", 999))
+        lat_tokens = {f"n{lat_floor:02d}", f"s{abs(lat_floor):02d}"}
+        lon_tokens = {f"e{lon_floor:03d}", f"w{abs(lon_floor):03d}"}
+        if any(token in name for token in lat_tokens) and any(token in name for token in lon_tokens):
+            return True
+    return False
+
+
+async def _execute_dted_import_convert(
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = _params_with_runtime_token(operation.get("params") if isinstance(operation.get("params"), dict) else {})
+    source_dir = Path(str(params["source_dir"])).expanduser().resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise RuntimeError(f"DTED_SOURCE_DIR does not exist or is not a directory: {source_dir}")
+    manifest = _load_package_manifest(package_id) or {}
+    aoi = manifest.get("aoi") if isinstance(manifest.get("aoi"), dict) else {}
+    bounds = ViewBounds(**aoi) if aoi else None
+    tiles = _copernicus_dem_tiles(bounds) if bounds else []
+    all_dted = [
+        path
+        for path in sorted(source_dir.rglob("*"))
+        if path.is_file() and path.suffix.lower() in {".dt0", ".dt1", ".dt2"}
+    ]
+    matched = [path for path in all_dted if _dted_matches_aoi(path, tiles)] if tiles else []
+    selected = matched or all_dted
+    selected = selected[: int(os.getenv("DTED_IMPORT_MAX_FILES", "100"))]
+    if not selected:
+        raise RuntimeError("No .dt0/.dt1/.dt2 files found in DTED_SOURCE_DIR.")
+
+    package_path = _package_dir(package_id)
+    raw_dir = package_path / "rasters" / "dted" / "raw"
+    tif_dir = package_path / "rasters" / "dted" / "geotiff"
+    gdal_translate = shutil.which("gdal_translate")
+    raw_files: list[dict[str, object]] = []
+    converted_files: list[dict[str, object]] = []
+    records: list[dict[str, object]] = []
+    conversion_errors: list[str] = []
+    for src in selected:
+        raw_target = raw_dir / src.name
+        raw_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, raw_target)
+        raw_record = {
+            "source_name": src.name,
+            "relative_path": raw_target.relative_to(package_path).as_posix(),
+            "bytes": raw_target.stat().st_size,
+        }
+        raw_files.append(raw_record)
+        if gdal_translate:
+            tif_target = tif_dir / f"{src.stem}.tif"
+            tif_target.parent.mkdir(parents=True, exist_ok=True)
+            ok, output = _run_subprocess([gdal_translate, str(raw_target), str(tif_target)])
+            if ok and tif_target.exists():
+                converted_files.append(
+                    {
+                        "source_name": src.name,
+                        "relative_path": tif_target.relative_to(package_path).as_posix(),
+                        "bytes": tif_target.stat().st_size,
+                        "query_url": f"/api/source-package/{package_id}/query/terrain/files/{tif_target.relative_to(package_path).as_posix()}",
+                    }
+                )
+                records.append(
+                    _artifact_record(
+                        package_id=package_id,
+                        operation=operation,
+                        path=tif_target,
+                        artifact_type="dted_geotiff_dem",
+                        output_format="GeoTIFF DEM converted from DTED",
+                        query_interfaces=["sample_dem(lat, lon)", "read_window(west, south, east, north)", "rasterio.open()"],
+                        feeds_algorithms=["terrain_derivatives", "raster_cost_distance", "viewshed"],
+                        metadata={"source_dted": raw_record["relative_path"]},
+                    )
+                )
+            elif len(conversion_errors) < 10:
+                conversion_errors.append(f"{src.name}: {output}")
+
+    index_path = _artifact_path(package_id, operation.get("local_artifact"))
+    _write_json(
+        index_path,
+        {
+            "source_dir": str(source_dir),
+            "raw_files": raw_files,
+            "converted_files": converted_files,
+            "gdal_translate": bool(gdal_translate),
+            "conversion_errors": conversion_errors,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    records.append(
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="dted_geotiff_index",
+            output_format="JSON DTED import index",
+            query_interfaces=["terrain_artifacts()", "terrain_file(relative_path)", "gdalinfo"],
+            feeds_algorithms=["terrain_derivatives", "raster_cost_distance", "viewshed"],
+            metadata={
+                "raw_file_count": len(raw_files),
+                "converted_file_count": len(converted_files),
+                "gdal_translate": bool(gdal_translate),
+                "conversion_errors": conversion_errors,
+            },
+        )
+    )
+    return records
+
+
+async def _execute_operation(
+    client: httpx.AsyncClient,
+    *,
+    package_id: str,
+    manifest: dict[str, object],
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    operation_id = str(operation.get("id", ""))
+    if operation_id == "naip_aws_public_prefix":
+        return await _execute_naip_aws_prefix(
+            client,
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "naip_earthexplorer_geotiff_import":
+        return await _execute_naip_earthexplorer_import(
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "osm_geofabrik_pbf":
+        return await _execute_osm_geofabrik_pbf(
+            client,
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "copernicus_dem_glo30_cog":
+        return await _execute_copernicus_dem_cogs(
+            client,
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "dted_earthexplorer_import_convert":
+        return await _execute_dted_import_convert(
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id in {"usgs_imagery_tile_cache", "nrl_naip_tile_cache"}:
+        return await _execute_xyz_tile_cache(
+            client,
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "sentinel_2_stac_cog":
+        return await _execute_sentinel2_stac_cogs(
+            client,
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "cesium_ion_archive_download":
+        return await _execute_cesium_archive_download(
+            client,
+            package_id=package_id,
+            manifest=manifest,
+            operation=operation,
+        )
+    if operation_id == "cesium_ion_clip_create_download":
+        return await _execute_cesium_clip_create_download(
+            client,
+            package_id=package_id,
+            manifest=manifest,
+            operation=operation,
+        )
+    if operation_id == "esri_world_imagery_export_tiles":
+        return [
+            await _execute_esri_imagery_export(
+                client,
+                package_id=package_id,
+                manifest=manifest,
+                operation=operation,
+            )
+        ]
+    if operation_id == "esri_world_elevation_export_image_tiff":
+        return await _execute_esri_terrain_export(
+            client,
+            package_id=package_id,
+            manifest=manifest,
+            operation=operation,
+        )
+    if operation_id == "esri_world_elevation_get_samples":
+        return [
+            await _execute_esri_samples(
+                client,
+                package_id=package_id,
+                operation=operation,
+            )
+        ]
+    return []
+
+
+async def _execute_package_job(package_id: str, manifest: dict[str, object]) -> None:
+    status = _load_package_status(package_id)
+    status["state"] = "running"
+    status["message"] = "Downloading selected sources to the Jetson package root."
+    _save_package_status(package_id, status)
+
+    registry = _load_artifact_registry(package_id)
+    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=20.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            for operation in manifest.get("download_operations", []):
+                if not isinstance(operation, dict):
+                    continue
+                operation_id = str(operation.get("id", ""))
+                _update_operation_status(
+                    status,
+                    operation_id,
+                    state="running",
+                    message="Downloading on Jetson.",
+                )
+                _save_package_status(package_id, status)
+                try:
+                    artifacts = await _execute_operation(
+                        client,
+                        package_id=package_id,
+                        manifest=manifest,
+                        operation=operation,
+                    )
+                    if not artifacts:
+                        _update_operation_status(
+                            status,
+                            operation_id,
+                            state="skipped",
+                            message="No executable downloader is implemented for this supplemental source.",
+                        )
+                        continue
+                    registry["artifacts"].extend(artifacts)
+                    _save_artifact_registry(package_id, registry)
+                    bytes_written = sum(int(artifact.get("bytes") or 0) for artifact in artifacts)
+                    artifact_paths = ", ".join(str(artifact.get("relative_path")) for artifact in artifacts)
+                    _update_operation_status(
+                        status,
+                        operation_id,
+                        state="succeeded",
+                        message="Saved to Jetson package root.",
+                        bytes_written=bytes_written,
+                        artifact_path=artifact_paths,
+                    )
+                    _save_package_status(package_id, status)
+                except Exception as error:
+                    _update_operation_status(
+                        status,
+                        operation_id,
+                        state="failed",
+                        message=str(error),
+                    )
+                    status["state"] = "failed"
+                    status["message"] = str(error)
+                    _save_package_status(package_id, status)
+                    return
+        status["state"] = "succeeded"
+        status["message"] = "Package downloads completed on Jetson."
+        _save_package_status(package_id, status)
+    finally:
+        PACKAGE_TASKS.pop(package_id, None)
+
+
+def _artifact_file(package_id: str, artifact: dict[str, Any]) -> Path:
+    package_path = _package_dir(package_id)
+    relative = str(artifact.get("relative_path") or "").replace("\\", "/")
+    path = (package_path / relative).resolve()
+    if package_path not in (path, *path.parents):
+        raise HTTPException(status_code=400, detail="Artifact path escapes package root.")
+    return path
+
+
+def _package_file_response(
+    package_id: str,
+    relative_path: str,
+    *,
+    allowed_roots: tuple[str, ...],
+) -> FileResponse:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    package_path = _package_dir(package_id)
+    clean_parts = [
+        part
+        for part in relative_path.replace("\\", "/").split("/")
+        if part and part not in {".", ".."}
+    ]
+    if not clean_parts:
+        raise HTTPException(status_code=400, detail="Artifact file path is required.")
+    target = (package_path / Path(*clean_parts)).resolve()
+    allowed = [(package_path / root).resolve() for root in allowed_roots]
+    if package_path not in (target, *target.parents) or not any(
+        root in (target, *target.parents) for root in allowed
+    ):
+        raise HTTPException(status_code=400, detail="Artifact file path is outside the allowed package roots.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Artifact file not found.")
+    return FileResponse(target)
+
+
+def _registry_artifacts_by_prefix(
+    package_id: str,
+    *,
+    source_ids: set[str] | None = None,
+    artifact_types: set[str] | None = None,
+) -> list[dict[str, object]]:
+    registry = _load_artifact_registry(package_id)
+    artifacts: list[dict[str, object]] = []
+    for artifact in registry.get("artifacts", []):
+        if not isinstance(artifact, dict):
+            continue
+        if source_ids is not None and str(artifact.get("source_id")) not in source_ids:
+            continue
+        if artifact_types is not None and str(artifact.get("artifact_type")) not in artifact_types:
+            continue
+        artifacts.append(artifact)
+    return artifacts
+
+
+def _find_terrain_artifact(package_id: str) -> dict[str, Any] | None:
+    registry = _load_artifact_registry(package_id)
+    artifacts = registry.get("artifacts", [])
+    priority = {
+        "cloud_optimized_geotiff_dem": 0,
+        "geotiff_dem": 1,
+        "copernicus_dem_cog": 1,
+        "dted_geotiff_dem": 1,
+        "elevation_grid_json": 2,
+        "elevation_samples_json": 3,
+    }
+    terrain = [
+        artifact
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+        and artifact.get("artifact_type") in priority
+        and artifact.get("source_id")
+        in {"esri_world_elevation", "copernicus_dem", "dted_earth_explorer", "test_dem", None}
+    ]
+    terrain.sort(key=lambda item: priority.get(str(item.get("artifact_type")), 99))
+    return terrain[0] if terrain else None
+
+
+def _grid_bbox_from_artifact(artifact: dict[str, Any]) -> dict[str, float] | None:
+    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+    bbox = metadata.get("bbox") if isinstance(metadata, dict) else None
+    if isinstance(bbox, str):
+        parts = [part.strip() for part in bbox.split(",")]
+        if len(parts) == 4:
+            try:
+                return {
+                    "west": float(parts[0]),
+                    "south": float(parts[1]),
+                    "east": float(parts[2]),
+                    "north": float(parts[3]),
+                }
+            except ValueError:
+                return None
+    if isinstance(bbox, dict):
+        try:
+            return {
+                "west": float(bbox["west"]),
+                "south": float(bbox["south"]),
+                "east": float(bbox["east"]),
+                "north": float(bbox["north"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
+def _load_json_grid(path: Path) -> tuple[list[list[float]], dict[str, float] | None, float]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    grid = payload.get("elevation_grid") or payload.get("elevation") or payload.get("grid")
+    if not isinstance(grid, list):
+        raise RuntimeError("JSON terrain artifact does not contain an elevation grid.")
+    numeric = [[float(value) for value in row] for row in grid]
+    bbox = payload.get("bbox") if isinstance(payload.get("bbox"), dict) else None
+    cell_size = float(payload.get("cell_size_m") or 30.0)
+    return numeric, bbox, cell_size
+
+
+def _load_raster_grid(path: Path, max_cells: int = 250000) -> tuple[list[list[float]], dict[str, float] | None, float]:
+    try:
+        import rasterio
+    except ImportError as error:
+        raise RuntimeError("rasterio is required to query GeoTIFF/COG terrain artifacts.") from error
+    with rasterio.open(path) as dataset:
+        width = dataset.width
+        height = dataset.height
+        if width * height > max_cells:
+            scale = math.sqrt((width * height) / max_cells)
+            out_width = max(1, int(width / scale))
+            out_height = max(1, int(height / scale))
+            data = dataset.read(1, out_shape=(out_height, out_width), masked=True)
+        else:
+            data = dataset.read(1, masked=True)
+        rows = data.filled(float("nan")).tolist()
+        bounds = dataset.bounds
+        bbox = {
+            "west": float(bounds.left),
+            "south": float(bounds.bottom),
+            "east": float(bounds.right),
+            "north": float(bounds.top),
+        }
+        cell_size = abs(float(dataset.transform.a)) or 30.0
+        return rows, bbox, cell_size
+
+
+def _load_package_terrain_grid(
+    package_id: str,
+    *,
+    max_cells: int = 250000,
+) -> tuple[list[list[float]], dict[str, float] | None, float, dict[str, Any]]:
+    artifact = _find_terrain_artifact(package_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="No queryable terrain artifact is registered.")
+    path = _artifact_file(package_id, artifact)
+    artifact_type = str(artifact.get("artifact_type") or "")
+    if artifact_type == "elevation_grid_json" or path.suffix.lower() == ".json":
+        grid, bbox, cell_size = _load_json_grid(path)
+        return grid, bbox or _grid_bbox_from_artifact(artifact), cell_size, artifact
+    grid, bbox, cell_size = _load_raster_grid(path, max_cells=max_cells)
+    return grid, bbox or _grid_bbox_from_artifact(artifact), cell_size, artifact
+
+
+def _coord_to_cell(
+    lat: float,
+    lon: float,
+    bbox: dict[str, float] | None,
+    rows: int,
+    cols: int,
+) -> tuple[int, int]:
+    if not bbox or rows <= 0 or cols <= 0:
+        return 0, 0
+    lon_span = bbox["east"] - bbox["west"]
+    lat_span = bbox["north"] - bbox["south"]
+    if lon_span == 0 or lat_span == 0:
+        return 0, 0
+    col = int(round((lon - bbox["west"]) / lon_span * (cols - 1)))
+    row = int(round((bbox["north"] - lat) / lat_span * (rows - 1)))
+    return max(0, min(rows - 1, row)), max(0, min(cols - 1, col))
+
+
+def _cell_to_coord(
+    row: int,
+    col: int,
+    bbox: dict[str, float] | None,
+    rows: int,
+    cols: int,
+) -> tuple[float, float]:
+    if not bbox or rows <= 1 or cols <= 1:
+        return 0.0, 0.0
+    lon = bbox["west"] + (col / (cols - 1)) * (bbox["east"] - bbox["west"])
+    lat = bbox["north"] - (row / (rows - 1)) * (bbox["north"] - bbox["south"])
+    return lat, lon
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius = 6_371_000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
+
+
+def _route_hash(feature: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(feature, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _feature_distance_m(feature: dict[str, Any]) -> float:
+    coords = feature.get("geometry", {}).get("coordinates", [])
+    total = 0.0
+    for left, right in zip(coords, coords[1:]):
+        total += _haversine_m(float(left[1]), float(left[0]), float(right[1]), float(right[0]))
+    return total
+
+
+def _run_algorithm(package_id: str, request: AlgorithmRequest) -> dict[str, Any]:
+    from llm_dev_kmh import geo_algorithms
+
+    algorithm_id = request.algorithm_id
+    params = request.parameters
+    if algorithm_id == "sar_sector_partition":
+        center = params.get("center") if isinstance(params.get("center"), dict) else {}
+        return {
+            "algorithm_id": algorithm_id,
+            "sectors": geo_algorithms.radial_sar_sectors(
+                float(center.get("lat", 0.0)),
+                float(center.get("lon", 0.0)),
+                float(params.get("radius_m", 1000.0)),
+                int(params.get("sector_count", 8)),
+            ),
+        }
+
+    grid, bbox, cell_size, artifact = _load_package_terrain_grid(package_id)
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+
+    if algorithm_id in {"terrain_derivatives", "slope_aspect_roughness"}:
+        return {
+            "algorithm_id": algorithm_id,
+            "artifact": artifact.get("relative_path"),
+            "bbox": bbox,
+            "cell_size_m": cell_size,
+            "layers": geo_algorithms.derive_terrain_layers(grid, cell_size_m=cell_size),
+        }
+    if algorithm_id == "flow_accumulation_d8":
+        return {
+            "algorithm_id": algorithm_id,
+            "artifact": artifact.get("relative_path"),
+            "bbox": bbox,
+            "accumulation": geo_algorithms.flow_accumulation_d8(grid, cell_size_m=cell_size),
+        }
+    if algorithm_id == "viewshed":
+        observer = params.get("observer_cell") or [rows // 2, cols // 2]
+        return {
+            "algorithm_id": algorithm_id,
+            "artifact": artifact.get("relative_path"),
+            "bbox": bbox,
+            "visible": geo_algorithms.viewshed(
+                grid,
+                (int(observer[0]), int(observer[1])),
+                cell_size_m=cell_size,
+                max_radius_cells=params.get("max_radius_cells"),
+            ),
+        }
+    if algorithm_id == "raster_cost_distance":
+        terrain = geo_algorithms.derive_terrain_layers(grid, cell_size_m=cell_size)
+        cost = geo_algorithms.build_walking_cost_surface(
+            terrain["slope_degrees"],
+            max_slope_deg=float(params.get("max_slope_deg", 35.0)),
+        )
+        start = params.get("start_cell") or [0, 0]
+        target = params.get("target_cell")
+        result = geo_algorithms.raster_cost_distance(cost, [(int(start[0]), int(start[1]))])
+        payload: dict[str, Any] = {
+            "algorithm_id": algorithm_id,
+            "artifact": artifact.get("relative_path"),
+            "bbox": bbox,
+            "distance": result.distance,
+        }
+        if target:
+            payload["path"] = geo_algorithms.backtrack_least_cost_path(
+                result,
+                (int(target[0]), int(target[1])),
+            )
+        return payload
+    if algorithm_id == "sar_probability_surface":
+        last_known = params.get("last_known_cell") or [rows // 2, cols // 2]
+        return {
+            "algorithm_id": algorithm_id,
+            "bbox": bbox,
+            "probability": geo_algorithms.sar_probability_surface(
+                rows,
+                cols,
+                (int(last_known[0]), int(last_known[1])),
+                sigma_cells=float(params.get("sigma_cells", 6.0)),
+            ),
+        }
+    if algorithm_id == "route_score":
+        return {
+            "algorithm_id": algorithm_id,
+            "score": geo_algorithms.score_route(
+                normalized_time=float(params.get("normalized_time", 0.5)),
+                normalized_energy=float(params.get("normalized_energy", 0.5)),
+                hazard_exposure=float(params.get("hazard_exposure", 0.2)),
+                data_uncertainty=float(params.get("data_uncertainty", 0.2)),
+                resource_value=float(params.get("resource_value", 0.0)),
+                rescue_visibility=float(params.get("rescue_visibility", 0.0)),
+            ),
+        }
+    raise HTTPException(status_code=400, detail=f"Unsupported algorithm_id: {algorithm_id}")
+
+
+def _build_route_from_package(package_id: str, request: PackageRouteRequest) -> dict[str, Any]:
+    from llm_dev_kmh import geo_algorithms
+
+    route_id = f"TERA-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:6]}"
+    coordinates = [[request.start.lon, request.start.lat], [request.end.lon, request.end.lat]]
+    cost_breakdown: dict[str, float] = {
+        "distance_m": _haversine_m(request.start.lat, request.start.lon, request.end.lat, request.end.lon),
+        "time_s": _haversine_m(request.start.lat, request.start.lon, request.end.lat, request.end.lon) / 1.1,
+        "elevation_gain_m": 0.0,
+    }
+    provenance: dict[str, Any] = {"package_id": package_id, "terrain_artifact": None}
+
+    try:
+        grid, bbox, cell_size, artifact = _load_package_terrain_grid(package_id)
+        rows = len(grid)
+        cols = len(grid[0]) if rows else 0
+        start_cell = _coord_to_cell(request.start.lat, request.start.lon, bbox, rows, cols)
+        end_cell = _coord_to_cell(request.end.lat, request.end.lon, bbox, rows, cols)
+        terrain = geo_algorithms.derive_terrain_layers(grid, cell_size_m=cell_size)
+        cost_surface = geo_algorithms.build_walking_cost_surface(
+            terrain["slope_degrees"],
+            max_slope_deg=35.0 if "max_slope_35" in request.avoid else 45.0,
+        )
+        cost_result = geo_algorithms.raster_cost_distance(cost_surface, [start_cell])
+        path = geo_algorithms.backtrack_least_cost_path(cost_result, end_cell)
+        if path:
+            coordinates = []
+            elevation_gain = 0.0
+            previous_elevation = grid[path[0][0]][path[0][1]]
+            for row, col in path:
+                lat, lon = _cell_to_coord(row, col, bbox, rows, cols)
+                coordinates.append([lon, lat])
+                elevation = grid[row][col]
+                if math.isfinite(elevation) and math.isfinite(previous_elevation):
+                    elevation_gain += max(0.0, elevation - previous_elevation)
+                previous_elevation = elevation
+            distance_m = sum(
+                _haversine_m(left[1], left[0], right[1], right[0])
+                for left, right in zip(coordinates, coordinates[1:])
+            )
+            cost_breakdown = {
+                "distance_m": distance_m,
+                "time_s": distance_m / 1.1,
+                "elevation_gain_m": elevation_gain,
+                "raster_cost": float(cost_result.distance[end_cell[0]][end_cell[1]]),
+            }
+            provenance = {
+                "package_id": package_id,
+                "terrain_artifact": artifact.get("relative_path"),
+                "cell_size_m": cell_size,
+                "routing_method": "raster_cost_distance",
+            }
+    except HTTPException:
+        pass
+    except Exception as error:
+        provenance["terrain_route_error"] = str(error)
+
+    feature = {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": coordinates},
+        "properties": {
+            "route_id": route_id,
+            "profile": request.profile,
+            "avoid": request.avoid,
+            "package_id": package_id,
+        },
+    }
+    route_hash = _route_hash(feature)
+    response = {
+        "route_id": route_id,
+        "route_hash": route_hash,
+        "route": feature,
+        "waypoints": [
+            {"lat": request.start.lat, "lon": request.start.lon, "label": "Start"},
+            {"lat": request.end.lat, "lon": request.end.lon, "label": "End"},
+        ],
+        "rationale": (
+            f"Generated {request.profile.replace('_', ' ')} route from Jetson package "
+            f"{package_id}; distance {cost_breakdown['distance_m'] / 1000.0:.2f} km."
+        ),
+        "cost_breakdown": cost_breakdown,
+        "provenance": provenance,
+        "trust": {
+            "schema_valid": True,
+            "policy_valid": True,
+            "operator_approved": False,
+            "signature_valid": False,
+            "untrusted_inputs_used": False,
+            "trust_status": "needs_review",
+        },
+    }
+    routes_dir = _routes_dir(package_id)
+    _write_json(routes_dir / f"{route_id}.json", response)
+    return response
+
+
+def _load_route_artifact(package_id: str, route_id: str) -> dict[str, Any]:
+    path = _routes_dir(package_id) / f"{_safe_package_id(route_id)}.json"
+    route = _read_json(path)
+    if route is None:
+        raise HTTPException(status_code=404, detail="Route artifact not found.")
+    return route
+
+
+def _build_cot_xml(
+    *,
+    uid: str,
+    cot_type: str,
+    lat: float,
+    lon: float,
+    route: dict[str, Any],
+) -> str:
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat().replace("+00:00", "Z")
+    stale_text = datetime.fromtimestamp(now.timestamp() + 3600, timezone.utc).isoformat().replace("+00:00", "Z")
+    root = ET.Element(
+        "event",
+        {
+            "version": "2.0",
+            "uid": uid,
+            "type": cot_type,
+            "how": "m-g",
+            "time": now_text,
+            "start": now_text,
+            "stale": stale_text,
+        },
+    )
+    ET.SubElement(
+        root,
+        "point",
+        {
+            "lat": f"{lat:.7f}",
+            "lon": f"{lon:.7f}",
+            "hae": "9999999.0",
+            "ce": "9999999.0",
+            "le": "9999999.0",
+        },
+    )
+    detail = ET.SubElement(root, "detail")
+    route_el = ET.SubElement(detail, "route")
+    for index, coordinate in enumerate(route.get("geometry", {}).get("coordinates", [])):
+        ET.SubElement(
+            route_el,
+            "point",
+            {
+                "lat": f"{float(coordinate[1]):.7f}",
+                "lon": f"{float(coordinate[0]):.7f}",
+                "index": str(index),
+            },
+        )
+    return ET.tostring(root, encoding="unicode")
+
+
+def _sign_cot_xml(
+    *,
+    uid: str,
+    lat: float,
+    lon: float,
+    route: dict[str, Any],
+    rationale: str,
+    mission_type: str,
+    cot_xml: str,
+) -> tuple[str, dict[str, Any]]:
+    try:
+        from crypto.cot_signer import CotRoute, embed_signature_in_cot_xml, sign_cot
+
+        signed = sign_cot(
+            CotRoute(
+                uid=uid,
+                lat=lat,
+                lon=lon,
+                route_geojson=route,
+                rationale=rationale,
+                mission_type=mission_type,
+            )
+        )
+        return embed_signature_in_cot_xml(cot_xml, signed), signed
+    except ImportError:
+        pass
+
+    try:
+        from crypto.ml_dsa_signer import create_signer
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail="TERA signing modules are unavailable.") from error
+
+    payload = {
+        "uid": uid,
+        "lat": lat,
+        "lon": lon,
+        "route_hash": hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest(),
+        "rationale": rationale,
+        "mission_type": mission_type,
+    }
+    try:
+        signed = create_signer(os.getenv("WAYFINDER_KEY_ID", "wayfinder-device-001")).sign(payload).to_dict()
+    except RuntimeError as error:
+        dev_key = os.getenv("WAYFINDER_HMAC_KEY", "").encode("utf-8")
+        if not dev_key:
+            raise HTTPException(status_code=503, detail="TERA signing dependencies are unavailable.") from error
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        signed = {
+            "payload": payload,
+            "signature": hmac.new(dev_key, canonical, hashlib.sha256).hexdigest(),
+            "key_id": os.getenv("WAYFINDER_KEY_ID", "wayfinder-device-001"),
+            "algorithm": "HMAC-SHA256-dev-fallback",
+            "timestamp": datetime.now(timezone.utc).timestamp(),
+            "payload_hash": hashlib.sha256(canonical).hexdigest(),
+        }
+    root = ET.fromstring(cot_xml)
+    detail = root.find("detail")
+    if detail is None:
+        detail = ET.SubElement(root, "detail")
+    for old in detail.findall("wayfinder"):
+        detail.remove(old)
+    wayfinder = ET.SubElement(detail, "wayfinder")
+    ET.SubElement(wayfinder, "signature").text = signed["signature"]
+    ET.SubElement(wayfinder, "key_id").text = signed["key_id"]
+    ET.SubElement(wayfinder, "algorithm").text = signed["algorithm"]
+    ET.SubElement(wayfinder, "timestamp").text = str(signed["timestamp"])
+    ET.SubElement(wayfinder, "payload_hash").text = signed["payload_hash"]
+    ET.SubElement(wayfinder, "payload_json").text = json.dumps(
+        signed["payload"],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ET.tostring(root, encoding="unicode"), signed
+
+
 def _normalize_for_match(text: str) -> str:
     expanded = text.lower()
     for canonical, aliases in KEYWORD_EXPANSIONS.items():
@@ -1090,8 +4704,15 @@ def _infer_source_recommendation(
     questions: list[str] = []
     rationale: list[str] = []
 
-    _append_unique(optional_ids, "esri_world_imagery", "osm_basemap")
-    rationale.append("Esri imagery and OSM basemap stay as lightweight preview/context layers.")
+    _append_unique(required_ids, "naip" if is_us_context else "sentinel_2")
+    _append_unique(optional_ids, "cesium_world_imagery", "osm_basemap")
+    if is_us_context:
+        _append_unique(optional_ids, "usgs_imagery_only", "nrl_naip_conus")
+    rationale.append(
+        "NAIP is the high-detail U.S. imagery default when the AO is in the U.S.; "
+        "Sentinel-2 remains the global free imagery fallback. Cesium imagery stays "
+        "as a token-backed preview stream."
+    )
 
     needs_routing = _text_has_any(
         prompt_text,
@@ -1113,6 +4734,7 @@ def _infer_source_recommendation(
         prompt_text,
         ("terrain", "slope", "ridge", "mountain", "valley", "steep", "exposed", "viewshed"),
     )
+    needs_dted = _text_has_any(prompt_text, ("dted", "dt2", "earth explorer", "earthexplorer"))
     needs_water = _text_has_any(
         prompt_text, ("water", "stream", "river", "spring", "lake", "potable", "hydrate")
     )
@@ -1135,18 +4757,39 @@ def _infer_source_recommendation(
     needs_current_imagery = _text_has_any(
         prompt_text, ("current", "recent", "latest", "flood", "burn", "changed", "cloud")
     )
+    needs_cesium_archive = "cesium" in prompt_text and _text_has_any(
+        prompt_text, ("download", "offline", "archive", "export", "jetson", "local")
+    )
+
+    if needs_cesium_archive:
+        _append_unique(required_ids, "cesium_ion_archive")
+        rationale.append(
+            "Cesium offline use is handled through ion archive/export downloads "
+            "to the Jetson, not by scraping Cesium World stream tiles."
+        )
 
     if needs_routing:
         _append_unique(required_ids, "osm_extract")
         rationale.append("OSM PBF is required for the local routable graph and POI/feature lookup.")
 
     if needs_terrain:
-        _append_unique(required_ids, "usgs_3dep" if is_us_context else "copernicus_dem")
-        _append_unique(required_ids, "esri_world_elevation")
+        _append_unique(required_ids, "copernicus_dem")
+        if is_us_context:
+            _append_unique(optional_ids, "dted_earth_explorer", "usgs_3dep")
+        else:
+            _append_unique(optional_ids, "dted_earth_explorer")
         _append_unique(optional_ids, "cesium_world_terrain")
         rationale.append(
-            "An analysis DEM plus queryable Esri terrain fallback is required "
-            "for slope, exposure, hydrology, and cost surfaces."
+            "Copernicus GLO-30 COGs are the no-account terrain default for slope, "
+            "exposure, hydrology, and cost surfaces; staged EarthExplorer DTED "
+            "supplements it when available."
+        )
+
+    if needs_dted:
+        _append_unique(required_ids, "dted_earth_explorer")
+        rationale.append(
+            "DTED was explicitly requested, so staged EarthExplorer DTED import is "
+            "included; set DTED_SOURCE_DIR on the Jetson before executing the package."
         )
 
     if needs_landcover:
@@ -1160,7 +4803,6 @@ def _infer_source_recommendation(
         _append_unique(required_ids, "usgs_3dhp" if is_us_context else "hydrosheds")
         if is_us_context:
             _append_unique(optional_ids, "nwis")
-        _append_unique(optional_ids, "sentinel_2")
         rationale.append(
             "Hydrography is required for water-source and drainage queries; "
             "imagery/observations are optional confidence boosters."
@@ -1198,12 +4840,13 @@ def _infer_source_recommendation(
         _append_unique(required_ids, "viewshed_surfaces")
         _append_unique(optional_ids, "fcc_towers" if is_us_context else "osm_towers", "osm_towers")
         if not needs_terrain:
-            _append_unique(required_ids, "usgs_3dep" if is_us_context else "copernicus_dem")
-            _append_unique(required_ids, "esri_world_elevation")
+            _append_unique(required_ids, "copernicus_dem")
+            if is_us_context:
+                _append_unique(optional_ids, "dted_earth_explorer", "usgs_3dep")
         rationale.append("Signal planning requires DEM-derived viewsheds plus tower/high-ground candidates.")
 
     if needs_current_imagery and not needs_water and not needs_hazards:
-        _append_unique(optional_ids, "sentinel_2", "landsat_collection_2")
+        _append_unique(optional_ids, "landsat_collection_2")
         if is_us_context:
             _append_unique(optional_ids, "naip")
         rationale.append(
@@ -1275,7 +4918,7 @@ def _infer_source_recommendation(
     selected_ids = []
     preview_ids = [
         source_id
-        for source_id in ("esri_world_imagery", "osm_basemap")
+        for source_id in ("cesium_world_imagery", "usgs_imagery_only", "osm_basemap")
         if source_id in optional_ids
     ]
     _append_unique(selected_ids, *required_ids, *preview_ids)
@@ -1893,8 +5536,21 @@ def _normalize_claude_model(model: str | None) -> str:
     return CLAUDE_MODEL_ALIASES.get(compact, CLAUDE_MODEL_ALIASES.get(candidate.lower(), candidate))
 
 
-def _build_claude_payload(request: PromptRequest) -> tuple[str, dict[str, object]]:
-    model = _normalize_claude_model(request.cloud_model or request.model or CLAUDE_MODEL)
+def _claude_model_candidates(preferred_model: str | None) -> list[str]:
+    candidates = [
+        _normalize_claude_model(preferred_model),
+        *CLAUDE_MODEL_FALLBACKS,
+    ]
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def _build_claude_payload_for_model(
+    request: PromptRequest, model: str
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "model": model,
         "max_tokens": 900,
@@ -1912,7 +5568,12 @@ def _build_claude_payload(request: PromptRequest) -> tuple[str, dict[str, object
             }
         ],
     }
-    return model, payload
+    return payload
+
+
+def _build_claude_payload(request: PromptRequest) -> tuple[str, dict[str, object]]:
+    model = _normalize_claude_model(request.cloud_model or request.model or CLAUDE_MODEL)
+    return model, _build_claude_payload_for_model(request, model)
 
 
 def _extract_claude_response_text(data: dict[str, object]) -> str:
@@ -1940,53 +5601,64 @@ async def _post_claude_message(request: PromptRequest) -> PromptResponse:
             ),
         )
 
-    model, payload = _build_claude_payload(request)
+    requested_model = _normalize_claude_model(
+        request.cloud_model or request.model or CLAUDE_MODEL
+    )
     timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
     headers = {
         "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
         "x-api-key": api_key,
     }
+    model_errors: list[str] = []
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(ANTHROPIC_API_URL, headers=headers, json=payload)
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500]
-        log.error(
-            "claude_http_error",
-            status_code=exc.response.status_code,
-            body=body,
-            model=model,
-        )
-        if exc.response.status_code in {401, 403}:
-            detail = (
-                f"Claude API rejected the key or account access for {model}. "
-                "Check the key in Model Provider or set ANTHROPIC_API_KEY on the server."
+    for model in _claude_model_candidates(requested_model):
+        payload = _build_claude_payload_for_model(request, model)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    ANTHROPIC_API_URL, headers=headers, json=payload
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            log.error(
+                "claude_http_error",
+                status_code=exc.response.status_code,
+                body=body,
+                model=model,
             )
-        elif exc.response.status_code == 400 and "model" in body.lower():
-            detail = (
-                f"Claude API rejected model {model}. Select Claude Sonnet 4.6 "
-                "or another listed model in Model Provider."
-            )
-        else:
+            if exc.response.status_code in {401, 403}:
+                detail = (
+                    f"Claude API rejected the key or account access for {model}. "
+                    "Check the key in Model Provider or set ANTHROPIC_API_KEY on the server."
+                )
+                raise HTTPException(status_code=502, detail=detail) from exc
+            if exc.response.status_code == 400 and "model" in body.lower():
+                model_errors.append(f"{model}: {body}")
+                continue
             detail = f"Claude API returned {exc.response.status_code}: {body}"
-        raise HTTPException(status_code=502, detail=detail) from exc
-    except httpx.HTTPError as exc:
-        log.error("claude_connection_error", error=str(exc), model=model)
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Could not reach Claude API. Check internet connectivity, proxy/firewall "
-                "settings, and the Anthropic API endpoint."
-            ),
-        ) from exc
+            raise HTTPException(status_code=502, detail=detail) from exc
+        except httpx.HTTPError as exc:
+            log.error("claude_connection_error", error=str(exc), model=model)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Could not reach Claude API. Check internet connectivity, "
+                    "proxy/firewall settings, and the Anthropic API endpoint."
+                ),
+            ) from exc
 
-    text = _extract_claude_response_text(response.json())
-    if not text:
-        raise HTTPException(status_code=502, detail="Claude returned an empty response.")
-    return PromptResponse(model=model, response=text)
+        text = _extract_claude_response_text(response.json())
+        if not text:
+            raise HTTPException(status_code=502, detail="Claude returned an empty response.")
+        return PromptResponse(model=model, response=text)
+
+    detail = (
+        "Claude API rejected every configured model candidate. "
+        + " | ".join(model_errors)
+    )
+    raise HTTPException(status_code=502, detail=detail)
 
 
 def _sse_event(payload: dict[str, object]) -> str:
@@ -2605,6 +6277,7 @@ async def health() -> dict[str, str]:
 async def runtime_config() -> RuntimeConfigResponse:
     return RuntimeConfigResponse(
         cesium_ion_token=CESIUM_ION_TOKEN,
+        esri_token_configured=ESRI_TOKEN_CONFIGURED,
         default_model=OLLAMA_MODEL,
         claude_default_model=_normalize_claude_model(CLAUDE_MODEL),
         anthropic_api_key_configured=bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
@@ -2813,6 +6486,11 @@ async def recommend_source_package(
     return _infer_source_recommendation(request.mission_text, request.map_context)
 
 
+@app.get("/api/storage", response_model=StorageInfoResponse)
+async def get_storage_info() -> StorageInfoResponse:
+    return _storage_info()
+
+
 def _build_package_manifest(
     *,
     package_id: str,
@@ -2821,6 +6499,16 @@ def _build_package_manifest(
     sources: list[SourceOption],
 ) -> dict[str, object]:
     selected_ids = [source.id for source in sources]
+    bounds = _manifest_bounds_from_context(request.map_context)
+    download_operations = _build_source_download_operations(
+        package_id=package_id,
+        sources=sources,
+        bounds=bounds,
+    )
+    jetson_query_contracts = _build_jetson_query_contracts(
+        package_id=package_id,
+        sources=sources,
+    )
     return {
         "package_id": package_id,
         "package_name": package_name,
@@ -2840,21 +6528,40 @@ def _build_package_manifest(
                 "stream_layer": source.stream_layer,
                 "analysis_role": source.analysis_role,
                 "derived_layers": source.derived_layers,
+                "source_url": source.source_url,
+                "license_or_terms": source.license_or_terms,
+                "download_methods": [
+                    method.model_dump(exclude_none=True) for method in source.download_methods
+                ],
+                "jetson_query_formats": [
+                    query_format.model_dump(exclude_none=True)
+                    for query_format in source.jetson_query_formats
+                ],
                 "notes": source.notes,
             }
             for source in sources
         ],
+        "download_operations": download_operations,
+        "jetson_query_contracts": jetson_query_contracts,
+        "deterministic_algorithms": algorithm_catalog(),
         "server_ingest_plan": {
             "store_raw_sources": [
                 source.id
                 for source in sources
-                if source.download_status in {"download-required", "cache-feed"}
+                if source.download_status
+                in {
+                    "download-required",
+                    "cache-feed",
+                    "export-tiles-with-account",
+                }
+                or source.download_methods
             ],
             "cache_display_tiles": [
                 source.id
                 for source in sources
-                if source.download_status == "cache-via-cesium-pipeline"
-                or source.stream_status.startswith("streamable")
+                if source.download_status in {"cache-tiles", "export-tiles-with-account"}
+                or any(method.id.endswith("_tile_cache") for method in source.download_methods)
+                or source.id == "cesium_ion_archive"
             ],
             "generate_derived_layers": sorted(
                 {
@@ -2872,7 +6579,17 @@ def _build_package_manifest(
                 source.id
                 for source in sources
                 if source.category
-                in {"terrain", "land-cover", "imagery-analysis", "hazards", "terrain-display"}
+                in {
+                    "terrain",
+                    "land-cover",
+                    "imagery-analysis",
+                    "hazards",
+                    "terrain-display",
+                    "imagery-terrain-archive",
+                }
+            ],
+            "jetson_queryable_artifacts": [
+                contract["local_path"] for contract in jetson_query_contracts
             ],
         },
         "offline_metadata_required": [
@@ -2910,11 +6627,73 @@ def _download_plan_warnings(
         warnings.append("No AO bounds were provided; downloads must be clipped before ingest.")
     if not any(source.id == "osm_extract" for source in sources):
         warnings.append("OSM PBF extract is not selected, so server-side routable graph work is blocked.")
+    elif shutil.which("osmium") is None:
+        warnings.append(
+            "OSM Geofabrik PBF will download, but osmium is not installed; AO clipping "
+            "will be marked pending and the regional PBF will be registered."
+        )
     if not any(source.category == "terrain" for source in sources):
         warnings.append("No analysis DEM is selected; slope, hydrology, and viewshed queries are blocked.")
+    if any(source.id == "naip" for source in sources):
+        warnings.append(
+            "NAIP AWS prefixes can be large. The manifest caps downloads with NAIP_MAX_FILES "
+            "and the Jetson storage check runs before execution."
+        )
+        if not _env_path("NAIP_EARTHEXPLORER_DIR"):
+            warnings.append(
+                "NAIP_EARTHEXPLORER_DIR is not configured, so EarthExplorer NAIP GeoTIFF "
+                "import is skipped and the AWS public S3 prefix method is used."
+            )
+    if any(source.id == "dted_earth_explorer" for source in sources):
+        if not _env_path("DTED_SOURCE_DIR"):
+            warnings.append(
+                "DTED_SOURCE_DIR is not configured; EarthExplorer DTED import is skipped. "
+                "Use Copernicus DEM GLO-30 for no-account terrain downloads."
+            )
+        elif shutil.which("gdal_translate") is None:
+            warnings.append(
+                "DTED files will be imported, but gdal_translate is not installed; "
+                "raw DTED will be registered without GeoTIFF conversion."
+            )
+    if any(source.id in {"esri_world_imagery", "esri_world_elevation"} for source in sources):
+        if not ESRI_TOKEN_CONFIGURED:
+            warnings.append(
+                "Esri export operations require ESRI_ARCGIS_TOKEN at download time; "
+                "the manifest uses an environment placeholder and does not store secrets."
+            )
+    if any(source.id == "cesium_ion_archive" for source in sources):
+        has_archive_id = bool(_get_cesium_archive_id())
+        has_asset_ids = bool(
+            (
+                os.getenv("CESIUM_ION_ASSET_IDS")
+                or os.getenv("CESIUM_ASSET_IDS")
+                or os.getenv("CESIUM_ION_ASSET_ID")
+                or ""
+            ).strip()
+        )
+        if not _get_cesium_token():
+            warnings.append(
+                "Cesium archive downloads require CESIUM_ION_TOKEN on the Jetson."
+            )
+        if not (has_archive_id or has_asset_ids):
+            warnings.append(
+                "Cesium archive source selected, but no CESIUM_ION_ARCHIVE_ID or "
+                "CESIUM_ION_ASSET_IDS is configured; no Cesium download operation "
+                "will be created."
+            )
+        else:
+            warnings.append(
+                "Cesium downloads use ion archive/export APIs only. The planner will "
+                "not scrape World Imagery or World Terrain stream tiles."
+            )
     if any(source.stream_status.startswith("streamable") for source in sources):
         warnings.append(
             "Streamable layers still need cached tiles or analytical companions for disconnected use."
+        )
+    if any(source.id == "esri_world_imagery" for source in sources):
+        warnings.append(
+            "Esri World Imagery must be exported through the export-enabled service "
+            "for offline use; do not scrape individual streaming tiles."
         )
     return warnings
 
@@ -2935,6 +6714,11 @@ async def plan_source_package(request: DownloadPlanRequest) -> DownloadPlanRespo
         sources=sources,
     )
     PACKAGE_MANIFESTS[package_id] = manifest
+    estimated_bytes = _estimate_manifest_bytes(manifest)
+    storage = _storage_info(package_id)
+    storage_warning = _storage_warning(estimated_bytes, storage)
+    _persist_package_manifest(package_id, manifest)
+    _save_package_status(package_id, _initial_package_status(package_id, manifest))
     return DownloadPlanResponse(
         package_id=package_id,
         package_name=package_name,
@@ -2943,12 +6727,19 @@ async def plan_source_package(request: DownloadPlanRequest) -> DownloadPlanRespo
         manifest=manifest,
         warnings=_download_plan_warnings(request, sources),
         download_url=f"/api/source-package/{package_id}/download",
+        execute_url=f"/api/source-package/{package_id}/execute",
+        status_url=f"/api/source-package/{package_id}/status",
+        artifacts_url=f"/api/source-package/{package_id}/artifacts",
+        estimated_bytes=estimated_bytes,
+        storage_fit=storage_warning is None,
+        storage=storage,
+        storage_warning=storage_warning,
     )
 
 
 @app.get("/api/source-package/{package_id}/download")
 async def download_source_manifest(package_id: str) -> StreamingResponse:
-    manifest = PACKAGE_MANIFESTS.get(package_id)
+    manifest = _load_package_manifest(package_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Source package manifest not found.")
 
@@ -2963,6 +6754,335 @@ async def download_source_manifest(package_id: str) -> StreamingResponse:
             "Cache-Control": "no-store",
         },
     )
+
+
+@app.post("/api/source-package/{package_id}/execute", response_model=PackageExecuteResponse)
+async def execute_source_package(package_id: str) -> PackageExecuteResponse:
+    package_id = _safe_package_id(package_id)
+    manifest = _load_package_manifest(package_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+
+    estimated_bytes = _estimate_manifest_bytes(manifest)
+    storage = _storage_info(package_id)
+    storage_warning = _storage_warning(estimated_bytes, storage)
+    if storage_warning is not None:
+        raise HTTPException(status_code=507, detail=storage_warning)
+
+    existing_task = PACKAGE_TASKS.get(package_id)
+    if existing_task is not None and not existing_task.done():
+        status = _load_package_status(package_id)
+        return PackageExecuteResponse(
+            package_id=package_id,
+            state=str(status.get("state", "running")),
+            status_url=f"/api/source-package/{package_id}/status",
+            artifacts_url=f"/api/source-package/{package_id}/artifacts",
+            storage=storage,
+            message="Package download is already running on the Jetson.",
+        )
+
+    status = _load_package_status(package_id)
+    if status.get("state") == "succeeded":
+        return PackageExecuteResponse(
+            package_id=package_id,
+            state="succeeded",
+            status_url=f"/api/source-package/{package_id}/status",
+            artifacts_url=f"/api/source-package/{package_id}/artifacts",
+            storage=storage,
+            message="Package is already downloaded on the Jetson.",
+        )
+
+    task = asyncio.create_task(_execute_package_job(package_id, manifest))
+    PACKAGE_TASKS[package_id] = task
+    status["state"] = "queued"
+    status["message"] = "Package download queued on the Jetson."
+    _save_package_status(package_id, status)
+    return PackageExecuteResponse(
+        package_id=package_id,
+        state="queued",
+        status_url=f"/api/source-package/{package_id}/status",
+        artifacts_url=f"/api/source-package/{package_id}/artifacts",
+        storage=storage,
+        message="Package download queued on the Jetson.",
+    )
+
+
+@app.get("/api/source-package/{package_id}/status")
+async def get_source_package_status(package_id: str) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    status = _load_package_status(package_id)
+    status["storage"] = _storage_info(package_id).model_dump()
+    return status
+
+
+@app.get("/api/source-package/{package_id}/artifacts")
+async def get_source_package_artifacts(package_id: str) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    registry = _load_artifact_registry(package_id)
+    registry["storage"] = _storage_info(package_id).model_dump()
+    return registry
+
+
+@app.get("/api/source-package/{package_id}/query/imagery")
+async def query_package_imagery(package_id: str) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    artifacts = _registry_artifacts_by_prefix(
+        package_id,
+        source_ids={"naip", "sentinel_2", "usgs_imagery_only", "nrl_naip_conus"},
+    )
+    indexes: list[dict[str, object]] = []
+    for artifact in artifacts:
+        if str(artifact.get("artifact_type") or "").endswith("_index"):
+            index = _read_json(_artifact_file(package_id, artifact))
+            if index:
+                indexes.append(index)
+    return {
+        "package_id": package_id,
+        "artifacts": artifacts,
+        "indexes": indexes,
+        "query_interfaces": [
+            "GET /api/source-package/{package_id}/query/imagery",
+            "GET /api/source-package/{package_id}/query/imagery/files/{relative_path}",
+        ],
+        "storage": _storage_info(package_id).model_dump(),
+    }
+
+
+@app.get("/api/source-package/{package_id}/query/imagery/files/{relative_path:path}")
+async def get_package_imagery_file(package_id: str, relative_path: str) -> FileResponse:
+    return _package_file_response(package_id, relative_path, allowed_roots=("imagery", "tiles"))
+
+
+@app.get("/api/source-package/{package_id}/query/osm")
+async def query_package_osm(package_id: str) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    artifacts = _registry_artifacts_by_prefix(package_id, source_ids={"osm_extract"})
+    indexes: list[dict[str, object]] = []
+    for artifact in artifacts:
+        if str(artifact.get("artifact_type") or "").endswith("_index"):
+            index = _read_json(_artifact_file(package_id, artifact))
+            if index:
+                indexes.append(index)
+    return {
+        "package_id": package_id,
+        "artifacts": artifacts,
+        "indexes": indexes,
+        "query_interfaces": [
+            "osmium tags-filter",
+            "pyosmium scan",
+            "valhalla_build_tiles",
+            "GET /api/source-package/{package_id}/query/osm/files/{relative_path}",
+        ],
+        "storage": _storage_info(package_id).model_dump(),
+    }
+
+
+@app.get("/api/source-package/{package_id}/query/osm/files/{relative_path:path}")
+async def get_package_osm_file(package_id: str, relative_path: str) -> FileResponse:
+    return _package_file_response(package_id, relative_path, allowed_roots=("vectors/osm",))
+
+
+@app.get("/api/source-package/{package_id}/query/cesium")
+async def query_package_cesium(package_id: str) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    index_path = _package_dir(package_id) / "cesium" / "archive" / "cesium_archive_index.json"
+    index = _read_json(index_path)
+    if index is None:
+        raise HTTPException(status_code=404, detail="Cesium archive index not found for this package.")
+    registry = _load_artifact_registry(package_id)
+    artifacts = [
+        artifact
+        for artifact in registry.get("artifacts", [])
+        if isinstance(artifact, dict)
+        and str(artifact.get("artifact_type") or "").startswith("cesium_")
+    ]
+    return {
+        "package_id": package_id,
+        "index": index,
+        "artifacts": artifacts,
+        "storage": _storage_info(package_id).model_dump(),
+    }
+
+
+@app.get("/api/source-package/{package_id}/query/cesium/files/{relative_path:path}")
+async def get_package_cesium_file(package_id: str, relative_path: str) -> FileResponse:
+    return _package_file_response(package_id, relative_path, allowed_roots=("cesium",))
+
+
+@app.post("/api/source-package/{package_id}/query/terrain")
+async def query_package_terrain(
+    package_id: str,
+    request: TerrainQueryRequest,
+) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    grid, bbox, cell_size, artifact = _load_package_terrain_grid(
+        package_id,
+        max_cells=request.max_cells,
+    )
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+    if request.query_type == "sample":
+        if request.lat is None or request.lon is None:
+            raise HTTPException(status_code=422, detail="lat and lon are required for sample queries.")
+        row, col = _coord_to_cell(request.lat, request.lon, bbox, rows, cols)
+        return {
+            "package_id": package_id,
+            "query_type": "sample",
+            "artifact": artifact.get("relative_path"),
+            "lat": request.lat,
+            "lon": request.lon,
+            "row": row,
+            "col": col,
+            "elevation_m": grid[row][col],
+            "bbox": bbox,
+            "cell_size_m": cell_size,
+        }
+    if request.query_type == "window":
+        window_bbox = request.bbox
+        if window_bbox is None:
+            raise HTTPException(status_code=422, detail="bbox is required for window queries.")
+        north_west = _coord_to_cell(window_bbox.north, window_bbox.west, bbox, rows, cols)
+        south_east = _coord_to_cell(window_bbox.south, window_bbox.east, bbox, rows, cols)
+        row_min, row_max = sorted((north_west[0], south_east[0]))
+        col_min, col_max = sorted((north_west[1], south_east[1]))
+        window = [row[col_min : col_max + 1] for row in grid[row_min : row_max + 1]]
+        cell_count = len(window) * (len(window[0]) if window else 0)
+        if cell_count > request.max_cells:
+            raise HTTPException(status_code=413, detail="Terrain window exceeds max_cells.")
+        return {
+            "package_id": package_id,
+            "query_type": "window",
+            "artifact": artifact.get("relative_path"),
+            "bbox": window_bbox.model_dump(),
+            "row_range": [row_min, row_max],
+            "col_range": [col_min, col_max],
+            "elevation_grid": window,
+            "cell_size_m": cell_size,
+        }
+
+    values = [
+        float(value)
+        for row in grid
+        for value in row
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    return {
+        "package_id": package_id,
+        "query_type": "summary",
+        "artifact": artifact.get("relative_path"),
+        "bbox": bbox,
+        "rows": rows,
+        "cols": cols,
+        "cell_size_m": cell_size,
+        "min_elevation_m": min(values) if values else None,
+        "max_elevation_m": max(values) if values else None,
+        "mean_elevation_m": sum(values) / len(values) if values else None,
+    }
+
+
+@app.get("/api/source-package/{package_id}/query/terrain/files/{relative_path:path}")
+async def get_package_terrain_file(package_id: str, relative_path: str) -> FileResponse:
+    return _package_file_response(package_id, relative_path, allowed_roots=("rasters", "samples"))
+
+
+@app.post("/api/source-package/{package_id}/algorithm")
+async def run_package_algorithm(
+    package_id: str,
+    request: AlgorithmRequest,
+) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    return _run_algorithm(package_id, request)
+
+
+@app.post("/api/source-package/{package_id}/route")
+async def create_package_route(
+    package_id: str,
+    request: PackageRouteRequest,
+) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    if _load_package_manifest(package_id) is None:
+        raise HTTPException(status_code=404, detail="Source package manifest not found.")
+    return _build_route_from_package(package_id, request)
+
+
+@app.post("/api/source-package/{package_id}/cot")
+async def create_package_cot(
+    package_id: str,
+    request: PackageCotRequest,
+) -> dict[str, object]:
+    package_id = _safe_package_id(package_id)
+    route_artifact = _load_route_artifact(package_id, request.route_id) if request.route_id else None
+    route = request.route or (route_artifact or {}).get("route")
+    if not isinstance(route, dict):
+        raise HTTPException(status_code=422, detail="route or route_id is required.")
+    route_id = request.route_id or str(route.get("properties", {}).get("route_id") or f"TERA-{uuid4().hex[:10]}")
+    rationale = request.rationale
+    if route_artifact and isinstance(route_artifact.get("rationale"), str):
+        rationale = str(route_artifact["rationale"])
+    coordinates = route.get("geometry", {}).get("coordinates", [])
+    if not coordinates:
+        raise HTTPException(status_code=422, detail="Route geometry must contain coordinates.")
+
+    events: list[dict[str, object]] = []
+    cot_type_code = "b-m-r" if request.cot_type == "route" else "a-f-G-U-C"
+    event_coords = [coordinates[-1]] if request.cot_type == "route" else coordinates
+    for index, coordinate in enumerate(event_coords):
+        lon = float(coordinate[0])
+        lat = float(coordinate[1])
+        uid = route_id if request.cot_type == "route" else f"{route_id}-track-{index:03d}"
+        cot_xml = _build_cot_xml(
+            uid=uid,
+            cot_type=cot_type_code,
+            lat=lat,
+            lon=lon,
+            route=route,
+        )
+        signed_xml, signed = _sign_cot_xml(
+            uid=uid,
+            lat=lat,
+            lon=lon,
+            route=route,
+            rationale=rationale,
+            mission_type=request.mission_type,
+            cot_xml=cot_xml,
+        )
+        cot_path = _cot_dir(package_id) / f"{_safe_package_id(uid)}.cot.xml"
+        cot_path.parent.mkdir(parents=True, exist_ok=True)
+        cot_path.write_text(signed_xml, encoding="utf-8")
+        events.append(
+            {
+                "uid": uid,
+                "cot_type": cot_type_code,
+                "path": str(cot_path),
+                "relative_path": cot_path.relative_to(_package_dir(package_id)).as_posix(),
+                "signed": True,
+                "signature_scheme": signed.get("algorithm"),
+                "key_id": signed.get("key_id"),
+                "cot_xml": signed_xml,
+            }
+        )
+
+    response = {
+        "package_id": package_id,
+        "route_id": route_id,
+        "route_hash": _route_hash(route),
+        "cot_type": request.cot_type,
+        "approval_state": "provisional",
+        "atak_display": "Suggested Route - Needs Review",
+        "events": events,
+    }
+    _write_json(_cot_dir(package_id) / f"{_safe_package_id(route_id)}-{request.cot_type}.json", response)
+    return response
 
 
 @app.post("/api/prompt", response_model=PromptResponse)

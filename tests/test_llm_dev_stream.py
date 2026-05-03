@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import pytest
 
 from llm_dev_kmh import app as kmh_app
+from llm_dev_kmh import geo_algorithms
 
 
 class _FakeStreamContext:
@@ -118,7 +120,7 @@ async def test_prompt_stream_can_use_claude_provider(monkeypatch: pytest.MonkeyP
         kmh_app.PromptRequest(
             prompt="Recommend sources.",
             llm_provider="claude",
-            cloud_model="Claude Sonnet 4.6",
+            cloud_model="Claude Sonnet 4",
             cloud_api_key="sk-ant-test",
         )
     )
@@ -132,7 +134,8 @@ async def test_prompt_stream_can_use_claude_provider(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_prompt_stream_reports_missing_claude_key() -> None:
+async def test_prompt_stream_reports_missing_claude_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     response = await kmh_app.prompt_ollama_stream(
         kmh_app.PromptRequest(
             prompt="Recommend sources.",
@@ -145,6 +148,29 @@ async def test_prompt_stream_reports_missing_claude_key() -> None:
 
     assert '"type": "error"' in body
     assert "Claude API key required" in body
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_uses_server_claude_key_when_browser_key_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FakeAsyncClient.response = _ClaudeResponse()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-test")
+    monkeypatch.setattr(kmh_app.httpx, "AsyncClient", _FakeAsyncClient)
+
+    response = await kmh_app.prompt_ollama_stream(
+        kmh_app.PromptRequest(
+            prompt="Recommend sources.",
+            llm_provider="claude",
+            cloud_model="Claude Sonnet 4",
+        )
+    )
+
+    body = await _collect_stream(response)
+
+    assert '"provider": "claude"' in body
+    assert "Claude source recommendation." in body
+    assert '"type": "done"' in body
 
 
 def test_imagery_sourcing_prompt_uses_socratic_dialogue() -> None:
@@ -211,8 +237,8 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         'id="claudeModelSelect"',
         'id="claudeApiKeyInput"',
         "Claude API",
-        "claude-sonnet-4-6",
-        "Claude Sonnet 4.6",
+        "claude-sonnet-4-20250514",
+        "Claude Sonnet 4",
     ]:
         assert token in html
 
@@ -228,6 +254,7 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "teraLlmProvider",
         "teraClaudeApiKey",
         "serverClaudeKeyAvailable",
+        "hasClaudeProviderCredential",
         "anthropic_api_key_configured",
         "applyProviderSelection",
         "void loadModels();",
@@ -244,9 +271,11 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "ANTHROPIC_VERSION",
         "CLAUDE_MODEL",
         "CLAUDE_MODEL_ALIASES",
+        "CLAUDE_MODEL_FALLBACKS",
         "claude_default_model",
         "anthropic_api_key_configured",
         "_normalize_claude_model",
+        "_claude_model_candidates",
         "_select_ollama_default_model",
         "Auto-detected installed Gemma model",
         "_post_claude_message",
@@ -256,9 +285,9 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
 
 
 def test_claude_model_labels_normalize_to_current_sonnet() -> None:
-    assert kmh_app._normalize_claude_model("Claude Sonnet 4.6") == "claude-sonnet-4-6"
-    assert kmh_app._normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-6"
-    assert kmh_app._normalize_claude_model("claude-sonnet-4-20250514") == "claude-sonnet-4-6"
+    assert kmh_app._normalize_claude_model("Claude Sonnet 4.6") == "claude-sonnet-4-20250514"
+    assert kmh_app._normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-20250514"
+    assert kmh_app._normalize_claude_model("claude-sonnet-4-20250514") == "claude-sonnet-4-20250514"
 
 
 def test_local_model_detection_prefers_installed_gemma_alias() -> None:
@@ -422,7 +451,7 @@ def test_prompt_submission_tries_selected_provider_then_local_then_deterministic
     assert "streamAssistantProvider" in js
     assert "resolveLocalModelForFallback" in js
     assert "Trying local model fallback" in js
-    assert "Claude request failed. Check key, model access, or network." in js
+    assert "Claude request failed; trying detected local Ollama." in js
     assert "deterministic planner response" in js
     assert "Model providers unavailable; deterministic planner response shown." in js
     assert 'provider === "ollama" && !state.localModelAvailable' not in js
@@ -450,19 +479,561 @@ def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
     assert source.category == "terrain"
     assert source.stream_status == "queryable-online"
     assert source.download_status == "download-required"
+    assert source.download_methods
+    assert source.jetson_query_formats
+    assert source.source_url == kmh_app.ESRI_WORLD_ELEVATION_TERRAIN_URL
+    assert "dem_cog" in source.derived_layers
     assert "elevation_samples" in source.derived_layers
     assert "esri_world_elevation" in js
     assert "Esri World Elevation Terrain" in js
     assert "queryable-online" in js
     assert "download-required" in js
-    assert "Esri World Elevation Terrain is a queryable online fallback" in prompt
+    assert "Copernicus DEM GLO-30 COGs are the planner's primary" in prompt
 
     recommendation = kmh_app._infer_source_recommendation(
         "Need a terrain route that avoids steep exposed terrain.",
         None,
     )
-    assert "esri_world_elevation" in recommendation.required_source_ids
-    assert "esri_world_elevation" in recommendation.selected_source_ids
+    assert "copernicus_dem" in recommendation.required_source_ids
+    assert "dted_earth_explorer" in recommendation.optional_source_ids
+    assert "copernicus_dem" in recommendation.selected_source_ids
+
+
+def test_esri_imagery_exports_use_official_export_tiles_contract() -> None:
+    source = kmh_app.SOURCE_BY_ID["esri_world_imagery"]
+
+    assert source.download_status == "export-tiles-with-account"
+    assert source.download_methods
+    export_method = source.download_methods[0]
+    assert export_method.endpoint.endswith("/World_Imagery/MapServer/exportTiles")
+    assert export_method.params["tilePackage"] == "true"
+    assert export_method.params["token"] == "${ESRI_ARCGIS_TOKEN}"
+    assert export_method.requires_account is True
+    assert source.jetson_query_formats[0].artifact_type == "esri_tpkx_imagery_package"
+
+
+def test_free_imagery_sources_use_sentinel_and_wintak_tile_caches() -> None:
+    sentinel = kmh_app.SOURCE_BY_ID["sentinel_2"]
+    naip = kmh_app.SOURCE_BY_ID["naip"]
+    usgs = kmh_app.SOURCE_BY_ID["usgs_imagery_only"]
+    nrl = kmh_app.SOURCE_BY_ID["nrl_naip_conus"]
+    osm = kmh_app.SOURCE_BY_ID["osm_extract"]
+    copernicus = kmh_app.SOURCE_BY_ID["copernicus_dem"]
+    dted = kmh_app.SOURCE_BY_ID["dted_earth_explorer"]
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    prompt = (
+        Path("prompts/local_model_prompts/imagery_sourcing_local_model_system_prompt.md")
+        .read_text(encoding="utf-8")
+    )
+
+    assert naip.download_methods[0].id == "naip_aws_public_prefix"
+    assert naip.download_methods[0].params["bucket"] == "{naip_aws_bucket}"
+    assert naip.download_methods[0].params["prefix"] == "{naip_s3_prefix}"
+    assert naip.jetson_query_formats[0].artifact_type == "naip_imagery_index"
+    assert sentinel.download_methods[0].endpoint == kmh_app.EARTH_SEARCH_STAC_SEARCH_URL
+    assert sentinel.download_methods[0].params["collections"] == ["sentinel-2-l2a"]
+    assert sentinel.download_methods[0].requires_token_env is None
+    assert sentinel.jetson_query_formats[0].artifact_type == "sentinel2_cog_band_stack"
+    assert osm.download_methods[0].id == "osm_geofabrik_pbf"
+    assert osm.download_methods[0].params["region_url"] == "{geofabrik_osm_pbf_url}"
+    assert copernicus.download_methods[0].id == "copernicus_dem_glo30_cog"
+    assert copernicus.download_methods[0].params["tile_urls"] == "{copernicus_dem_tile_urls}"
+    assert dted.download_methods[0].id == "dted_earthexplorer_import_convert"
+    assert dted.download_status == "manual-stage-import"
+    assert usgs.download_methods[0].id == "usgs_imagery_tile_cache"
+    assert usgs.download_methods[0].requires_token_env is None
+    assert "basemap.nationalmap.gov" in usgs.source_url
+    assert nrl.download_methods[0].id == "nrl_naip_tile_cache"
+    assert "geoint.nrlssc.navy.mil" in nrl.source_url
+    assert "NAIP is the high-detail U.S. imagery default" in js
+    assert "NAIP is the U.S. downloadable default" in prompt
+
+
+def test_naip_osm_and_copernicus_download_params_are_aoi_scoped() -> None:
+    bounds = kmh_app.ViewBounds(
+        west=-117.5,
+        south=36.0,
+        east=-114.0,
+        north=38.5,
+        center_lat=37.2,
+        center_lon=-116.0,
+    )
+
+    assert kmh_app._naip_state_code(bounds) == "nv"
+    assert kmh_app._naip_s3_prefix(bounds) == "nv/2022/60cm/rgbir/"
+    assert kmh_app._geofabrik_region_slug(bounds) == "north-america/us/nevada"
+    assert kmh_app._geofabrik_osm_pbf_url(bounds).endswith(
+        "/north-america/us/nevada-latest.osm.pbf"
+    )
+
+    tiles = kmh_app._copernicus_dem_tiles(bounds)
+    tile_ids = {tile["tile_id"] for tile in tiles}
+    assert "Copernicus_DSM_COG_10_N36_00_W118_00_DEM" in tile_ids
+    assert "Copernicus_DSM_COG_10_N38_00_W115_00_DEM" in tile_ids
+
+
+def test_cesium_sources_are_stream_only_not_offline_downloads() -> None:
+    imagery = kmh_app.SOURCE_BY_ID["cesium_world_imagery"]
+    terrain = kmh_app.SOURCE_BY_ID["cesium_world_terrain"]
+    archive = kmh_app.SOURCE_BY_ID["cesium_ion_archive"]
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert imagery.download_status == "stream-only-no-offline-copy"
+    assert terrain.download_status == "stream-only-no-offline-copy"
+    assert imagery.download_methods == []
+    assert terrain.download_methods == []
+    assert archive.download_status == "download-required"
+    assert {method.id for method in archive.download_methods} == {
+        "cesium_ion_archive_download",
+        "cesium_ion_clip_create_download",
+    }
+    assert archive.download_methods[0].endpoint == kmh_app.CESIUM_ION_ARCHIVE_DOWNLOAD_URL
+    assert archive.download_methods[0].params["archive_id"] == "${CESIUM_ION_ARCHIVE_ID}"
+    assert archive.download_methods[0].params["token"] == "${CESIUM_ION_TOKEN}"
+    assert archive.jetson_query_formats[0].artifact_type == "cesium_offline_archive_index"
+    assert 'download_status: "stream-only-no-offline-copy"' in js
+    assert "cesium_ion_archive" in js
+
+
+def test_cesium_archive_manifest_uses_configured_archive_or_clip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bounds = kmh_app.ViewBounds(west=-122.5, south=37.7, east=-122.4, north=37.8)
+    source = kmh_app.SOURCE_BY_ID["cesium_ion_archive"]
+
+    monkeypatch.delenv("CESIUM_ION_ARCHIVE_ID", raising=False)
+    monkeypatch.delenv("CESIUM_ARCHIVE_ID", raising=False)
+    monkeypatch.delenv("CESIUM_ION_ASSET_IDS", raising=False)
+    assert kmh_app._build_source_download_operations(
+        package_id="pkgcesium",
+        sources=[source],
+        bounds=bounds,
+    ) == []
+
+    monkeypatch.setenv("CESIUM_ION_ARCHIVE_ID", "123")
+    operations = kmh_app._build_source_download_operations(
+        package_id="pkgcesium",
+        sources=[source],
+        bounds=bounds,
+    )
+    assert [operation["id"] for operation in operations] == ["cesium_ion_archive_download"]
+    assert operations[0]["params"]["archive_id"] == "${CESIUM_ION_ARCHIVE_ID}"
+
+    monkeypatch.delenv("CESIUM_ION_ARCHIVE_ID", raising=False)
+    monkeypatch.setenv("CESIUM_ION_ASSET_IDS", "1001,1002")
+    operations = kmh_app._build_source_download_operations(
+        package_id="pkgcesium",
+        sources=[source],
+        bounds=bounds,
+    )
+    assert [operation["id"] for operation in operations] == ["cesium_ion_clip_create_download"]
+    assert operations[0]["params"]["asset_ids"] == "${CESIUM_ION_ASSET_IDS}"
+    assert operations[0]["params"]["clip_region"] == pytest.approx(
+        [
+            -2.138028333693054,
+            0.6579891280011934,
+            -2.1362820044410597,
+            0.659734457253188,
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_cesium_archive_index_is_queryable_from_jetson(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    package_id = "pkgcesium"
+    manifest = {"package_id": package_id, "package_name": package_id, "download_operations": []}
+    kmh_app.PACKAGE_MANIFESTS[package_id] = manifest
+    kmh_app._persist_package_manifest(package_id, manifest)
+    archive_path = (
+        kmh_app._package_dir(package_id)
+        / "cesium"
+        / "archive"
+        / "cesium_ion_archive.zip"
+    )
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "tileset.json",
+            json.dumps({"asset": {"version": "1.1"}, "root": {"refine": "ADD"}}),
+        )
+        archive.writestr(
+            "terrain/layer.json",
+            json.dumps({"format": "quantized-mesh-1.0", "version": "1.0"}),
+        )
+
+    operation = {
+        "id": "cesium_ion_archive_download",
+        "source_id": "cesium_ion_archive",
+        "source_name": "Cesium ion Offline Archive",
+        "output_format": "Cesium archive ZIP",
+    }
+    index_path, index = kmh_app._index_cesium_archive(
+        package_id=package_id,
+        operation=operation,
+        archive_path=archive_path,
+        archive_info={"id": 123, "status": "COMPLETE", "format": "ZIP"},
+    )
+
+    response = await kmh_app.query_package_cesium(package_id)
+    file_response = await kmh_app.get_package_cesium_file(
+        package_id,
+        "cesium/archive/extracted/tileset.json",
+    )
+
+    assert index_path.exists()
+    assert index["tilesets"][0]["asset_version"] == "1.1"
+    assert index["terrain_layers"][0]["format"] == "quantized-mesh-1.0"
+    assert response["index"]["archive_id"] == 123
+    assert str(file_response.path).endswith("tileset.json")
+
+
+@pytest.mark.asyncio
+async def test_package_imagery_osm_and_terrain_files_are_served_to_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    package_id = "pkgdata"
+    manifest = {"package_id": package_id, "package_name": package_id, "download_operations": []}
+    kmh_app.PACKAGE_MANIFESTS[package_id] = manifest
+    kmh_app._persist_package_manifest(package_id, manifest)
+    package_dir = kmh_app._package_dir(package_id)
+    imagery_index = package_dir / "imagery" / "naip" / "aws" / "naip_index.json"
+    osm_index = package_dir / "vectors" / "osm" / "osm_index.json"
+    terrain_tif = package_dir / "rasters" / "copernicus_dem" / "tile.tif"
+    for path in (imagery_index, osm_index, terrain_tif):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    imagery_index.write_text(json.dumps({"files": []}), encoding="utf-8")
+    osm_index.write_text(json.dumps({"aoi_pbf": "vectors/osm/aoi.osm.pbf"}), encoding="utf-8")
+    terrain_tif.write_bytes(b"tif")
+    registry = kmh_app._empty_artifact_registry(package_id)
+    registry["artifacts"].extend(
+        [
+            {
+                "source_id": "naip",
+                "artifact_type": "naip_imagery_index",
+                "relative_path": imagery_index.relative_to(package_dir).as_posix(),
+            },
+            {
+                "source_id": "osm_extract",
+                "artifact_type": "osm_query_index",
+                "relative_path": osm_index.relative_to(package_dir).as_posix(),
+            },
+            {
+                "source_id": "copernicus_dem",
+                "artifact_type": "copernicus_dem_cog",
+                "relative_path": terrain_tif.relative_to(package_dir).as_posix(),
+            },
+        ]
+    )
+    kmh_app._save_artifact_registry(package_id, registry)
+
+    imagery = await kmh_app.query_package_imagery(package_id)
+    osm = await kmh_app.query_package_osm(package_id)
+    imagery_file = await kmh_app.get_package_imagery_file(
+        package_id,
+        "imagery/naip/aws/naip_index.json",
+    )
+    osm_file = await kmh_app.get_package_osm_file(package_id, "vectors/osm/osm_index.json")
+    terrain_file = await kmh_app.get_package_terrain_file(
+        package_id,
+        "rasters/copernicus_dem/tile.tif",
+    )
+
+    assert imagery["artifacts"][0]["artifact_type"] == "naip_imagery_index"
+    assert osm["artifacts"][0]["artifact_type"] == "osm_query_index"
+    assert str(imagery_file.path).endswith("naip_index.json")
+    assert str(osm_file.path).endswith("osm_index.json")
+    assert str(terrain_file.path).endswith("tile.tif")
+
+
+def test_jetson_storage_reserve_is_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class Usage:
+        total = 100 * 1024 * 1024 * 1024
+        used = 40 * 1024 * 1024 * 1024
+        free = 60 * 1024 * 1024 * 1024
+
+    monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    monkeypatch.setenv("PACKAGE_MIN_FREE_GB", "10")
+    monkeypatch.setattr(kmh_app.shutil, "disk_usage", lambda _path: Usage)
+
+    storage = kmh_app._storage_info()
+
+    assert storage.package_root == str((tmp_path / "packages").resolve())
+    assert storage.reserved_bytes == 10 * 1024 * 1024 * 1024
+    assert storage.usable_bytes == 50 * 1024 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_source_package_plan_persists_manifest_and_storage_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    request = kmh_app.DownloadPlanRequest(
+        source_ids=["naip", "osm_extract", "copernicus_dem"],
+        mission_focus="terrain-routing",
+        map_context=kmh_app.MapContext(
+            selected_area=kmh_app.ViewBounds(
+                west=-122.52,
+                south=37.70,
+                east=-122.35,
+                north=37.84,
+                center_lat=37.77,
+                center_lon=-122.43,
+            ),
+            location_confirmed=True,
+        ),
+    )
+
+    response = await kmh_app.plan_source_package(request)
+
+    assert response.execute_url.endswith(f"/api/source-package/{response.package_id}/execute")
+    assert response.status_url.endswith(f"/api/source-package/{response.package_id}/status")
+    assert response.artifacts_url.endswith(f"/api/source-package/{response.package_id}/artifacts")
+    assert response.estimated_bytes > 0
+    assert (tmp_path / "packages" / response.package_id / "manifest.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_package_execution_writes_jetson_artifacts_without_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    request = kmh_app.DownloadPlanRequest(
+        source_ids=["naip", "osm_extract", "copernicus_dem"],
+        mission_focus="terrain-routing",
+        map_context=kmh_app.MapContext(
+            selected_area=kmh_app.ViewBounds(
+                west=-122.52,
+                south=37.70,
+                east=-122.35,
+                north=37.84,
+            ),
+            location_confirmed=True,
+        ),
+    )
+    sources = kmh_app._get_source_options_by_ids(request.source_ids)
+    manifest = kmh_app._build_package_manifest(
+        package_id="pkgexec",
+        package_name="pkgexec",
+        request=request,
+        sources=sources,
+    )
+    kmh_app.PACKAGE_MANIFESTS["pkgexec"] = manifest
+    kmh_app._persist_package_manifest("pkgexec", manifest)
+    kmh_app._save_package_status("pkgexec", kmh_app._initial_package_status("pkgexec", manifest))
+
+    async def fake_execute_operation(
+        _client: object,
+        *,
+        package_id: str,
+        manifest: dict[str, object],
+        operation: dict[str, object],
+    ) -> list[dict[str, object]]:
+        path = kmh_app._artifact_path(package_id, operation["local_artifact"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"offline artifact")
+        return [
+            kmh_app._artifact_record(
+                package_id=package_id,
+                operation=operation,
+                path=path,
+                artifact_type="mock_artifact",
+                output_format=str(operation.get("output_format", "mock")),
+            )
+        ]
+
+    monkeypatch.setattr(kmh_app, "_execute_operation", fake_execute_operation)
+
+    await kmh_app._execute_package_job("pkgexec", manifest)
+
+    status = kmh_app._load_package_status("pkgexec")
+    registry = kmh_app._load_artifact_registry("pkgexec")
+    registry_text = json.dumps(registry)
+
+    assert status["state"] == "succeeded"
+    assert registry["artifacts"]
+    assert "${ESRI_ARCGIS_TOKEN}" not in registry_text
+
+
+def _seed_grid_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    package_id = "pkggrid"
+    manifest = {"package_id": package_id, "package_name": package_id, "download_operations": []}
+    kmh_app.PACKAGE_MANIFESTS[package_id] = manifest
+    kmh_app._persist_package_manifest(package_id, manifest)
+    grid_path = kmh_app._package_dir(package_id) / "rasters" / "esri_world_elevation" / "grid.json"
+    grid_path.parent.mkdir(parents=True, exist_ok=True)
+    grid_path.write_text(
+        json.dumps(
+            {
+                "elevation_grid": [[10, 11, 12], [9, 10, 14], [8, 9, 15]],
+                "bbox": {"west": -122.5, "south": 37.7, "east": -122.4, "north": 37.8},
+                "cell_size_m": 30,
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = kmh_app._empty_artifact_registry(package_id)
+    registry["artifacts"].append(
+        {
+            "artifact_id": "grid",
+            "source_id": "esri_world_elevation",
+            "source_name": "Esri World Elevation Terrain",
+            "operation_id": "seed",
+            "artifact_type": "elevation_grid_json",
+            "format": "JSON elevation grid",
+            "path": str(grid_path),
+            "relative_path": grid_path.relative_to(kmh_app._package_dir(package_id)).as_posix(),
+            "bytes": grid_path.stat().st_size,
+            "sha256": kmh_app._sha256_file(grid_path),
+            "query_interfaces": ["sample_dem(lat, lon)", "read_window(west, south, east, north)"],
+            "feeds_algorithms": ["terrain_derivatives", "raster_cost_distance", "viewshed"],
+            "metadata": {},
+        }
+    )
+    kmh_app._save_artifact_registry(package_id, registry)
+    return package_id
+
+
+@pytest.mark.asyncio
+async def test_package_terrain_query_algorithm_route_and_cot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package_id = _seed_grid_package(tmp_path, monkeypatch)
+    monkeypatch.setenv("WAYFINDER_KEY_DIR", str(tmp_path / "keys"))
+    monkeypatch.setenv("WAYFINDER_HMAC_KEY", "test-only-dev-signing-key")
+
+    sample = await kmh_app.query_package_terrain(
+        package_id,
+        kmh_app.TerrainQueryRequest(query_type="sample", lat=37.75, lon=-122.45),
+    )
+    algorithm = await kmh_app.run_package_algorithm(
+        package_id,
+        kmh_app.AlgorithmRequest(algorithm_id="terrain_derivatives"),
+    )
+    route = await kmh_app.create_package_route(
+        package_id,
+        kmh_app.PackageRouteRequest(
+            start=kmh_app.MapPoint(lat=37.79, lon=-122.49),
+            end=kmh_app.MapPoint(lat=37.71, lon=-122.41),
+        ),
+    )
+    cot = await kmh_app.create_package_cot(
+        package_id,
+        kmh_app.PackageCotRequest(route_id=route["route_id"], cot_type="route"),
+    )
+
+    assert sample["elevation_m"] == 10.0
+    assert "slope_degrees" in algorithm["layers"]
+    assert route["route"]["geometry"]["type"] == "LineString"
+    assert route["route_hash"]
+    assert cot["events"][0]["signed"] is True
+    assert "<wayfinder>" in cot["events"][0]["cot_xml"]
+
+
+def test_source_package_manifest_contains_download_jobs_and_algorithm_contracts() -> None:
+    request = kmh_app.DownloadPlanRequest(
+        source_ids=["naip", "osm_extract", "copernicus_dem"],
+        mission_focus="terrain-routing",
+        map_context=kmh_app.MapContext(
+            selected_area=kmh_app.ViewBounds(
+                west=-122.52,
+                south=37.70,
+                east=-122.35,
+                north=37.84,
+                center_lat=37.77,
+                center_lon=-122.43,
+            ),
+            location_confirmed=True,
+        ),
+    )
+    sources = kmh_app._get_source_options_by_ids(request.source_ids)
+    manifest = kmh_app._build_package_manifest(
+        package_id="pkgtest",
+        package_name="pkgtest",
+        request=request,
+        sources=sources,
+    )
+
+    operations = {operation["id"]: operation for operation in manifest["download_operations"]}
+    assert "naip_aws_public_prefix" in operations
+    assert "osm_geofabrik_pbf" in operations
+    assert "copernicus_dem_glo30_cog" in operations
+    assert operations["naip_aws_public_prefix"]["params"]["state"] == "ca"
+    assert operations["naip_aws_public_prefix"]["params"]["prefix"] == "ca/2022/60cm/rgbir/"
+    assert operations["osm_geofabrik_pbf"]["params"]["region_slug"] == "north-america/us/california"
+    assert operations["copernicus_dem_glo30_cog"]["params"]["tile_urls"][0]["tile_id"].startswith(
+        "Copernicus_DSM_COG_10_N37_00_W123_00_DEM"
+    )
+    assert any(item["id"] == "raster_cost_distance" for item in manifest["deterministic_algorithms"])
+    assert any(
+        contract["artifact_type"] == "copernicus_dem_cog_index"
+        for contract in manifest["jetson_query_contracts"]
+    )
+    assert any(
+        contract["artifact_type"] == "osm_pbf_extract"
+        for contract in manifest["jetson_query_contracts"]
+    )
+
+
+def test_web_package_workflow_shows_jetson_storage_and_server_download() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "Jetson Storage" in html
+    assert 'id="downloadToJetsonBtn"' in html
+    assert "Download to Jetson" in html
+    assert 'id="packageExecutionStatus"' in html
+    assert 'id="packageArtifacts"' in html
+    assert 'fetchJson("/api/storage")' in js
+    assert "downloadPackageToJetson" in js
+    assert "state.packagePlan.execute_url" in js
+    assert "renderJetsonStorage(data.storage, data.estimated_bytes, data.storage_fit" in js
+
+
+def test_geo_algorithms_cover_graph_raster_and_terrain_paths() -> None:
+    graph = {
+        "A": [("B", 1.0), ("C", 4.0)],
+        "B": [("C", 1.0), ("D", 4.0)],
+        "C": [("D", 1.0)],
+        "D": [],
+    }
+
+    path, cost = geo_algorithms.astar(graph, "A", "D")
+    assert path == ["A", "B", "C", "D"]
+    assert cost == 3.0
+
+    alternatives = geo_algorithms.yens_k_shortest_paths(graph, "A", "D", 2)
+    assert alternatives[0][0] == ["A", "B", "C", "D"]
+    assert len(alternatives) == 2
+
+    elevation = [
+        [14, 13, 12],
+        [15, 12, 9],
+        [16, 12, 8],
+    ]
+    terrain = geo_algorithms.derive_terrain_layers(elevation, cell_size_m=30)
+    assert terrain["slope_degrees"][1][1] > 0
+    assert "curvature" in terrain
+    cost_surface = geo_algorithms.build_walking_cost_surface(terrain["slope_degrees"])
+    result = geo_algorithms.raster_cost_distance(cost_surface, [(0, 0)])
+    cell_path = geo_algorithms.backtrack_least_cost_path(result, (2, 2))
+    assert cell_path[0] == (0, 0)
+    assert cell_path[-1] == (2, 2)
+    assert geo_algorithms.flow_accumulation_d8(elevation, cell_size_m=30)[2][2] >= 1
+    assert geo_algorithms.viewshed(elevation, (0, 0), cell_size_m=30)[0][0] is True
+    sectors = geo_algorithms.radial_sar_sectors(37.77, -122.43, 1000, 4)
+    assert len(sectors["features"]) == 4
+    probability = geo_algorithms.sar_probability_surface(3, 3, (1, 1))
+    assert round(sum(sum(row) for row in probability), 6) == 1.0
 
 
 def test_chat_streaming_does_not_force_scroll_when_reader_moves_up() -> None:
@@ -590,11 +1161,8 @@ def test_source_recommendation_tolerates_rough_phrasing_and_spelling() -> None:
 
     assert recommendation.mission_focus in {"water-access", "terrain-routing"}
     assert "osm_extract" in recommendation.required_source_ids
-    assert "esri_world_elevation" in recommendation.required_source_ids
-    assert any(
-        source_id in recommendation.required_source_ids
-        for source_id in ("usgs_3dep", "copernicus_dem")
-    )
+    assert "copernicus_dem" in recommendation.required_source_ids
+    assert "dted_earth_explorer" in recommendation.optional_source_ids
     assert any(
         source_id in recommendation.required_source_ids
         for source_id in ("usgs_3dhp", "hydrosheds")
