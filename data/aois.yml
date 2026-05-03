@@ -1,0 +1,30 @@
+aois:
+  - name: sf
+    label: San Francisco demo AO
+    bbox:
+      west: -122.535
+      south: 37.690
+      east: -122.340
+      north: 37.835
+    route_profiles:
+      - foot
+      - foot_covered
+    osm_extract: data/extracts/sf.osm.pbf
+    dem: data/dem/sf.tif
+    cesium_cache: data/cache/cesium/sf
+    notes: Ferry Building to local freshwater fallback demo.
+  - name: austere
+    label: MWTC Bridgeport austere demo AO
+    bbox:
+      west: -119.720
+      south: 38.160
+      east: -119.360
+      north: 38.460
+    route_profiles:
+      - foot
+      - foot_covered
+      - vehicle_mrap
+    osm_extract: data/extracts/austere.osm.pbf
+    dem: data/dem/austere.tif
+    cesium_cache: data/cache/cesium/austere
+    notes: Mountain Warfare Training Center / Pickel Meadows proxy near Bridgeport.

@@ -34,10 +34,23 @@ Already on disk under different names? Rename in-place; nothing in this doc refe
 | # | Recorded | Title | Length (rough) | Local filename | YouTube URL | Script that produced it |
 |---|----------|-------|----------------|----------------|-------------|--------------------------|
 | S1 | Sat 22:54 | CoT Track Injection Demo — 3 scenarios (unsigned reject / tampered reject / signed accept) | ~60-90s | `2254-security-cot-inject-demo.mp4` *(currently on Satriyo's laptop as `satriyo_demo_security_1.mp4` — rename when moving into `docs/demo-clips/`)* | TBD | `security/cot_inject_demo.py` ・ `make inject-demo` |
+| S6 | TBD | Model Supply-Chain Integrity — `make model-integrity` happy path (4 Piper voice configs + Gemma manifest verified) → mutate one byte of `models/piper/en_US-ryan-high.onnx.json` → re-run, show red FAIL with expected/actual hash diff. ~20s total. | ~20s | `<HHMM>-security-model-integrity.mp4` *(not yet recorded — capture during Sun 0700-0900 alongside other security re-runs)* | TBD | `make model-integrity` ・ `security/model_integrity.py` (issue #57, PR #100) |
 | S2 | Sat 22:59 | Attack-Vector Rejection — 5 regression tests (issue #25) | ~45-60s | `2259-security-attack-vector-rejection.mp4` *(was `satriyo_security_demo_2.mp4`)* | TBD | `security/test_security_regressions.py` ・ `pytest security/test_security_regressions.py -v` |
 | S3 | Sat 23:00 | Sign Benchmark — 1000 ML-DSA-65 round-trips, 0.128 ms avg (39× under PRD §11.2 target) | ~30-45s | `2300-crypto-sign-bench.mp4` *(was `satriyo_security_demo_3.mp4`)* | TBD | `crypto/sign_bench.py` ・ `make sign-bench` |
 | S4 | Sat 23:02 | Security Scan — Bandit + pip-audit clean across all lanes | ~30-45s | `2302-security-scan.mp4` *(was `satriyo_security_demo_4.mp4`)* | TBD | `make security` |
 | S5 | Sat 23:04 | Structured Query Validator — live blocking of 3 attack types (injection / privesc / exfil) | ~30-45s | `2304-security-structured-query-validator.mp4` *(was `satriyo_security_demo_5.mp4`)* | TBD | `security/structured_query_validator.py` |
+| S6 | TBD (Sun AM) | **PS4 wow moment on the actual plugin wire** — tamper-reject recorded end-to-end through the ATAK plugin (no more stand-alone `curl`). PRD line 325: *"laptop on mesh attempts to inject unsigned track → ATAK rejects → Jetson generates signed route → ATAK accepts. **PS4 wow moment**."* Real because #102 wired the plugin to `/plan` and this PR's trust-list gate makes `Untrusted key_id - REJECTED` a *render* decision, not a post-hoc curl. | ~30s | `<HHMM>-security-plugin-tamper-reject.mov` | TBD | Manual ATAK plugin walkthrough + one-byte mutation (see recipe below) |
+
+<details>
+<summary><b>S6 recording recipe (5-line script, copy-paste into OBS notes)</b></summary>
+
+1. Operator types *"route to HLZ"* in the plugin → request hits `POST /plan` on `Jetson:8000` → signed `PlanResponse` returned → plugin auto-verifies via `POST /plan/verify` → green "Signature verified" check → route renders in the chat panel.
+2. Save the raw `PlanResponse` JSON that hit the plugin (OBS capture of the chat panel is enough; also pipe the Jetson stdout to a side terminal for receipt-of-truth).
+3. Mutate ONE byte of `signature.value_b64` in the saved response — or flip `signature.key_id` to `attacker-rogue-001` to trigger this PR's `Untrusted key_id - REJECTED` branch — and re-POST through `/plan/verify` from the same session.
+4. Plugin verify hop returns `valid=false` → **"Route signature invalid - REJECTED"** appears in the chat panel; the previously-rendered route is NOT re-rendered / is visibly struck through.
+5. Hold 2 seconds in silence on the red line, then cut. Total clip ≈ 30 seconds.
+
+</details>
 
 ### ATAK lane (P4 — Ben)
 
@@ -68,7 +81,7 @@ The 5-minute pitch (PRD §12) is the live show. **Recordings are insurance, not 
 | 0:30–1:30 problem + persona | None | n/a | Same. |
 | 1:30–2:15 SF live demo | Live `/plan` from ATAK plugin (#79 + #80) → blue line | **B1** if plugin chat doesn't show a response within 30s | Presenter B watches the chat scroll. No agent response by 0:30 elapsed → switch to B1, narrator says "the plugin is mid-build, here's the same demo from earlier tonight." |
 | 2:15–3:00 austere AO flip | Same plugin, different AOI | **B1** | Same rule. |
-| 3:00–3:30 PS4 wow moment | `make inject-demo` live | **S1** | If terminal hangs > 5s, presenter B Cmd-Tabs to S1 (already loaded in a media player). One-second cut, no apology. |
+| 3:00–3:30 PS4 wow moment | **Live plugin tamper-reject on the real wire** (PRD line 325). Operator hits the plugin's `/plan` button, then presenter mutates the signed response and shows the plugin's `Untrusted key_id - REJECTED` path firing. Fallback to `make inject-demo` if the plugin wire can't be exercised on stage. | **S6** primary; **S1** secondary | If the plugin tamper flow stalls > 5s, Cmd-Tab to **S6** (the same clip, pre-recorded). If S6 isn't cut yet, fall back to **S1**. One-second cut, no apology. |
 | 3:30–4:00 wow + offline proof | `tcpdump` window + airplane-mode toggle visible | **S3** + **S4** for evidence sound bites | If the `tcpdump` capture stalls, S3 + S4 cover the "we measured this and it's clean" beat. |
 | 4:00–4:30 novelty + competitive table | Single slide | **S2** for live evidence of the "5 attack vectors blocked" claim if asked | Q&A driven; not a switch, just have it loaded. |
 | 4:30–4:50 business model | Single slide | n/a | |
