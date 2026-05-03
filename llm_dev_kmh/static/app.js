@@ -55,7 +55,15 @@ const state = {
   sourceConfirmed: false,
   workflowStageIndex: 0,
   lastMissionText: "",
+  lastCamera: null,
 };
+
+const DEMO_DEFAULT_CAMERA = Object.freeze({
+  mgrs: "11S KC 79790 48252",
+  lat: 38.35537339313087,
+  lon: -119.52018528165966,
+  heightM: 14000,
+});
 
 const els = {
   tokenChip: document.getElementById("tokenChip"),
@@ -2731,6 +2739,9 @@ function updateMapStreamChip(imagery, terrain, requestedModes = {}) {
 
 async function loadRuntimeConfig() {
   state.config = await fetchJson("/api/config");
+  state.config.default_lat = DEMO_DEFAULT_CAMERA.lat;
+  state.config.default_lon = DEMO_DEFAULT_CAMERA.lon;
+  state.config.default_height_m = DEMO_DEFAULT_CAMERA.heightM;
   state.cesiumIonTokenAvailable = hasCesiumIonToken();
   state.serverClaudeKeyAvailable = Boolean(state.config.anthropic_api_key_configured);
   if (!sessionStorage.getItem("teraLlmProvider")) {
@@ -3529,6 +3540,14 @@ function rememberCamera() {
   };
 }
 
+function demoDefaultCamera() {
+  return {
+    lat: DEMO_DEFAULT_CAMERA.lat,
+    lon: DEMO_DEFAULT_CAMERA.lon,
+    heightM: DEMO_DEFAULT_CAMERA.heightM,
+  };
+}
+
 function installResizeHandling() {
   if (state.resizeObserver) {
     state.resizeObserver.disconnect();
@@ -3960,9 +3979,13 @@ function wireMapInteraction() {
   updateCameraText();
 }
 
-async function buildViewer() {
+async function buildViewer({ preserveCamera = false } = {}) {
   if (state.viewer) {
-    rememberCamera();
+    if (preserveCamera) {
+      rememberCamera();
+    } else {
+      state.lastCamera = null;
+    }
     if (state.clickHandler) {
       state.clickHandler.destroy();
       state.clickHandler = null;
@@ -4020,11 +4043,7 @@ async function buildViewer() {
     updateCameraText();
   });
 
-  const target = state.lastCamera || {
-    lat: state.config.default_lat,
-    lon: state.config.default_lon,
-    heightM: state.config.default_height_m,
-  };
+  const target = preserveCamera && state.lastCamera ? state.lastCamera : demoDefaultCamera();
 
   state.viewer.camera.flyTo({
     destination: Cesium.Cartesian3.fromDegrees(target.lon, target.lat, target.heightM),
@@ -4049,11 +4068,13 @@ function resetView() {
   if (!state.viewer || !state.config) {
     return;
   }
+  state.lastCamera = null;
+  const target = demoDefaultCamera();
   state.viewer.camera.flyTo({
     destination: Cesium.Cartesian3.fromDegrees(
-      state.config.default_lon,
-      state.config.default_lat,
-      state.config.default_height_m,
+      target.lon,
+      target.lat,
+      target.heightM,
     ),
     duration: 1.1,
     complete: updateCameraText,
@@ -4546,7 +4567,7 @@ async function streamSelectedSources() {
   els.imagerySelect.value = state.imageryMode;
   els.terrainSelect.value = state.terrainMode;
   els.packageStatus.textContent = "Updating map stream preview...";
-  await buildViewer();
+  await buildViewer({ preserveCamera: true });
   els.packageStatus.textContent = `Preview streaming ${els.imageryStatus.textContent}.`;
 }
 
@@ -4626,11 +4647,11 @@ async function init() {
     });
     els.imagerySelect.addEventListener("change", async (event) => {
       state.imageryMode = event.target.value;
-      await buildViewer();
+      await buildViewer({ preserveCamera: true });
     });
     els.terrainSelect.addEventListener("change", async (event) => {
       state.terrainMode = event.target.value;
-      await buildViewer();
+      await buildViewer({ preserveCamera: true });
     });
     window.addEventListener("resize", () => {
       state.panelWidth = clampPanelWidth(state.panelWidth);

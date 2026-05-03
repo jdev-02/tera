@@ -1226,6 +1226,26 @@ async def test_runtime_config_defaults_to_demo_mgrs_center() -> None:
     assert response.default_height_m == pytest.approx(14000)
 
 
+def test_static_map_start_and_reset_use_demo_mgrs_center() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'src="/static/app.js?v=20260503-mgrs-default"' in html
+    assert 'mgrs: "11S KC 79790 48252"' in js
+    assert "lat: 38.35537339313087" in js
+    assert "lon: -119.52018528165966" in js
+    assert "state.config.default_lat = DEMO_DEFAULT_CAMERA.lat" in js
+    assert "state.config.default_lon = DEMO_DEFAULT_CAMERA.lon" in js
+    assert "function demoDefaultCamera()" in js
+    assert "async function buildViewer({ preserveCamera = false } = {})" in js
+    assert (
+        "const target = preserveCamera && state.lastCamera ? state.lastCamera : "
+        "demoDefaultCamera();"
+    ) in js
+    assert "state.lastCamera = null;" in js
+    assert "const target = demoDefaultCamera();" in js
+
+
 def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
     prompt = (
