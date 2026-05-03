@@ -424,15 +424,26 @@ def test_planner_keeps_scope_questions_in_agent_response_only() -> None:
     assert "Use Questions to scope, then confirm sources." not in js
     assert "Next questions:" not in js
 
-    assert 'article.className = "source-item compact-source-item";' in js
+    assert 'article.className = "source-item compact-source-item source-chip";' in js
     assert 'article.title = `${source.category} | ${formatSourceStatus(source)}`;' in js
     assert 'purpose.className = "source-purpose"' not in js
     assert 'meta.className = "source-meta"' not in js
 
     assert "--text-base: 12px;" in css
-    assert "max-height: min(18vh, 180px);" in css
+    assert "grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));" in css
+    assert "max-height: min(11vh, 92px);" in css
+    assert ".source-chip" in css
     assert "grid-template-columns: auto minmax(0, 1fr);" in css
     assert "min-height: 76px;" in css
+
+
+def test_user_chat_transcript_hides_prompt_context_appendix() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'const finalPrompt = `${prompt}${makeMapContextAppendix()}`;' in js
+    assert 'prompt: finalPrompt,' in js
+    assert 'appendMessage(\n    "user",\n    prompt,\n  );' in js
+    assert 'focus: ${sourceContext.mission_focus}' not in js
 
 
 def test_prompt_composer_clears_after_submit_is_accepted() -> None:
