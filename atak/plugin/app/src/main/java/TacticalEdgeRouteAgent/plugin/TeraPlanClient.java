@@ -100,7 +100,7 @@ final class TeraPlanClient {
                 PromptResult result = parsePromptResult(code, responseBody);
                 callback.onComplete(result.ok, result.message, result.ok ? planJson : null);
             } catch (SocketTimeoutException e) {
-                callback.onComplete(false, "Jetson timed out. Check WiFi, port 8000, and whether the agent is running.", null);
+                callback.onComplete(false, "Jetson timed out. Check WiFi, the configured endpoint port, and whether the agent is running.", null);
             } catch (Exception e) {
                 callback.onComplete(false, friendlyException(e), null);
             } finally {
@@ -277,6 +277,13 @@ final class TeraPlanClient {
                     summary.append("\nSignature: verified");
                 }
                 return new PromptResult(true, summary.toString());
+            }
+            if (code >= 200 && code < 300 && json.has("response")) {
+                String response = json.optString("response", "").trim();
+                if (!response.isEmpty()) {
+                    return new PromptResult(true, response);
+                }
+                return new PromptResult(false, "Jetson returned an empty TERA response.");
             }
             String detail = json.optString("detail", json.optString("message", ""));
             if (code >= 200 && code < 300) {
