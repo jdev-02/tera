@@ -145,8 +145,6 @@ public class TERAPlugin implements IPlugin {
         final View sendMessage = teraView.findViewById(R.id.tera_send_message);
         final View voiceMessage = teraView.findViewById(R.id.tera_voice_message);
         final View ttsToggle = teraView.findViewById(R.id.tera_tts_toggle);
-        final TextView status = teraView.findViewById(R.id.tera_status);
-        final TextView response = teraView.findViewById(R.id.tera_response);
         final StringBuilder chatHistory = new StringBuilder();
         final StringBuilder hostState = new StringBuilder();
         final boolean[] ttsEnabled = new boolean[] { false };
@@ -154,16 +152,16 @@ public class TERAPlugin implements IPlugin {
 
         hostButton.setText(R.string.host_local);
         hostButton.setOnClickListener(v -> showHostPopup(
-                hostButton, hostState, status, connectionStatus));
+                hostButton, hostState, connectionStatus));
         infoButton.setOnClickListener(v -> showInfoPopup(infoButton));
         voiceMessage.setOnClickListener(v -> toggleVoiceInput(
-                voiceMessage, chatInput, status, listening));
+                voiceMessage, chatInput, listening));
         ttsToggle.setOnClickListener(v -> {
             ttsEnabled[0] = !ttsEnabled[0];
             ttsToggle.setBackgroundResource(ttsEnabled[0]
                     ? R.drawable.chat_icon_button_selected_bg
                     : R.drawable.chat_icon_button_bg);
-            status.setText(ttsEnabled[0] ? "Text-to-speech enabled." : "Text-to-speech disabled.");
+            connectionStatus.setText(ttsEnabled[0] ? "TTS on" : "TTS off");
         });
 
         sendMessage.setOnClickListener(v -> {
@@ -181,8 +179,6 @@ public class TERAPlugin implements IPlugin {
             chatInput.setText("");
             sendMessage.setEnabled(false);
             connectionStatus.setText(R.string.connection_connecting);
-            status.setText(R.string.status_sending);
-            response.setText("");
 
             TeraPlanClient.requestPlan(
                     endpoint,
@@ -196,7 +192,6 @@ public class TERAPlugin implements IPlugin {
                                 connectionStatus.setText(ok
                                         ? R.string.connection_online
                                         : R.string.connection_error);
-                                status.setText(ok ? "Agent response received." : "Agent request failed.");
                                 appendChatLine(chatHistory, ok ? "Agent" : "Error", message);
                                 transcript.setText(chatHistory.toString());
                                 scrollChatToBottom(chatScroll);
@@ -207,7 +202,7 @@ public class TERAPlugin implements IPlugin {
     }
 
     private void showHostPopup(Button hostButton, StringBuilder hostState,
-                               TextView status, TextView connectionStatus) {
+                               TextView connectionStatus) {
         LinearLayout content = new LinearLayout(hostButton.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(12);
@@ -277,7 +272,7 @@ public class TERAPlugin implements IPlugin {
         useLocal.setOnClickListener(v -> {
             hostState.setLength(0);
             hostButton.setText(R.string.host_local);
-            status.setText("Host set to local.");
+            connectionStatus.setText(R.string.connection_offline);
             popup.dismiss();
         });
 
@@ -325,10 +320,9 @@ public class TERAPlugin implements IPlugin {
         }, 100);
     }
 
-    private void toggleVoiceInput(View voiceButton, EditText chatInput, TextView status,
-                                  boolean[] listening) {
+    private void toggleVoiceInput(View voiceButton, EditText chatInput, boolean[] listening) {
         if (!SpeechRecognizer.isRecognitionAvailable(pluginContext)) {
-            status.setText("Speech recognition is not available on this device.");
+            chatInput.setHint("Speech recognition unavailable");
             return;
         }
 
@@ -338,7 +332,7 @@ public class TERAPlugin implements IPlugin {
             }
             listening[0] = false;
             voiceButton.setBackgroundResource(R.drawable.chat_icon_button_bg);
-            status.setText("Voice input stopped.");
+            chatInput.setHint(R.string.chat_input_hint);
             return;
         }
 
@@ -347,12 +341,12 @@ public class TERAPlugin implements IPlugin {
             speechRecognizer.setRecognitionListener(new RecognitionListener() {
                 @Override
                 public void onReadyForSpeech(Bundle params) {
-                    status.setText(R.string.status_listening);
+                    chatInput.setHint(R.string.status_listening);
                 }
 
                 @Override
                 public void onBeginningOfSpeech() {
-                    status.setText("Listening...");
+                    chatInput.setHint(R.string.status_listening);
                 }
 
                 @Override
@@ -367,14 +361,14 @@ public class TERAPlugin implements IPlugin {
                 public void onEndOfSpeech() {
                     listening[0] = false;
                     voiceButton.setBackgroundResource(R.drawable.chat_icon_button_bg);
-                    status.setText("Processing voice input...");
+                    chatInput.setHint("Processing voice...");
                 }
 
                 @Override
                 public void onError(int error) {
                     listening[0] = false;
                     voiceButton.setBackgroundResource(R.drawable.chat_icon_button_bg);
-                    status.setText("Voice input failed: " + speechErrorMessage(error));
+                    chatInput.setHint("Voice failed: " + speechErrorMessage(error));
                 }
 
                 @Override
@@ -384,12 +378,12 @@ public class TERAPlugin implements IPlugin {
                     java.util.ArrayList<String> matches = results.getStringArrayList(
                             SpeechRecognizer.RESULTS_RECOGNITION);
                     if (matches == null || matches.isEmpty()) {
-                        status.setText("No voice input detected.");
+                        chatInput.setHint("No voice detected");
                         return;
                     }
                     chatInput.setText(matches.get(0));
                     chatInput.setSelection(chatInput.getText().length());
-                    status.setText("Voice input added to chat.");
+                    chatInput.setHint(R.string.chat_input_hint);
                 }
 
                 @Override
@@ -416,7 +410,7 @@ public class TERAPlugin implements IPlugin {
 
         listening[0] = true;
         voiceButton.setBackgroundResource(R.drawable.chat_icon_button_selected_bg);
-        status.setText(R.string.status_listening);
+        chatInput.setHint(R.string.status_listening);
         speechRecognizer.startListening(intent);
     }
 
