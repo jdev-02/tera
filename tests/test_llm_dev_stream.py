@@ -261,6 +261,7 @@ def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
     assert "do not ask the operator to choose among streams, springs, lakes" in system_prompt
     assert "Pick the best candidate" in system_prompt
     assert "express every coordinate or grid reference in MGRS only" in system_prompt
+    assert "`11S AB 12345 67890`" in system_prompt
 
 
 def test_atak_prompt_source_catalog_is_limited_to_root_osm_and_dted() -> None:
@@ -942,12 +943,36 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
             "Target coordinate -122.392000, 37.795000."
         ),
         payload,
+        request.map_context,
     )
     assert "MGRS 10S" in atak_chat_text
     assert "37.790000" not in atak_chat_text
     assert "-122.400000" not in atak_chat_text
     assert "37.795000" not in atak_chat_text
     assert "-122.392000" not in atak_chat_text
+
+    malformed_mgrs = kmh_app._atak_chat_response_text(
+        "Proceed to MGRS 782334, then assess road access at 87X 632363.",
+        payload,
+        request.map_context,
+    )
+    target_mgrs = kmh_app._lat_lon_to_mgrs(37.795, -122.392)
+    assert f"MGRS {target_mgrs}" in malformed_mgrs
+    assert "782334" not in malformed_mgrs
+    assert "87X 632363" not in malformed_mgrs
+
+    map_context_only_mgrs = kmh_app._atak_chat_response_text(
+        "MGRS 87X 632363, proceed south-southeast.",
+        kmh_app.TakCotPayload(),
+        kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(
+                lat=38.35537339313087,
+                lon=-119.52018528165966,
+            )
+        ),
+    )
+    assert f"MGRS {kmh_app.DEFAULT_CENTER_MGRS}" in map_context_only_mgrs
+    assert "87X 632363" not in map_context_only_mgrs
 
     forbidden_source_response = kmh_app._decisive_tak_response_text(
         (
