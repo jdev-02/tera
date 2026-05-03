@@ -1155,6 +1155,32 @@ textarea {
   white-space: pre-wrap;
 }
 
+body.atak-monitor-mode #sourcePanel,
+body.atak-monitor-mode #chatLog,
+body.atak-monitor-mode #promptForm,
+body.atak-monitor-mode .settings-shell,
+body.atak-monitor-mode #settingsMenu {
+  display: none !important;
+}
+
+body.atak-monitor-mode .panel-chat-shell {
+  flex: 1 1 auto;
+}
+
+body.atak-monitor-mode .atak-mirror-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+body.atak-monitor-mode .atak-mirror-log {
+  min-height: 0;
+}
+
 .chat-composer {
   display: grid;
   gap: var(--space-2);
