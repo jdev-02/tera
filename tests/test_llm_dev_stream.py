@@ -229,6 +229,45 @@ def test_imagery_sourcing_prompt_uses_socratic_dialogue() -> None:
     assert "Socratic questions to ask next" in system_prompt
 
 
+def test_manifest_bounds_falls_back_to_view_bounds_when_selected_area_is_null() -> None:
+    """Regression: the ATAK plugin no longer stuffs the operator self-marker
+    into ``selected_area`` as a zero-area rectangle (#94 follow-up). Confirm
+    the server still formats manifest bounds from ``view_bounds`` when
+    ``selected_area`` is None, and US-context inference degrades gracefully.
+    """
+    context = kmh_app.MapContext(
+        selected_area=None,
+        camera=kmh_app.MapPoint(lat=38.89, lon=-77.03),
+        view_bounds=kmh_app.ViewBounds(
+            west=-77.05,
+            south=38.87,
+            east=-77.01,
+            north=38.91,
+            center_lat=38.89,
+            center_lon=-77.03,
+        ),
+        location_confirmed=True,
+    )
+
+    formatted = kmh_app._format_manifest_bounds(context)
+    assert formatted is not None
+    assert formatted["west"] == -77.05
+    assert formatted["east"] == -77.01
+
+    bounds = kmh_app._manifest_bounds_from_context(context)
+    assert bounds is not None
+    assert bounds.west == -77.05
+    assert bounds.north == 38.91
+
+    # With no selected_area and no US keywords, US-context inference still
+    # works off view_bounds when location_confirmed is set.
+    assert kmh_app._infer_is_us_context("plan a route", context) is True
+
+    # And a fully-null map_context is a no-op rather than an exception.
+    assert kmh_app._format_manifest_bounds(None) is None
+    assert kmh_app._manifest_bounds_from_context(None) is None
+
+
 def test_source_recommendation_questions_prioritize_source_scope() -> None:
     recommendation = kmh_app._infer_source_recommendation(
         "Build an offline package for a patrol to find reliable water while avoiding steep exposed terrain.",
