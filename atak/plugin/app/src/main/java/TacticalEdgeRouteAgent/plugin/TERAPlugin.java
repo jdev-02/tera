@@ -149,13 +149,12 @@ public class TERAPlugin implements IPlugin {
         final TextView response = teraView.findViewById(R.id.tera_response);
         final StringBuilder chatHistory = new StringBuilder();
         final StringBuilder hostState = new StringBuilder();
-        final StringBuilder portState = new StringBuilder("8080");
         final boolean[] ttsEnabled = new boolean[] { false };
         final boolean[] listening = new boolean[] { false };
 
         hostButton.setText(R.string.host_local);
         hostButton.setOnClickListener(v -> showHostPopup(
-                hostButton, hostState, portState, status, connectionStatus));
+                hostButton, hostState, status, connectionStatus));
         infoButton.setOnClickListener(v -> showInfoPopup(infoButton));
         voiceMessage.setOnClickListener(v -> toggleVoiceInput(
                 voiceMessage, chatInput, status, listening));
@@ -173,7 +172,7 @@ public class TERAPlugin implements IPlugin {
                 return;
             }
             String host = hostState.toString();
-            String endpoint = buildEndpoint(host, portState.toString());
+            String endpoint = buildEndpoint(host);
             JSONObject mapContext = buildMapContext();
 
             appendChatLine(chatHistory, host.isEmpty() ? "Operator (local)" : "Operator (" + host + ")", message);
@@ -207,7 +206,7 @@ public class TERAPlugin implements IPlugin {
         });
     }
 
-    private void showHostPopup(Button hostButton, StringBuilder hostState, StringBuilder portState,
+    private void showHostPopup(Button hostButton, StringBuilder hostState,
                                TextView status, TextView connectionStatus) {
         LinearLayout content = new LinearLayout(hostButton.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
@@ -235,47 +234,35 @@ public class TERAPlugin implements IPlugin {
         hostEdit.setPadding(dp(10), 0, dp(10), 0);
         hostEdit.setSelectAllOnFocus(false);
 
-        EditText portEdit = new EditText(hostButton.getContext());
-        portEdit.setSingleLine(true);
-        portEdit.setInputType(InputType.TYPE_CLASS_NUMBER);
-        portEdit.setHint(R.string.host_port_hint);
-        portEdit.setText(portState.toString());
-        portEdit.setTextSize(13);
-        portEdit.setTextColor(Color.BLACK);
-        portEdit.setHintTextColor(Color.GRAY);
-        portEdit.setBackgroundResource(R.drawable.host_input_bg);
-        portEdit.setPadding(dp(10), 0, dp(10), 0);
+        TextView result = new TextView(hostButton.getContext());
+        result.setTextColor(Color.WHITE);
+        result.setTextSize(14);
+        result.setLineSpacing(dp(2), 1.0f);
+        result.setPadding(0, dp(10), 0, 0);
+        result.setVisibility(View.GONE);
 
         LinearLayout actions = new LinearLayout(hostButton.getContext());
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setPadding(0, dp(10), 0, 0);
 
-        Button apply = new Button(hostButton.getContext());
-        apply.setText(R.string.host_popup_apply);
-        apply.setTextSize(12);
+        Button connect = new Button(hostButton.getContext());
+        connect.setText(R.string.host_popup_connect);
+        connect.setTextSize(12);
 
         Button useLocal = new Button(hostButton.getContext());
         useLocal.setText(R.string.host_popup_local);
         useLocal.setTextSize(12);
 
-        Button test = new Button(hostButton.getContext());
-        test.setText(R.string.host_popup_test);
-        test.setTextSize(12);
-
-        actions.addView(apply, new LinearLayout.LayoutParams(0,
+        actions.addView(connect, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         actions.addView(useLocal, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        actions.addView(test, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         content.addView(title);
         content.addView(hostEdit, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(38)));
-        content.addView(portEdit, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(38)));
+        content.addView(result);
         content.addView(actions);
 
         PopupWindow popup = new PopupWindow(content, dp(300),
@@ -287,51 +274,42 @@ public class TERAPlugin implements IPlugin {
                 | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
 
-        apply.setOnClickListener(v -> {
-            hostState.setLength(0);
-            hostState.append(hostEdit.getText().toString().trim());
-            portState.setLength(0);
-            portState.append(normalizedPort(portEdit.getText().toString()));
-            hostButton.setText(hostState.length() == 0
-                    ? pluginContext.getString(R.string.host_local)
-                    : hostState.toString());
-            status.setText(hostState.length() == 0
-                    ? "Host set to local."
-                    : "Host set to " + hostState);
-            popup.dismiss();
-        });
-
         useLocal.setOnClickListener(v -> {
             hostState.setLength(0);
-            portState.setLength(0);
-            portState.append("8080");
             hostButton.setText(R.string.host_local);
             status.setText("Host set to local.");
             popup.dismiss();
         });
 
-        test.setOnClickListener(v -> {
+        connect.setOnClickListener(v -> {
             String host = hostEdit.getText().toString().trim();
-            String port = normalizedPort(portEdit.getText().toString());
-            String endpoint = buildEndpoint(host, port);
+            String endpoint = buildEndpoint(host);
             hideKeyboard(hostEdit);
-            test.setEnabled(false);
-            test.setText("...");
+            connect.setEnabled(false);
+            connect.setText("...");
             connectionStatus.setText(R.string.connection_connecting);
             status.setText("Testing Jetson connection...");
+            result.setVisibility(View.VISIBLE);
+            result.setText("Testing:\n" + endpoint);
             TeraPlanClient.checkJetson(endpoint, new TeraPlanClient.Callback() {
                 @Override
                 public void onComplete(boolean ok, String message) {
                     mainHandler.post(() -> {
-                        test.setEnabled(true);
-                        test.setText(R.string.host_popup_test);
+                        connect.setEnabled(true);
+                        connect.setText(R.string.host_popup_connect);
                         connectionStatus.setText(ok
                                 ? R.string.connection_online
                                 : R.string.connection_error);
                         status.setText(message);
-                        showMessagePopup(hostButton.getRootView(),
-                                ok ? "Jetson Connected" : "Jetson Connection Failed",
-                                message + "\n\nEndpoint:\n" + endpoint);
+                        result.setText(message + "\n\nEndpoint:\n" + endpoint);
+                        if (ok) {
+                            hostState.setLength(0);
+                            hostState.append(host);
+                            hostButton.setText(hostState.length() == 0
+                                    ? pluginContext.getString(R.string.host_local)
+                                    : hostState.toString());
+                            popup.dismiss();
+                        }
                     });
                 }
             });
@@ -469,7 +447,7 @@ public class TERAPlugin implements IPlugin {
         }
     }
 
-    private String buildEndpoint(String host, String port) {
+    private String buildEndpoint(String host) {
         if (host == null || host.trim().isEmpty()) {
             return pluginContext.getString(R.string.endpoint_hint);
         }
@@ -477,7 +455,7 @@ public class TERAPlugin implements IPlugin {
         String endpoint = host.trim();
         if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
             if (!endpoint.contains(":")) {
-                endpoint = endpoint + ":" + normalizedPort(port);
+                endpoint = endpoint + ":8080";
             }
             endpoint = "http://" + endpoint;
         }
@@ -485,13 +463,6 @@ public class TERAPlugin implements IPlugin {
             endpoint = endpoint + pluginContext.getString(R.string.endpoint_path);
         }
         return endpoint;
-    }
-
-    private String normalizedPort(String port) {
-        if (port == null || port.trim().isEmpty()) {
-            return "8080";
-        }
-        return port.trim();
     }
 
     private JSONObject buildMapContext() {
