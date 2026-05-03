@@ -182,7 +182,11 @@ public class TERAPlugin implements IPlugin {
                                 connectionStatus.setText(ok
                                         ? R.string.connection_online
                                         : R.string.connection_error);
-                                status.setText(ok ? "Agent response received." : "Agent request failed.");
+                                status.setText(ok
+                                        ? "Agent response received."
+                                        : (message.startsWith("Route signature invalid")
+                                                ? "Route signature invalid - REJECTED"
+                                                : "Agent request failed."));
                                 appendChatLine(chatHistory, ok ? "Agent" : "Error", message);
                                 transcript.setText(chatHistory.toString());
                                 scrollChatToBottom(chatScroll);
