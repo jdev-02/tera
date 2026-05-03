@@ -26,7 +26,22 @@ final class TeraPlanClient {
     private TeraPlanClient() {
     }
 
-    static void requestPlan(String endpoint, String prompt, Callback callback) {
+    static void checkJetson(String endpoint, Callback callback) {
+        EXECUTOR.execute(() -> {
+            if (endpoint == null || !endpoint.startsWith("http")) {
+                callback.onComplete(false, "Endpoint must start with http:// or https://");
+                return;
+            }
+
+            String healthError = checkHealth(endpoint.trim());
+            callback.onComplete(healthError == null, healthError == null
+                    ? "Jetson health check passed."
+                    : healthError);
+        });
+    }
+
+    static void requestPlan(String endpoint, String prompt, JSONObject mapContext,
+                            Callback callback) {
         EXECUTOR.execute(() -> {
             HttpURLConnection connection = null;
             try {
@@ -53,7 +68,7 @@ final class TeraPlanClient {
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setDoOutput(true);
 
-                String payload = buildPromptPayload(prompt.trim(), null);
+                String payload = buildPromptPayload(prompt.trim(), mapContext);
                 byte[] body = payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(body.length);
 

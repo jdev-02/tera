@@ -24,6 +24,14 @@ import android.widget.TextView;
 
 import com.atak.plugins.impl.PluginContextProvider;
 import com.atak.plugins.impl.PluginLayoutInflater;
+import com.atakmap.android.maps.MapView;
+import com.atakmap.android.maps.Marker;
+import com.atakmap.coremap.maps.coords.GeoBounds;
+import com.atakmap.coremap.maps.coords.GeoPoint;
+import com.atakmap.coremap.maps.coords.GeoPointMetaData;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import gov.tak.api.plugin.IPlugin;
 import gov.tak.api.plugin.IServiceController;
@@ -141,11 +149,13 @@ public class TERAPlugin implements IPlugin {
         final TextView response = teraView.findViewById(R.id.tera_response);
         final StringBuilder chatHistory = new StringBuilder();
         final StringBuilder hostState = new StringBuilder();
+        final StringBuilder portState = new StringBuilder("8080");
         final boolean[] ttsEnabled = new boolean[] { false };
         final boolean[] listening = new boolean[] { false };
 
         hostButton.setText(R.string.host_local);
-        hostButton.setOnClickListener(v -> showHostPopup(hostButton, hostState, status));
+        hostButton.setOnClickListener(v -> showHostPopup(
+                hostButton, hostState, portState, status, connectionStatus));
         infoButton.setOnClickListener(v -> showInfoPopup(infoButton));
         voiceMessage.setOnClickListener(v -> toggleVoiceInput(
                 voiceMessage, chatInput, status, listening));
@@ -163,7 +173,8 @@ public class TERAPlugin implements IPlugin {
                 return;
             }
             String host = hostState.toString();
-            String endpoint = buildEndpoint(host);
+            String endpoint = buildEndpoint(host, portState.toString());
+            JSONObject mapContext = buildMapContext();
 
             appendChatLine(chatHistory, host.isEmpty() ? "Operator (local)" : "Operator (" + host + ")", message);
             transcript.setText(chatHistory.toString());
@@ -177,6 +188,7 @@ public class TERAPlugin implements IPlugin {
             TeraPlanClient.requestPlan(
                     endpoint,
                     message,
+                    mapContext,
                     new TeraPlanClient.Callback() {
                         @Override
                         public void onComplete(boolean ok, String message) {
@@ -195,7 +207,8 @@ public class TERAPlugin implements IPlugin {
         });
     }
 
-    private void showHostPopup(Button hostButton, StringBuilder hostState, TextView status) {
+    private void showHostPopup(Button hostButton, StringBuilder hostState, StringBuilder portState,
+                               TextView status, TextView connectionStatus) {
         LinearLayout content = new LinearLayout(hostButton.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(12);
@@ -222,6 +235,17 @@ public class TERAPlugin implements IPlugin {
         hostEdit.setPadding(dp(10), 0, dp(10), 0);
         hostEdit.setSelectAllOnFocus(false);
 
+        EditText portEdit = new EditText(hostButton.getContext());
+        portEdit.setSingleLine(true);
+        portEdit.setInputType(InputType.TYPE_CLASS_NUMBER);
+        portEdit.setHint(R.string.host_port_hint);
+        portEdit.setText(portState.toString());
+        portEdit.setTextSize(13);
+        portEdit.setTextColor(Color.BLACK);
+        portEdit.setHintTextColor(Color.GRAY);
+        portEdit.setBackgroundResource(R.drawable.host_input_bg);
+        portEdit.setPadding(dp(10), 0, dp(10), 0);
+
         LinearLayout actions = new LinearLayout(hostButton.getContext());
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setPadding(0, dp(10), 0, 0);
@@ -234,13 +258,22 @@ public class TERAPlugin implements IPlugin {
         useLocal.setText(R.string.host_popup_local);
         useLocal.setTextSize(12);
 
+        Button test = new Button(hostButton.getContext());
+        test.setText(R.string.host_popup_test);
+        test.setTextSize(12);
+
         actions.addView(apply, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         actions.addView(useLocal, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        actions.addView(test, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         content.addView(title);
         content.addView(hostEdit, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(38)));
+        content.addView(portEdit, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(38)));
         content.addView(actions);
@@ -257,6 +290,8 @@ public class TERAPlugin implements IPlugin {
         apply.setOnClickListener(v -> {
             hostState.setLength(0);
             hostState.append(hostEdit.getText().toString().trim());
+            portState.setLength(0);
+            portState.append(normalizedPort(portEdit.getText().toString()));
             hostButton.setText(hostState.length() == 0
                     ? pluginContext.getString(R.string.host_local)
                     : hostState.toString());
@@ -268,9 +303,30 @@ public class TERAPlugin implements IPlugin {
 
         useLocal.setOnClickListener(v -> {
             hostState.setLength(0);
+            portState.setLength(0);
+            portState.append("8080");
             hostButton.setText(R.string.host_local);
             status.setText("Host set to local.");
             popup.dismiss();
+        });
+
+        test.setOnClickListener(v -> {
+            String host = hostEdit.getText().toString().trim();
+            String port = normalizedPort(portEdit.getText().toString());
+            String endpoint = buildEndpoint(host, port);
+            connectionStatus.setText(R.string.connection_connecting);
+            status.setText("Testing Jetson connection...");
+            TeraPlanClient.checkJetson(endpoint, new TeraPlanClient.Callback() {
+                @Override
+                public void onComplete(boolean ok, String message) {
+                    mainHandler.post(() -> {
+                        connectionStatus.setText(ok
+                                ? R.string.connection_online
+                                : R.string.connection_error);
+                        status.setText(message);
+                    });
+                }
+            });
         });
 
         popup.showAtLocation(hostButton.getRootView(),
@@ -405,7 +461,7 @@ public class TERAPlugin implements IPlugin {
         }
     }
 
-    private String buildEndpoint(String host) {
+    private String buildEndpoint(String host, String port) {
         if (host == null || host.trim().isEmpty()) {
             return pluginContext.getString(R.string.endpoint_hint);
         }
@@ -413,7 +469,7 @@ public class TERAPlugin implements IPlugin {
         String endpoint = host.trim();
         if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
             if (!endpoint.contains(":")) {
-                endpoint = endpoint + ":8080";
+                endpoint = endpoint + ":" + normalizedPort(port);
             }
             endpoint = "http://" + endpoint;
         }
@@ -421,6 +477,70 @@ public class TERAPlugin implements IPlugin {
             endpoint = endpoint + pluginContext.getString(R.string.endpoint_path);
         }
         return endpoint;
+    }
+
+    private String normalizedPort(String port) {
+        if (port == null || port.trim().isEmpty()) {
+            return "8080";
+        }
+        return port.trim();
+    }
+
+    private JSONObject buildMapContext() {
+        try {
+            MapView mapView = MapView.getMapView();
+            if (mapView == null) {
+                return null;
+            }
+
+            JSONObject context = new JSONObject();
+            GeoPointMetaData centerMeta = mapView.getCenterPoint();
+            if (centerMeta != null && centerMeta.get() != null && centerMeta.get().isValid()) {
+                context.put("camera", pointToJson(centerMeta.get()));
+            }
+
+            GeoBounds bounds = mapView.getBounds();
+            if (bounds != null) {
+                JSONObject viewBounds = new JSONObject();
+                viewBounds.put("west", bounds.getWest());
+                viewBounds.put("south", bounds.getSouth());
+                viewBounds.put("east", bounds.getEast());
+                viewBounds.put("north", bounds.getNorth());
+                GeoPoint center = bounds.getCenter(null);
+                if (center != null && center.isValid()) {
+                    viewBounds.put("center_lat", center.getLatitude());
+                    viewBounds.put("center_lon", center.getLongitude());
+                }
+                context.put("view_bounds", viewBounds);
+            }
+
+            Marker self = mapView.getSelfMarker();
+            if (self != null && self.getPoint() != null && self.getPoint().isValid()) {
+                JSONObject selectedArea = new JSONObject();
+                GeoPoint selfPoint = self.getPoint();
+                selectedArea.put("west", selfPoint.getLongitude());
+                selectedArea.put("south", selfPoint.getLatitude());
+                selectedArea.put("east", selfPoint.getLongitude());
+                selectedArea.put("north", selfPoint.getLatitude());
+                selectedArea.put("center_lat", selfPoint.getLatitude());
+                selectedArea.put("center_lon", selfPoint.getLongitude());
+                context.put("selected_area", selectedArea);
+            }
+
+            return context.length() == 0 ? null : context;
+        } catch (JSONException e) {
+            return null;
+        }
+    }
+
+    private JSONObject pointToJson(GeoPoint point) throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put("lat", point.getLatitude());
+        json.put("lon", point.getLongitude());
+        if (point.isAltitudeValid()) {
+            json.put("height_m", point.getAltitude());
+        }
+        return json;
     }
 
     private void showInfoPopup(View anchor) {

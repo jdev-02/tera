@@ -7,10 +7,12 @@
     <string name="endpoint_hint">http://127.0.0.1:8080/api/prompt</string>
     <string name="endpoint_path">/api/prompt</string>
     <string name="host_input_hint">192.168.4.1</string>
+    <string name="host_port_hint">8080</string>
     <string name="host_local">local</string>
     <string name="host_popup_title">Jetson IP</string>
     <string name="host_popup_apply">APPLY</string>
     <string name="host_popup_local">USE LOCAL</string>
+    <string name="host_popup_test">TEST</string>
     <string name="model_selection_label">Model</string>
     <string name="connection_offline">Offline</string>
     <string name="connection_connecting">Connecting</string>
