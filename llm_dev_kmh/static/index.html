@@ -130,7 +130,7 @@
             <span id="packageModeChip" class="chip">Awaiting mission</span>
           </div>
 
-          <div id="workflowEmpty" class="workflow-empty">Describe the mission in chat to begin source planning.</div>
+          <div id="workflowEmpty" class="workflow-empty" aria-hidden="true"></div>
 
           <div id="workflowCarousel" class="workflow-carousel hidden" aria-live="polite">
             <div class="workflow-nav">
@@ -154,13 +154,6 @@
                     Package name
                     <input id="packageNameInput" type="text" placeholder="sf-water-route-package" />
                   </label>
-                </div>
-              </section>
-
-              <section class="workflow-slide" data-workflow-slide="questions">
-                <div class="workflow-card">
-                  <div class="section-subtitle">Socratic questions</div>
-                  <ul id="clarifyingQuestions" class="question-list"></ul>
                 </div>
               </section>
 
