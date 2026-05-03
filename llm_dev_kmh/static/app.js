@@ -2407,7 +2407,7 @@ function renderSourceList() {
 
   for (const source of visibleSources) {
     const article = document.createElement("article");
-    article.className = "source-item compact-source-item";
+    article.className = "source-item compact-source-item source-chip";
     article.dataset.selected = String(state.selectedSourceIds.has(source.id));
     article.title = `${source.category} | ${formatSourceStatus(source)}`;
 
@@ -3282,7 +3282,6 @@ async function submitPrompt(event) {
   const provider = state.llmProvider;
   const localModel = els.modelSelect.value.trim();
   const cloudModel = els.claudeModelSelect.value.trim();
-  const model = provider === "ollama" ? localModel : cloudModel || localModel;
   els.requestStatus.textContent = provider === "claude"
     ? "Connecting to Claude API..."
     : provider === "auto"
@@ -3305,14 +3304,7 @@ async function submitPrompt(event) {
 
   appendMessage(
     "user",
-    finalPrompt,
-    [
-      model ? `model: ${model}` : "default model",
-      `provider: ${provider}`,
-      `profile: ${agentProfile}`,
-      `focus: ${sourceContext.mission_focus}`,
-      `${sourceContext.selected_source_ids.length} sources`,
-    ].join(" | "),
+    prompt,
   );
 
   const assistantMessage = appendMessage(
