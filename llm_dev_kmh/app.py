@@ -5871,6 +5871,84 @@ def _response_text_with_tak_cot_summary(text: str, tak_cot: TakCotPayload) -> st
     return text
 
 
+def _looks_like_blocking_clarification(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if not normalized:
+        return False
+    if "?" not in normalized and "question:" not in normalized:
+        return False
+    return _text_has_any(
+        normalized,
+        (
+            "do you want",
+            "would you like",
+            "should i",
+            "which",
+            "choose",
+            "clarify",
+            "prioritize",
+            "need to know",
+            "need you to",
+            "streams",
+            "springs",
+            "lakes",
+        ),
+    )
+
+
+def _tak_item_target_label(item: TakCotItem) -> str:
+    metadata_target = item.metadata.get("target")
+    if isinstance(metadata_target, dict):
+        name = metadata_target.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    title = item.title.strip()
+    if title.lower().startswith("tera route to "):
+        title = title[len("TERA route to ") :]
+    return title or item.uid
+
+
+def _tak_item_distance_text(item: TakCotItem) -> str:
+    raw_distance = item.metadata.get("distance_m")
+    if not isinstance(raw_distance, int | float):
+        target = item.metadata.get("target")
+        if isinstance(target, dict):
+            raw_distance = target.get("distance_m")
+    if not isinstance(raw_distance, int | float):
+        return ""
+    if raw_distance >= 1000:
+        return f" ({raw_distance / 1000:.1f} km)"
+    return f" ({raw_distance:.0f} m)"
+
+
+def _decisive_tak_response_text(text: str, tak_cot: TakCotPayload) -> str:
+    if not _looks_like_blocking_clarification(text):
+        return text
+
+    if tak_cot.items:
+        first = tak_cot.items[0]
+        label = _tak_item_target_label(first)
+        distance = _tak_item_distance_text(first)
+        if first.item_type == "route":
+            return (
+                f"Best route generated to {label}{distance}. TAK route, checkpoints, "
+                "and package are attached. Review on the map; reply 'alternate' or "
+                "tell me what is blocked and I will rework it."
+            )
+        return (
+            f"Best local points generated for {label}{distance}. TAK markers and "
+            "package are attached. Reply with what to refine if you need a different "
+            "selection."
+        )
+
+    if tak_cot.summary:
+        return (
+            f"{tak_cot.summary} No TAK items were placed. Widen the displayed map, "
+            "give a radius, or ask for another target type to refine."
+        )
+    return text
+
+
 def _normalize_for_match(text: str) -> str:
     expanded = text.lower()
     for canonical, aliases in KEYWORD_EXPANSIONS.items():
@@ -6203,9 +6281,15 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
         Get to a usable map answer in the fewest turns possible. If origin,
         objective, and target class are inferable from the prompt and map
         context, do not ask a clarifying question; state the action and let
-        the Jetson attach TAK CoT output. Ask at most one question only when
-        a route or point set cannot be resolved safely. Your only analytical
-        data sources are local OSM vectors under /WINTAK Imagery and local
+        the Jetson attach TAK CoT output. Do not ask the operator to choose
+        among streams, springs, lakes, roads, trails, or other subtypes when
+        local OSM can rank candidates; choose the best candidate from the
+        prompt, client location, displayed map bounds, and local features.
+        Ask at most one question only when no safe route or point set can be
+        resolved from the supplied context. End with a short refinement option
+        such as "reply alternate" or "tell me what is blocked" instead of a
+        blocking question. Your only analytical data sources are local OSM
+        vectors under /WINTAK Imagery and local
         DTED terrain under /DTED. Never recommend, require, or cite any source
         outside that allowlist for the Jetson action path. Never claim that ATAK
         map objects, CoT tracks, routes, or live device state exist unless
@@ -6775,6 +6859,12 @@ def _build_system_prompt(request: PromptRequest) -> str:
                         "client location as the route origin and answer with the recommended "
                         "action now. The server will attach any deterministic TAK CoT route "
                         "or points separately."
+                    ),
+                    (
+                        "- In ATAK live mode, do not ask the operator to choose among "
+                        "streams, springs, lakes, roads, trails, or similar subtypes when "
+                        "local OSM can rank nearby candidates. Pick the best candidate and "
+                        "tell the operator they can refine or request an alternate."
                     ),
                     (
                         "- Use the displayed ATAK map bounds as the visible operating area: "
@@ -8903,6 +8993,7 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
             )
         raise
     result.tak_cot = _build_tak_cot_payload(request, result.response)
+    result.response = _decisive_tak_response_text(result.response, result.tak_cot)
     if mirror:
         outbound_text = _response_text_with_tak_cot_summary(
             result.response,
@@ -9004,12 +9095,13 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                     }
                 )
                 result.tak_cot = _build_tak_cot_payload(request, result.response)
+                mirror_text = _decisive_tak_response_text(result.response, result.tak_cot)
                 if mirror:
                     _append_atak_mirror_event(
                         source="tera-agent",
                         role="assistant",
                         text=_response_text_with_tak_cot_summary(
-                            result.response,
+                            mirror_text,
                             result.tak_cot,
                         ),
                         model=result.model,
@@ -9093,12 +9185,16 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                         request,
                                         streamed_text,
                                     )
+                                    mirror_text = _decisive_tak_response_text(
+                                        streamed_text,
+                                        tak_cot,
+                                    )
                                     if mirror:
                                         _append_atak_mirror_event(
                                             source="tera-agent",
                                             role="assistant",
                                             text=_response_text_with_tak_cot_summary(
-                                                streamed_text,
+                                                mirror_text,
                                                 tak_cot,
                                             ),
                                             model=model,

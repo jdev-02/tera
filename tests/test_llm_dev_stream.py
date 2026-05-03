@@ -258,6 +258,8 @@ def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
     assert "displayed ATAK map view via plugin" in system_prompt
     assert "Use the displayed ATAK map bounds as the visible operating area" in system_prompt
     assert "OSM vectors from /WINTAK Imagery and DTED terrain from /DTED" in system_prompt
+    assert "do not ask the operator to choose among streams, springs, lakes" in system_prompt
+    assert "Pick the best candidate" in system_prompt
 
 
 def test_atak_prompt_source_catalog_is_limited_to_root_osm_and_dted() -> None:
@@ -914,6 +916,18 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
         assert "TERA route to Demo Creek" in kml
         assert "-122.3920000,37.7950000,0.00" in kml
         assert "Generated 1 TAK item" in package.read("MANIFEST/manifest.xml").decode("utf-8")
+
+    decisive = kmh_app._decisive_tak_response_text(
+        (
+            "Question: Do you want me to prioritize streams, springs, or lakes "
+            "for the nearest water source?"
+        ),
+        payload,
+    )
+    assert "Best route generated to Demo Creek" in decisive
+    assert "TAK route, checkpoints, and package are attached" in decisive
+    assert "streams, springs, or lakes" not in decisive
+    assert "reply 'alternate'" in decisive
 
 
 def test_tak_cot_payload_prefers_client_location_and_visible_bounds(
