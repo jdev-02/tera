@@ -87,7 +87,9 @@ _MGRS_PHONETIC = {
     "H": "hotel",
     "J": "juliet",
     "K": "kilo",
-    "L": "lima",
+    # 'lee-mah' (not 'lima') -- Piper slurs the trailing 'a' otherwise.
+    # Op note 17:41: 'lima still sounds weird ... anything with a soft a'.
+    "L": "lee-mah",
     "M": "mike",
     "N": "november",
     "P": "papa",

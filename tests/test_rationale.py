@@ -62,8 +62,8 @@ _CASES: list[tuple[str, str, str]] = [
     ),
     (
         "HLZ at grid 11SMS1234.",
-        "hotel lima zulu at grid one one sierra, mike, sierra one two, three four.",
-        "HLZ -> 'hotel lima zulu'",
+        "hotel lee-mah zulu at grid one one sierra, mike, sierra one two, three four.",
+        "HLZ -> 'hotel lee-mah zulu' (lima syllable-hint)",
     ),
     (
         "Identify CP and TOC.",
