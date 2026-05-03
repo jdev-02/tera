@@ -467,9 +467,11 @@ public class TERAPlugin implements IPlugin {
             }
 
             JSONObject context = new JSONObject();
+            boolean cameraSet = false;
             GeoPointMetaData centerMeta = mapView.getCenterPoint();
             if (centerMeta != null && centerMeta.get() != null && centerMeta.get().isValid()) {
                 context.put("camera", pointToJson(centerMeta.get()));
+                cameraSet = true;
             }
 
             GeoBounds bounds = mapView.getBounds();
@@ -487,17 +489,16 @@ public class TERAPlugin implements IPlugin {
                 context.put("view_bounds", viewBounds);
             }
 
-            Marker self = mapView.getSelfMarker();
-            if (self != null && self.getPoint() != null && self.getPoint().isValid()) {
-                JSONObject selectedArea = new JSONObject();
-                GeoPoint selfPoint = self.getPoint();
-                selectedArea.put("west", selfPoint.getLongitude());
-                selectedArea.put("south", selfPoint.getLatitude());
-                selectedArea.put("east", selfPoint.getLongitude());
-                selectedArea.put("north", selfPoint.getLatitude());
-                selectedArea.put("center_lat", selfPoint.getLatitude());
-                selectedArea.put("center_lon", selfPoint.getLongitude());
-                context.put("selected_area", selectedArea);
+            // Self-marker is only useful as a camera fallback when the map view
+            // doesn't expose a valid center. Never stuff it into selected_area as
+            // a zero-area rectangle: the server treats selected_area as the
+            // user-confirmed AO and feeds it into manifest bounds + prompt
+            // language, so a degenerate pin there distorts downstream behaviour.
+            if (!cameraSet) {
+                Marker self = mapView.getSelfMarker();
+                if (self != null && self.getPoint() != null && self.getPoint().isValid()) {
+                    context.put("camera", pointToJson(self.getPoint()));
+                }
             }
 
             return context.length() == 0 ? null : context;
