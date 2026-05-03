@@ -9,6 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 final class TeraPlanClient {
 
     interface Callback {
@@ -21,7 +24,7 @@ final class TeraPlanClient {
     private TeraPlanClient() {
     }
 
-    static void requestPlan(String endpoint, String model, String prompt, Callback callback) {
+    static void requestPlan(String endpoint, String prompt, Callback callback) {
         EXECUTOR.execute(() -> {
             HttpURLConnection connection = null;
             try {
@@ -42,12 +45,7 @@ final class TeraPlanClient {
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setDoOutput(true);
 
-                String selectedModel = model == null || model.trim().isEmpty()
-                        ? "local"
-                        : model.trim();
-                String payload = "{\"prompt\":\"" + escapeJson(prompt.trim())
-                        + "\",\"model\":\"" + escapeJson(selectedModel)
-                        + "\",\"source\":\"atak-plugin\",\"lat\":null,\"lon\":null}";
+                String payload = buildPromptPayload(prompt.trim(), null);
                 byte[] body = payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(body.length);
 
@@ -68,7 +66,7 @@ final class TeraPlanClient {
                 }
 
                 callback.onComplete(code >= 200 && code < 300,
-                        "HTTP " + code + "\n" + truncate(result.toString()));
+                        responseMessage(code, result.toString()));
             } catch (Exception e) {
                 callback.onComplete(false, e.getClass().getSimpleName() + ": " + e.getMessage());
             } finally {
@@ -79,12 +77,30 @@ final class TeraPlanClient {
         });
     }
 
-    private static String escapeJson(String value) {
-        return value.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+    private static String buildPromptPayload(String prompt, JSONObject mapContext)
+            throws JSONException {
+        JSONObject payload = new JSONObject();
+        payload.put("prompt", prompt);
+        payload.put("model", "gemma3:4b");
+        payload.put("llm_provider", "ollama");
+        payload.put("agent_profile", "tera-atak-link-test");
+        if (mapContext != null) {
+            payload.put("map_context", mapContext);
+        }
+        return payload.toString();
+    }
+
+    private static String responseMessage(int code, String body) {
+        try {
+            JSONObject json = new JSONObject(body);
+            String response = json.optString("response", "");
+            if (!response.trim().isEmpty()) {
+                return response.trim();
+            }
+        } catch (JSONException ignored) {
+            // Fall back to the raw body if the server returns non-JSON.
+        }
+        return "HTTP " + code + "\n" + truncate(body);
     }
 
     private static String truncate(String value) {
