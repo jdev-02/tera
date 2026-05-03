@@ -43,6 +43,18 @@ docker compose up --build
 - `OLLAMA_MODEL`: default model exposed in the UI
 - `REQUEST_TIMEOUT_S`: prompt timeout in seconds, default `120`
 - `CESIUM_ION_TOKEN`: required for Cesium World Terrain and Cesium satellite imagery
+- `CESIUM_ION_ARCHIVE_ID`: optional completed Cesium ion archive id to download into the Jetson package root.
+- `CESIUM_ION_ASSET_IDS`: optional comma-separated ion asset ids for creating a bounded AO clip before downloading it. Use only with assets/licensing that permit archives or clips.
+- Cesium World stream data stays stream-only. The Jetson offline package downloads Cesium only through ion archives/exports, then extracts and indexes the local files for query/preview.
+- `ESRI_ARCGIS_TOKEN`: optional; used only if the operator explicitly selects Esri export jobs. The default U.S. imagery path uses NAIP, with Sentinel-2 as the global fallback.
+- `NAIP_AWS_STATE`, `NAIP_AWS_YEAR`, `NAIP_AWS_RESOLUTION`, `NAIP_AWS_BANDSET`: controls public NAIP AWS prefix downloads; defaults are inferred U.S. state, `2022`, `60cm`, and `rgbir`.
+- `NAIP_AWS_BUCKET`: defaults to `naip-analytic`; set to `naip-visualization` for RGB COGs when desired.
+- `NAIP_MAX_FILES`: safety cap for NAIP prefix downloads; defaults to `50`.
+- `NAIP_EARTHEXPLORER_DIR`: optional folder of EarthExplorer NAIP GeoTIFFs to import instead of relying only on AWS prefix downloads.
+- `GEOFABRIK_PBF_URL` or `GEOFABRIK_REGION_SLUG`: optional OSM override; otherwise the app infers a U.S. state extract such as `north-america/us/nevada-latest.osm.pbf`.
+- `DTED_SOURCE_DIR`: optional folder of EarthExplorer `.dt0/.dt1/.dt2` files; imported and converted with `gdal_translate` if GDAL is installed.
+- `OFFLINE_PACKAGE_ROOT`: Jetson directory where source packages, status files, terrain rasters, route artifacts, and CoT XML are written; defaults to `llm_dev_kmh/offline_packages`
+- `PACKAGE_MIN_FREE_GB`: disk space reserve enforced before downloads start; defaults to `10`
 - `DEFAULT_LAT`: initial camera latitude, default `37.7749`
 - `DEFAULT_LON`: initial camera longitude, default `-122.4194`
 - `DEFAULT_HEIGHT_M`: initial camera height in meters, default `14000`
