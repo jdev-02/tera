@@ -4,11 +4,11 @@
     <string name="app_name">TERA</string>
     <!-- description -->
     <string name="app_desc">Tactical Edge Route Agent</string>
-    <string name="endpoint_hint">http://127.0.0.1:8000/plan</string>
-    <string name="endpoint_path">/plan</string>
-    <string name="host_input_hint">192.168.1.10</string>
+    <string name="endpoint_hint">http://127.0.0.1:8080/api/prompt</string>
+    <string name="endpoint_path">/api/prompt</string>
+    <string name="host_input_hint">192.168.4.1</string>
     <string name="host_local">local</string>
-    <string name="host_popup_title">Host</string>
+    <string name="host_popup_title">Jetson IP</string>
     <string name="host_popup_apply">APPLY</string>
     <string name="host_popup_local">USE LOCAL</string>
     <string name="model_selection_label">Model</string>
