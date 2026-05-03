@@ -3,10 +3,26 @@ pre-commit:
   commands:
     fmt:
       glob: "*.{py}"
-      run: .venv/bin/ruff format --check {staged_files} || (.venv/bin/ruff format {staged_files} && echo "Files reformatted; please re-stage and re-commit." && exit 1)
+      run: |
+        if [ -x .venv/Scripts/ruff.exe ]; then
+          ruff=.venv/Scripts/ruff.exe
+        else
+          ruff=.venv/bin/ruff
+        fi
+        "$ruff" format --check {staged_files} || {
+          "$ruff" format {staged_files}
+          echo 'Files reformatted; please re-stage and re-commit.'
+          exit 1
+        }
     lint:
       glob: "*.{py}"
-      run: .venv/bin/ruff check {staged_files}
+      run: |
+        if [ -x .venv/Scripts/ruff.exe ]; then
+          ruff=.venv/Scripts/ruff.exe
+        else
+          ruff=.venv/bin/ruff
+        fi
+        "$ruff" check {staged_files}
     gitleaks:
       run: which gitleaks > /dev/null && gitleaks protect --staged --redact --no-banner || true
 
@@ -14,7 +30,7 @@ commit-msg:
   commands:
     conventional:
       run: |
-        msg=$(head -1 "$1")
+        msg=$(head -1 "{1}")
         if echo "$msg" | grep -Eq '^(feat|fix|chore|refactor|test|docs|ci|perf|style)(\([a-z0-9-]+\))?: .{3,}'; then
           exit 0
         fi
