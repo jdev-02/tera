@@ -6,7 +6,7 @@ set -euo pipefail
 AUDIT_LOG="${WAYFINDER_AUDIT_LOG:-logs/security_audit.jsonl}"
 TAIL_LINES="${TAIL_LINES:-30}"
 
-mkdir -p "$(diname "$AUDIT_LOG")"
+mkdir -p "$(dirname "$AUDIT_LOG")"
 touch "$AUDIT_LOG"
 
 echo "======================================================"
