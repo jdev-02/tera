@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -92,8 +92,13 @@ security: install ## Bandit + pip-audit + optional gitleaks
 		echo "[security] gitleaks not installed locally; GitHub Action still runs gitleaks"; \
 	fi
 
-ci: lint test security ## Full CI gate (must pass before push)
+ci: lint test security shellcheck-syntax ## Full CI gate (must pass before push)
 	@echo "[OK] make ci passed"
+
+
+shellcheck-syntax: ## bash -n parse-check on every committed shell script (catches typos like "diname")
+	@echo "[shellcheck-syntax] parsing every *.sh under repo root..."
+	@status=0; 	while IFS= read -r f; do 	  if bash -n "$$f" 2>&1; then 	    echo "  [ok] $$f"; 	  else 	    echo "  [FAIL] $$f"; status=1; 	  fi; 	done < <(find . -name '*.sh' -not -path './.venv/*' -not -path './node_modules/*' -not -path './.git/*'); 	if [ $$status -eq 0 ]; then echo "[OK] all shell scripts parse cleanly"; else exit $$status; fi
 
 run: install ## Start the agent service locally (stub)
 	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
