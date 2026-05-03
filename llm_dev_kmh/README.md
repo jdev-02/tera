@@ -65,9 +65,12 @@ docker compose up --build
 - `NAIP_AWS_STATE`, `NAIP_AWS_YEAR`, `NAIP_AWS_RESOLUTION`, `NAIP_AWS_BANDSET`: controls public NAIP AWS prefix downloads; defaults are inferred U.S. state, `2022`, `60cm`, and `rgbir`.
 - `NAIP_AWS_BUCKET`: defaults to `naip-analytic`; set to `naip-visualization` for RGB COGs when desired.
 - `NAIP_MAX_FILES`: safety cap for NAIP prefix downloads; defaults to `50`.
-- `NAIP_EARTHEXPLORER_DIR`: optional folder of EarthExplorer NAIP GeoTIFFs to import instead of relying only on AWS prefix downloads.
+- `NAIP_EARTHEXPLORER_DIR`: optional folder of staged NAIP GeoTIFFs; on the Jetson demo defaults to `/WINTAK Imagery` or the Docker mount `/mnt/jetson/WINTAK Imagery`.
+- `TERA_WINTAK_IMAGERY_DIR`: root-staged WinTAK imagery folder containing OSM and NAIP display/query files; defaults to `/WINTAK Imagery` on the Jetson host.
+- `TERA_OSM_ROOT_DIRS`: OS-pathsep-separated roots or globs for local OSM SQLite/GeoPackage files; defaults to the WinTAK imagery folder.
 - `GEOFABRIK_PBF_URL` or `GEOFABRIK_REGION_SLUG`: optional OSM override; otherwise the app infers a U.S. state extract such as `north-america/us/nevada-latest.osm.pbf`.
-- `DTED_SOURCE_DIR`: optional folder of EarthExplorer `.dt0/.dt1/.dt2` files; imported and converted with `gdal_translate` if GDAL is installed.
+- `DTED_SOURCE_DIR`: folder of `.dt0/.dt1/.dt2` files; on the Jetson demo defaults to `/DTED` or the Docker mount `/mnt/jetson/DTED`.
+- `TERA_JETSON_LOCAL_SOURCES_ONLY`: defaults to `1`; skips outbound source downloads and uses staged OSM/NAIP/DTED files.
 - `OFFLINE_PACKAGE_ROOT`: Jetson directory where source packages, status files, terrain rasters, route artifacts, and CoT XML are written; defaults to `llm_dev_kmh/offline_packages`
 - `PACKAGE_MIN_FREE_GB`: disk space reserve enforced before downloads start; defaults to `10`
 - `DEFAULT_LAT`: initial camera latitude, default `37.7749`

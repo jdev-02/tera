@@ -2074,18 +2074,15 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
 
   const promptText = missionText.trim().toLowerCase();
   const missionFocus = inferClientMissionFocus(promptText);
-  const isUsContext = isUsMissionContext(promptText, mapContext);
   const requiredIds = [];
   const optionalIds = [];
   const questions = [];
   const rationale = [`Planner API unavailable: ${plannerErrorMessage}. Using embedded deterministic source rules.`];
 
-  appendUniqueSourceIds(requiredIds, isUsContext ? "naip" : "sentinel_2");
-  appendUniqueSourceIds(optionalIds, "cesium_world_imagery", "osm_basemap");
-  if (isUsContext) {
-    appendUniqueSourceIds(optionalIds, "usgs_imagery_only", "nrl_naip_conus");
-  }
-  rationale.push("NAIP is the high-detail U.S. imagery default; Sentinel-2 remains the global free imagery fallback and Cesium imagery stays as the token-backed preview stream.");
+  appendUniqueSourceIds(optionalIds, "naip", "osm_basemap");
+  rationale.push(
+    "Jetson demo file selection is fixed to root-staged data: OSM and NAIP imagery under /WINTAK Imagery for display, with model actions derived only from OSM vectors and DTED terrain.",
+  );
 
   const needsRouting = textHasAny(promptText, [
     "route",
@@ -2169,77 +2166,60 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   ]);
 
   if (needsCesiumArchive) {
-    appendUniqueSourceIds(requiredIds, "cesium_ion_archive");
-    rationale.push("Cesium offline use is handled through ion archive/export downloads to the Jetson, not by scraping World stream tiles.");
+    rationale.push("Cesium archive requests are out of scope for this Jetson demo; use staged WinTAK imagery instead.");
   }
   if (needsRouting) {
     appendUniqueSourceIds(requiredIds, "osm_extract");
-    rationale.push("OSM PBF is required for the local routable graph and feature lookup.");
+    rationale.push(
+      "OSM from /WINTAK Imagery is required for local graph, POI, waterway, trail, road, and obstacle lookup.",
+    );
   }
   if (needsTerrain) {
-    appendUniqueSourceIds(requiredIds, "copernicus_dem");
-    if (isUsContext) {
-      appendUniqueSourceIds(optionalIds, "dted_earth_explorer", "usgs_3dep");
-    } else {
-      appendUniqueSourceIds(optionalIds, "dted_earth_explorer");
-    }
-    appendUniqueSourceIds(optionalIds, "cesium_world_terrain");
-    rationale.push("Copernicus GLO-30 COGs are the no-account terrain default; staged EarthExplorer DTED supplements it when available.");
+    appendUniqueSourceIds(requiredIds, "dted_earth_explorer");
+    rationale.push(
+      "DTED from /DTED is the only deterministic terrain source for slope, exposure, viewshed, and cost-surface work.",
+    );
   }
   if (needsDted) {
     appendUniqueSourceIds(requiredIds, "dted_earth_explorer");
-    rationale.push("DTED was explicitly requested, so staged EarthExplorer DTED import is included; set DTED_SOURCE_DIR on the Jetson before executing the package.");
+    rationale.push(
+      "DTED was explicitly requested, so the importer uses the root-staged /DTED folder unless DTED_SOURCE_DIR overrides it.",
+    );
   }
   if (needsLandcover) {
-    appendUniqueSourceIds(requiredIds, isUsContext ? "nlcd" : "esa_worldcover");
-    rationale.push("Land cover is included because movement friction, cover, vegetation, or route quality matters.");
+    rationale.push(
+      "No separate land-cover source is selected; covered movement must be inferred from OSM features plus DTED terrain only.",
+    );
   }
   if (needsWater) {
-    appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dhp" : "hydrosheds");
-    if (isUsContext) {
-      appendUniqueSourceIds(optionalIds, "nwis");
-    }
-    rationale.push("Hydrography is required for water-source and drainage queries.");
+    appendUniqueSourceIds(requiredIds, "osm_extract");
+    rationale.push(
+      "Water lookup uses OSM waterway, spring, river, lake, and related tags from the local WinTAK imagery folder.",
+    );
   }
   if (needsSar) {
     appendUniqueSourceIds(requiredIds, "osm_extract");
-    appendUniqueSourceIds(optionalIds, isUsContext ? "naip" : "sentinel_2", "noaa_alerts");
-    rationale.push("SAR planning needs access features and usually benefits from detailed imagery and current alerts.");
+    appendUniqueSourceIds(optionalIds, "naip");
+    rationale.push("SAR planning uses OSM access/feature data for action and NAIP only as operator display context.");
   }
   if (needsHazards) {
-    appendUniqueSourceIds(optionalIds, "noaa_alerts");
-    if (textHasAny(promptText, ["fire", "wildfire"])) {
-      appendUniqueSourceIds(requiredIds, "nasa_firms");
-    }
-    if (textHasAny(promptText, ["flood"])) {
-      appendUniqueSourceIds(requiredIds, isUsContext ? "fema_flood" : "sentinel_1_sar");
-    }
-    rationale.push("Hazard layers are included only because current or baseline risk affects the mission.");
+    rationale.push(
+      "Live hazard feeds are not selected; hazards must come from OSM features, DTED terrain, or the operator prompt.",
+    );
   }
   if (needsAccess) {
-    appendUniqueSourceIds(requiredIds, isUsContext ? "pad_us" : "parcels_boundaries");
-    if (isUsContext) {
-      appendUniqueSourceIds(optionalIds, "parcels_boundaries");
-    }
-    rationale.push("Access and boundary layers are included because restricted or legal movement matters.");
+    appendUniqueSourceIds(requiredIds, "osm_extract");
+    rationale.push("Access and barriers are constrained to OSM tags for this Jetson demo.");
   }
   if (needsSignal) {
-    appendUniqueSourceIds(requiredIds, "viewshed_surfaces");
-    appendUniqueSourceIds(optionalIds, isUsContext ? "fcc_towers" : "osm_towers", "osm_towers");
-    if (!needsTerrain) {
-      appendUniqueSourceIds(requiredIds, "copernicus_dem");
-      if (isUsContext) {
-        appendUniqueSourceIds(optionalIds, "dted_earth_explorer", "usgs_3dep");
-      }
-    }
-    rationale.push("Signal planning requires DEM-derived viewsheds plus tower or high-ground candidates.");
+    appendUniqueSourceIds(requiredIds, "osm_extract", "dted_earth_explorer");
+    rationale.push(
+      "Signal planning uses DTED-derived viewshed/high-ground checks and OSM tower/peak/lookout tags only.",
+    );
   }
   if (needsCurrentImagery && !needsWater && !needsHazards) {
-    appendUniqueSourceIds(optionalIds, "landsat_collection_2");
-    if (isUsContext) {
-      appendUniqueSourceIds(optionalIds, "naip");
-    }
-    rationale.push("Recent imagery is optional unless recent conditions drive the mission.");
+    appendUniqueSourceIds(optionalIds, "naip");
+    rationale.push("Current imagery feeds are not selected; root-staged NAIP/OSM imagery is display only.");
   }
 
   if (!mapContext?.location_confirmed) {
@@ -2270,11 +2250,11 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     questions.push("Should the package enforce legal or restricted access boundaries, or only support terrain movement?");
   }
   if (!mapContext?.selected_area && !mapContext?.location_confirmed) {
-    questions.push("Is this AO inside the U.S. or outside it?");
+    questions.push("Confirm that the displayed AO is covered by /DTED and the OSM files under /WINTAK Imagery.");
   }
 
   const selectedIds = [];
-  const previewIds = optionalIds.filter((sourceId) => ["cesium_world_imagery", "usgs_imagery_only", "osm_basemap"].includes(sourceId));
+  const previewIds = optionalIds.filter((sourceId) => ["naip", "osm_basemap"].includes(sourceId));
   appendUniqueSourceIds(selectedIds, ...requiredIds, ...previewIds);
   const missionSummary = missionText.length > 220 ? `${missionText.slice(0, 217)}...` : missionText;
 

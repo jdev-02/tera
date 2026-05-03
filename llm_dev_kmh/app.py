@@ -1026,8 +1026,8 @@ SOURCE_CATALOG: list[SourceOption] = [
         provider="Geofabrik / OpenStreetMap contributors",
         category="vector",
         purpose=(
-            "Geofabrik regional OSM PBF downloaded to the Jetson and clipped to "
-            "the selected AOI for roads, trails, waterways, buildings, POIs, and barriers."
+            "Root-staged OSM vector data from the Jetson WinTAK imagery folder "
+            "for roads, trails, waterways, buildings, POIs, and barriers."
         ),
         useful_for=[
             "routable graph",
@@ -1048,6 +1048,23 @@ SOURCE_CATALOG: list[SourceOption] = [
         license_or_terms="OpenStreetMap data from Geofabrik is under the Open Database License.",
         download_methods=[
             SourceDownloadMethod(
+                id="osm_wintak_imagery_import",
+                label="Index staged WinTAK OSM vector files",
+                endpoint="${TERA_WINTAK_IMAGERY_DIR}",
+                output_format="OSM SQLite/GeoPackage/PBF index",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/vectors/osm/wintak_osm_index.json"
+                ),
+                params={
+                    "source_dir": "${TERA_WINTAK_IMAGERY_DIR}",
+                    "bbox": "{aoi_bbox_wgs84}",
+                },
+                notes=(
+                    "Defaults to /WINTAK Imagery on the Jetson and indexes local "
+                    "OSM SQLite/GeoPackage/PBF files without outbound downloads."
+                ),
+            ),
+            SourceDownloadMethod(
                 id="osm_geofabrik_pbf",
                 label="Geofabrik regional PBF download and AOI clip",
                 endpoint="{geofabrik_osm_pbf_url}",
@@ -1063,19 +1080,19 @@ SOURCE_CATALOG: list[SourceOption] = [
                 },
                 terms_url="https://www.geofabrik.de/en/data/download.html",
                 notes=(
-                    "Downloads the AO's Geofabrik state/region extract. If osmium is "
-                    "installed on the Jetson, it clips to AOI; otherwise it registers "
-                    "the regional PBF and marks clipping as pending."
+                    "Fallback only. The Jetson ATAK demo should use staged files "
+                    "under /WINTAK Imagery and avoid outbound downloads."
                 ),
             )
         ],
         jetson_query_formats=[
             JetsonQueryFormat(
-                artifact_type="osm_pbf_extract",
-                local_path_template="offline_packages/{package_id}/vectors/osm/aoi.osm.pbf",
+                artifact_type="osm_wintak_index",
+                local_path_template=(
+                    "offline_packages/{package_id}/vectors/osm/wintak_osm_index.json"
+                ),
                 query_interfaces=[
-                    "osmium tags-filter",
-                    "pyosmium scan",
+                    "query_osm_features(target_type, origin, radius_m)",
                     "valhalla_build_tiles",
                     "find_pois(osm_tags, bbox)",
                 ],
@@ -1088,7 +1105,7 @@ SOURCE_CATALOG: list[SourceOption] = [
                 notes="Main vector artifact for deterministic route and POI algorithms.",
             )
         ],
-        notes="Clip tightly to AO and preserve source/version metadata.",
+        notes="Use staged files from /WINTAK Imagery for the Jetson demo.",
     ),
     SourceOption(
         id="usgs_3dep",
@@ -1439,14 +1456,13 @@ SOURCE_CATALOG: list[SourceOption] = [
         provider="USDA / USGS EarthExplorer / AWS Open Data",
         category="imagery-analysis",
         purpose=(
-            "High-resolution U.S. aerial imagery downloaded to the Jetson from "
-            "EarthExplorer GeoTIFF staging or NAIP public S3 prefixes."
+            "High-resolution U.S. aerial imagery staged on the Jetson under the "
+            "WinTAK imagery folder for display context."
         ),
         useful_for=["small roads/tracks", "buildings", "clearings", "agricultural features", "offline AO imagery"],
         analysis_role=(
-            "Primary high-detail U.S. imagery source for this workflow. Use "
-            "EarthExplorer GeoTIFFs when staged, or pull public NAIP AWS state/year/"
-            "resolution prefixes with requester-pays headers for local query and serving."
+            "Display-only context for the ATAK/planner UI. The Gemma agent does "
+            "not query NAIP pixels for TAK CoT generation; action uses OSM and DTED."
         ),
         stream_status="not-streamed",
         download_status="download-required",
@@ -1456,6 +1472,25 @@ SOURCE_CATALOG: list[SourceOption] = [
         source_url="https://registry.opendata.aws/naip/",
         license_or_terms="NAIP on AWS is public domain with attribution; EarthExplorer downloads follow USGS terms.",
         download_methods=[
+            SourceDownloadMethod(
+                id="naip_earthexplorer_geotiff_import",
+                label="Import staged WinTAK/NAIP GeoTIFFs",
+                endpoint="${NAIP_EARTHEXPLORER_DIR}",
+                output_format="NAIP GeoTIFF imagery",
+                local_artifact_template=(
+                    "offline_packages/{package_id}/imagery/naip/earthexplorer/naip_earthexplorer_index.json"
+                ),
+                params={
+                    "source_dir": "${NAIP_EARTHEXPLORER_DIR}",
+                    "bbox": "{aoi_bbox_wgs84}",
+                    "max_files": "{naip_max_files}",
+                },
+                requires_account=False,
+                notes=(
+                    "Defaults to /WINTAK Imagery on the Jetson. Files are served "
+                    "for display and operator review only."
+                ),
+            ),
             SourceDownloadMethod(
                 id="naip_aws_public_prefix",
                 label="NAIP AWS public S3 prefix download",
@@ -1481,26 +1516,6 @@ SOURCE_CATALOG: list[SourceOption] = [
                     "max files and confirm storage before pulling large state prefixes."
                 ),
             ),
-            SourceDownloadMethod(
-                id="naip_earthexplorer_geotiff_import",
-                label="Import staged EarthExplorer NAIP GeoTIFFs",
-                endpoint="${NAIP_EARTHEXPLORER_DIR}",
-                output_format="NAIP GeoTIFF imagery",
-                local_artifact_template=(
-                    "offline_packages/{package_id}/imagery/naip/earthexplorer/naip_earthexplorer_index.json"
-                ),
-                params={
-                    "source_dir": "${NAIP_EARTHEXPLORER_DIR}",
-                    "bbox": "{aoi_bbox_wgs84}",
-                    "max_files": "{naip_max_files}",
-                },
-                requires_account=True,
-                terms_url="https://www.usgs.gov/tools/earthexplorer",
-                notes=(
-                    "Set NAIP_EARTHEXPLORER_DIR to the folder containing downloaded "
-                    "NAIP GeoTIFFs from EarthExplorer."
-                ),
-            ),
         ],
         jetson_query_formats=[
             JetsonQueryFormat(
@@ -1512,11 +1527,11 @@ SOURCE_CATALOG: list[SourceOption] = [
                     "read_window(west, south, east, north)",
                     "visual_chip(west, south, east, north)",
                 ],
-                feeds_algorithms=["operator_route_review", "feature_extraction_review", "sar_probability_context"],
-                notes="Local NAIP files are served to the planner/TERA plugin and can be read by GDAL/rasterio.",
+                feeds_algorithms=["operator_route_review"],
+                notes="Local NAIP files are served to the planner/TERA plugin for display only.",
             )
         ],
-        notes="Check acquisition date; may be stale for fast-changing environments.",
+        notes="Check acquisition date; do not use NAIP as deterministic model evidence for the demo.",
     ),
     SourceOption(
         id="sentinel_1_sar",
@@ -2082,7 +2097,30 @@ def _copernicus_dem_tiles(bounds: ViewBounds | None) -> list[dict[str, object]]:
 
 
 def _env_path(name: str) -> str:
-    return os.getenv(name, "").strip()
+    configured = os.getenv(name, "").strip()
+    if configured:
+        return configured
+    defaults = {
+        "DTED_SOURCE_DIR": ("/DTED", "/mnt/jetson/DTED"),
+        "NAIP_EARTHEXPLORER_DIR": (
+            "/WINTAK Imagery",
+            "/mnt/jetson/WINTAK Imagery",
+        ),
+        "TERA_WINTAK_IMAGERY_DIR": (
+            "/WINTAK Imagery",
+            "/mnt/jetson/WINTAK Imagery",
+        ),
+    }
+    for candidate in defaults.get(name, ()):
+        path = Path(candidate)
+        if path.exists():
+            return str(path)
+    return ""
+
+
+def _jetson_local_sources_only() -> bool:
+    value = os.getenv("TERA_JETSON_LOCAL_SOURCES_ONLY", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _recent_interval(days: int = 730) -> str:
@@ -2266,6 +2304,7 @@ def _substitute_download_endpoint(endpoint: str, bounds: ViewBounds | None) -> s
         .replace("{bucket}", _naip_bucket())
         .replace("${NAIP_EARTHEXPLORER_DIR}", "${NAIP_EARTHEXPLORER_DIR}")
         .replace("${DTED_SOURCE_DIR}", "${DTED_SOURCE_DIR}")
+        .replace("${TERA_WINTAK_IMAGERY_DIR}", "${TERA_WINTAK_IMAGERY_DIR}")
     )
 
 
@@ -2281,6 +2320,20 @@ def _build_source_download_operations(
 
     for source in sources:
         for method in source.download_methods:
+            if _jetson_local_sources_only() and method.id in {
+                "naip_aws_public_prefix",
+                "osm_geofabrik_pbf",
+                "copernicus_dem_glo30_cog",
+                "sentinel2_cog_download",
+                "usgs_imagery_tile_cache",
+                "nrl_naip_tile_cache",
+                "esri_world_imagery_export_tiles",
+                "esri_world_elevation_export_image_tiff",
+                "esri_world_elevation_get_samples",
+                "cesium_ion_archive_download",
+                "cesium_ion_clip_create_download",
+            }:
+                continue
             if source.id == "cesium_ion_archive":
                 archive_id_configured = bool(_get_cesium_archive_id())
                 asset_ids_configured = bool(
@@ -2298,6 +2351,10 @@ def _build_source_download_operations(
                 ):
                     continue
             if method.id == "naip_earthexplorer_geotiff_import" and not _env_path("NAIP_EARTHEXPLORER_DIR"):
+                continue
+            if method.id == "osm_wintak_imagery_import" and not _env_path(
+                "TERA_WINTAK_IMAGERY_DIR"
+            ):
                 continue
             if method.id == "dted_earthexplorer_import_convert" and not _env_path("DTED_SOURCE_DIR"):
                 continue
@@ -2975,6 +3032,13 @@ def _params_with_runtime_token(params: dict[str, object]) -> dict[str, object]:
             source_dir = _env_path("DTED_SOURCE_DIR")
             if not source_dir:
                 raise RuntimeError("DTED_SOURCE_DIR is required to import staged EarthExplorer DTED files.")
+            materialized[key] = source_dir
+        elif value == "${TERA_WINTAK_IMAGERY_DIR}":
+            source_dir = _env_path("TERA_WINTAK_IMAGERY_DIR")
+            if not source_dir:
+                raise RuntimeError(
+                    "TERA_WINTAK_IMAGERY_DIR is required to index staged WinTAK imagery files."
+                )
             materialized[key] = source_dir
         else:
             materialized[key] = json.dumps(value) if isinstance(value, dict) else value
@@ -3926,6 +3990,71 @@ def _run_subprocess(args: list[str]) -> tuple[bool, str]:
     return result.returncode == 0, output.strip()
 
 
+OSM_VECTOR_SUFFIXES = {".gpkg", ".sqlite", ".sqlite3", ".db", ".pbf", ".osm"}
+OSM_SQLITE_SUFFIXES = {".gpkg", ".sqlite", ".sqlite3", ".db"}
+
+
+async def _execute_osm_wintak_import(
+    *,
+    package_id: str,
+    operation: dict[str, object],
+) -> list[dict[str, object]]:
+    params = _params_with_runtime_token(
+        operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    )
+    source_dir = Path(str(params["source_dir"])).expanduser().resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise RuntimeError(
+            f"TERA_WINTAK_IMAGERY_DIR does not exist or is not a directory: {source_dir}"
+        )
+
+    files = [
+        path
+        for path in sorted(source_dir.rglob("*"))
+        if path.is_file() and path.suffix.lower() in OSM_VECTOR_SUFFIXES
+    ]
+    if not files:
+        raise RuntimeError("No OSM vector files found in TERA_WINTAK_IMAGERY_DIR.")
+
+    sqlite_files = [path for path in files if path.suffix.lower() in OSM_SQLITE_SUFFIXES]
+    pbf_files = [path for path in files if path.suffix.lower() in {".pbf", ".osm"}]
+    index_path = _artifact_path(package_id, operation.get("local_artifact"))
+    _write_json(
+        index_path,
+        {
+            "source_dir": str(source_dir),
+            "bbox": params.get("bbox"),
+            "sqlite_files": [str(path) for path in sqlite_files],
+            "pbf_files": [str(path) for path in pbf_files],
+            "query_env": {
+                "TERA_OSM_ROOT_DIRS": str(source_dir),
+                "TERA_WINTAK_IMAGERY_DIR": str(source_dir),
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return [
+        _artifact_record(
+            package_id=package_id,
+            operation=operation,
+            path=index_path,
+            artifact_type="osm_wintak_index",
+            output_format="JSON staged WinTAK OSM index",
+            query_interfaces=[
+                "query_osm_features(target_type, origin, radius_m)",
+                "valhalla_build_tiles",
+                "osmium tags-filter",
+            ],
+            feeds_algorithms=["routable_graph", "nearest_feature", "water_source_lookup"],
+            metadata={
+                "source_dir": str(source_dir),
+                "sqlite_file_count": len(sqlite_files),
+                "pbf_file_count": len(pbf_files),
+            },
+        )
+    ]
+
+
 async def _execute_osm_geofabrik_pbf(
     client: httpx.AsyncClient,
     *,
@@ -4228,6 +4357,11 @@ async def _execute_operation(
         )
     if operation_id == "naip_earthexplorer_geotiff_import":
         return await _execute_naip_earthexplorer_import(
+            package_id=package_id,
+            operation=operation,
+        )
+    if operation_id == "osm_wintak_imagery_import":
+        return await _execute_osm_wintak_import(
             package_id=package_id,
             operation=operation,
         )
@@ -5451,7 +5585,6 @@ def _infer_source_recommendation(
     mission_text: str, map_context: MapContext | None
 ) -> SourceRecommendationResponse:
     prompt_text = mission_text.strip().lower()
-    is_us_context = _infer_is_us_context(prompt_text, map_context)
     mission_focus = _infer_mission_focus(prompt_text)
 
     required_ids: list[str] = []
@@ -5459,14 +5592,11 @@ def _infer_source_recommendation(
     questions: list[str] = []
     rationale: list[str] = []
 
-    _append_unique(required_ids, "naip" if is_us_context else "sentinel_2")
-    _append_unique(optional_ids, "cesium_world_imagery", "osm_basemap")
-    if is_us_context:
-        _append_unique(optional_ids, "usgs_imagery_only", "nrl_naip_conus")
+    _append_unique(optional_ids, "naip", "osm_basemap")
     rationale.append(
-        "NAIP is the high-detail U.S. imagery default when the AO is in the U.S.; "
-        "Sentinel-2 remains the global free imagery fallback. Cesium imagery stays "
-        "as a token-backed preview stream."
+        "Jetson demo file selection is fixed to root-staged data: OSM and NAIP "
+        "imagery under /WINTAK Imagery for display context, with model actions "
+        "derived only from OSM vector queries and DTED terrain."
     )
 
     needs_routing = _text_has_any(
@@ -5517,111 +5647,94 @@ def _infer_source_recommendation(
     )
 
     if needs_cesium_archive:
-        _append_unique(required_ids, "cesium_ion_archive")
         rationale.append(
-            "Cesium offline use is handled through ion archive/export downloads "
-            "to the Jetson, not by scraping Cesium World stream tiles."
+            "Cesium archive requests are out of scope for this Jetson demo; use "
+            "the staged WinTAK imagery folder instead."
         )
 
     if needs_routing:
         _append_unique(required_ids, "osm_extract")
-        rationale.append("OSM PBF is required for the local routable graph and POI/feature lookup.")
+        rationale.append(
+            "OSM from /WINTAK Imagery is required for local routable graph, POI, "
+            "waterway, trail, road, and obstacle lookup."
+        )
 
     if needs_terrain:
-        _append_unique(required_ids, "copernicus_dem")
-        if is_us_context:
-            _append_unique(optional_ids, "dted_earth_explorer", "usgs_3dep")
-        else:
-            _append_unique(optional_ids, "dted_earth_explorer")
-        _append_unique(optional_ids, "cesium_world_terrain")
+        _append_unique(required_ids, "dted_earth_explorer")
         rationale.append(
-            "Copernicus GLO-30 COGs are the no-account terrain default for slope, "
-            "exposure, hydrology, and cost surfaces; staged EarthExplorer DTED "
-            "supplements it when available."
+            "DTED from /DTED is the only deterministic terrain source for slope, "
+            "exposure, viewshed, and cost-surface work in this Jetson demo."
         )
 
     if needs_dted:
         _append_unique(required_ids, "dted_earth_explorer")
         rationale.append(
-            "DTED was explicitly requested, so staged EarthExplorer DTED import is "
-            "included; set DTED_SOURCE_DIR on the Jetson before executing the package."
+            "DTED was explicitly requested, so the importer uses the root-staged "
+            "/DTED folder unless DTED_SOURCE_DIR overrides it."
         )
 
     if needs_landcover:
-        _append_unique(required_ids, "nlcd" if is_us_context else "esa_worldcover")
         rationale.append(
-            "Land cover is included only because the mission mentions movement "
-            "friction, cover, vegetation, or route quality."
+            "No separate land-cover source is selected for the Jetson demo; covered "
+            "movement must be inferred from OSM features plus DTED terrain only."
         )
 
     if needs_water:
-        _append_unique(required_ids, "usgs_3dhp" if is_us_context else "hydrosheds")
-        if is_us_context:
-            _append_unique(optional_ids, "nwis")
+        _append_unique(required_ids, "osm_extract")
         rationale.append(
-            "Hydrography is required for water-source and drainage queries; "
-            "imagery/observations are optional confidence boosters."
+            "Water-source lookup uses OSM waterway, spring, river, lake, and related "
+            "tags from the local WinTAK imagery folder; no external hydrography is selected."
         )
 
     if needs_sar:
         _append_unique(required_ids, "osm_extract")
-        _append_unique(optional_ids, "naip" if is_us_context else "sentinel_2", "noaa_alerts")
+        _append_unique(optional_ids, "naip")
         rationale.append(
-            "SAR planning needs access features and often benefits from "
-            "high-detail imagery and current alerts."
+            "SAR planning uses OSM access/feature data for action and NAIP only as "
+            "operator display context."
         )
 
     if needs_hazards:
-        _append_unique(optional_ids, "noaa_alerts")
-        if _text_has_any(prompt_text, ("fire", "wildfire")):
-            _append_unique(required_ids, "nasa_firms")
-        if _text_has_any(prompt_text, ("flood",)):
-            _append_unique(required_ids, "fema_flood" if is_us_context else "sentinel_1_sar")
         rationale.append(
-            "Hazard feeds are included only when the mission says current "
-            "hazards affect routing or safety."
+            "Live hazard feeds are not selected for the offline Jetson demo; hazards "
+            "must come from OSM features, DTED terrain, or the operator prompt."
         )
 
     if needs_access:
-        _append_unique(required_ids, "pad_us" if is_us_context else "parcels_boundaries")
-        if is_us_context:
-            _append_unique(optional_ids, "blm_usfs_nps", "parcels_boundaries")
+        _append_unique(required_ids, "osm_extract")
         rationale.append(
-            "Access and boundary layers are included only when "
-            "legal/restricted movement matters."
+            "Access and barriers are constrained to OSM tags for this Jetson demo; "
+            "parcel or managed-land overlays are not selected."
         )
 
     if needs_signal:
-        _append_unique(required_ids, "viewshed_surfaces")
-        _append_unique(optional_ids, "fcc_towers" if is_us_context else "osm_towers", "osm_towers")
+        _append_unique(required_ids, "osm_extract", "dted_earth_explorer")
         if not needs_terrain:
-            _append_unique(required_ids, "copernicus_dem")
-            if is_us_context:
-                _append_unique(optional_ids, "dted_earth_explorer", "usgs_3dep")
-        rationale.append("Signal planning requires DEM-derived viewsheds plus tower/high-ground candidates.")
+            _append_unique(required_ids, "dted_earth_explorer")
+        rationale.append(
+            "Signal planning uses DTED-derived viewshed/high-ground checks and OSM "
+            "tower/peak/lookout tags only."
+        )
 
     if needs_current_imagery and not needs_water and not needs_hazards:
-        _append_unique(optional_ids, "landsat_collection_2")
-        if is_us_context:
-            _append_unique(optional_ids, "naip")
+        _append_unique(optional_ids, "naip")
         rationale.append(
-            "Current or historical imagery is optional unless the mission "
-            "depends on recent conditions."
+            "Current imagery feeds are not selected; the Jetson demo uses root-staged "
+            "NAIP/OSM imagery for display only."
         )
 
     if map_context is None or not (map_context.location_confirmed or map_context.selected_area):
         questions.append(
             "Move the map to the mission AO with search, KML/KMZ import, or AO "
             "drawing and confirm that view before final source selection. The "
-            "AO decides clipping bounds and whether U.S. authoritative or global "
-            "open layers are the right defaults."
+            "AO decides which local OSM and DTED files are relevant."
         )
 
     if not required_ids:
         questions.append(
             "Which mission outcome must the database answer first: routing, "
             "water lookup, SAR sectors, signal planning, hazards, or access "
-            "control? This decides the required source family."
+            "control? This decides how OSM and DTED are queried."
         )
         rationale.append(
             "No deterministic analytical layer was identified yet, so the "
@@ -5639,41 +5752,40 @@ def _infer_source_recommendation(
         )
     if needs_water:
         questions.append(
-            "Is the operator asking for mapped water features only, or "
-            "confidence in current and potable water availability? The "
-            "broader answer adds observation or imagery layers beyond "
-            "hydrography."
+            "Is the operator asking for mapped water features only, or confidence "
+            "that the point is usable? The demo can map OSM water features, but "
+            "potability/current flow must remain a caveat."
         )
     if needs_hazards:
         questions.append(
-            "Which hazards must be current at package time versus treated as "
-            "cached baseline risk? Current hazards add live feeds; baseline "
-            "risk keeps the package smaller."
+            "Which hazards should the operator avoid if they are not present in "
+            "OSM or visible from DTED-derived terrain? The demo will treat those "
+            "as operator-stated constraints."
         )
     if needs_signal:
         questions.append(
             "What antenna height and radio role should viewshed or relay "
-            "analysis assume? This controls whether tower datasets are needed "
-            "or a DEM-derived viewshed is sufficient."
+            "analysis assume? The demo can use OSM tower/peak candidates and "
+            "DTED-derived line-of-sight only."
         )
     if needs_access:
         questions.append(
-            "Should the package enforce legal or restricted access boundaries, "
-            "or only support terrain movement? Enforcing access adds parcels, "
-            "protected areas, or land-management boundaries."
+            "Should the route avoid access restrictions that appear in OSM tags, "
+            "or only support terrain movement? The demo does not add parcel or "
+            "managed-land overlays."
         )
     if map_context is None or (
         map_context.selected_area is None and not map_context.location_confirmed
     ):
         questions.append(
-            "Is this AO inside the U.S. or outside it? That choice switches "
-            "between U.S.-authoritative layers and global open layers."
+            "Confirm that the displayed AO is covered by the root /DTED folder and "
+            "the OSM files under /WINTAK Imagery."
         )
 
     selected_ids = []
     preview_ids = [
         source_id
-        for source_id in ("cesium_world_imagery", "usgs_imagery_only", "osm_basemap")
+        for source_id in ("naip", "osm_basemap")
         if source_id in optional_ids
     ]
     _append_unique(selected_ids, *required_ids, *preview_ids)
@@ -6218,6 +6330,10 @@ def _build_system_prompt(request: PromptRequest) -> str:
         ),
         f"- Imagery source: {(map_context.imagery_source if map_context else None) or 'unknown'}",
         f"- Terrain source: {(map_context.terrain_source if map_context else None) or 'unknown'}",
+        (
+            "- Deterministic Jetson sources: OSM vectors from /WINTAK Imagery "
+            "and DTED terrain from /DTED; NAIP/OSM imagery is display-only."
+        ),
         f"- Active TERA TAK items on map: {_active_tak_item_count(map_context) if map_context else 0}",
     ]
     normalized_request_lines = [
@@ -6293,6 +6409,12 @@ def _build_system_prompt(request: PromptRequest) -> str:
                         "- Use the displayed ATAK map bounds as the visible operating area: "
                         "prefer targets, checkpoints, and caveats that fit inside that map "
                         "view unless the user explicitly gives a different radius or objective."
+                    ),
+                    (
+                        "- In Jetson ATAK mode, deterministic action can query only local OSM "
+                        "vectors from the WinTAK imagery folder and DTED terrain from the "
+                        "Jetson DTED folder. Treat NAIP and OSM imagery as display context, "
+                        "not as model evidence for generated CoT."
                     ),
                     (
                         "- For follow-up rejection like 'that route does not work' or "
@@ -7896,8 +8018,13 @@ def _download_plan_warnings(
     ):
         warnings.append("No AO bounds were provided; downloads must be clipped before ingest.")
     if not any(source.id == "osm_extract" for source in sources):
-        warnings.append("OSM PBF extract is not selected, so server-side routable graph work is blocked.")
-    elif shutil.which("osmium") is None:
+        warnings.append("OSM extract is not selected, so server-side routable graph work is blocked.")
+    elif not _env_path("TERA_WINTAK_IMAGERY_DIR"):
+        warnings.append(
+            "TERA_WINTAK_IMAGERY_DIR is not configured; OSM lookup expects staged files "
+            "under /WINTAK Imagery on the Jetson."
+        )
+    elif not _jetson_local_sources_only() and shutil.which("osmium") is None:
         warnings.append(
             "OSM Geofabrik PBF will download, but osmium is not installed; AO clipping "
             "will be marked pending and the regional PBF will be registered."
@@ -7911,14 +8038,14 @@ def _download_plan_warnings(
         )
         if not _env_path("NAIP_EARTHEXPLORER_DIR"):
             warnings.append(
-                "NAIP_EARTHEXPLORER_DIR is not configured, so EarthExplorer NAIP GeoTIFF "
-                "import is skipped and the AWS public S3 prefix method is used."
+                "NAIP_EARTHEXPLORER_DIR is not configured; display imagery expects "
+                "NAIP files under /WINTAK Imagery on the Jetson."
             )
     if any(source.id == "dted_earth_explorer" for source in sources):
         if not _env_path("DTED_SOURCE_DIR"):
             warnings.append(
                 "DTED_SOURCE_DIR is not configured; EarthExplorer DTED import is skipped. "
-                "Use Copernicus DEM GLO-30 for no-account terrain downloads."
+                "The Jetson demo expects DTED files under /DTED."
             )
         elif shutil.which("gdal_translate") is None:
             warnings.append(

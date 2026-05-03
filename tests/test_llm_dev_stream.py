@@ -254,6 +254,7 @@ def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
     assert "Displayed ATAK map bounds:" in system_prompt
     assert "displayed ATAK map view via plugin" in system_prompt
     assert "Use the displayed ATAK map bounds as the visible operating area" in system_prompt
+    assert "OSM vectors from /WINTAK Imagery and DTED terrain from /DTED" in system_prompt
 
 
 def test_source_recommendation_questions_prioritize_source_scope() -> None:
@@ -822,6 +823,25 @@ def test_tak_cot_payload_prefers_client_location_and_visible_bounds(
     assert item.metadata["target"]["inside_view_bounds"] is True
 
 
+def test_osm_configured_paths_scan_wintak_imagery_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from routing.osm_sqlite_features import configured_sqlite_paths
+
+    wintak_dir = tmp_path / "WINTAK Imagery"
+    nested = wintak_dir / "OSM"
+    nested.mkdir(parents=True)
+    sqlite_path = nested / "demo.gpkg"
+    sqlite_path.write_bytes(b"sqlite placeholder")
+
+    monkeypatch.delenv("TERA_OSM_SQLITE_PATHS", raising=False)
+    monkeypatch.delenv("WAYFINDER_OSM_SQLITE_PATHS", raising=False)
+    monkeypatch.setenv("TERA_WINTAK_IMAGERY_DIR", str(wintak_dir))
+
+    assert configured_sqlite_paths() == [sqlite_path]
+
+
 def test_tak_cot_payload_uses_second_target_for_reroute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1043,15 +1063,15 @@ def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
     assert "Esri World Elevation Terrain" in js
     assert "queryable-online" in js
     assert "download-required" in js
-    assert "Copernicus DEM GLO-30 COGs are the planner's primary" in prompt
+    assert "DTED at `/DTED` is the terrain source" in prompt
 
     recommendation = kmh_app._infer_source_recommendation(
         "Need a terrain route that avoids steep exposed terrain.",
         None,
     )
-    assert "copernicus_dem" in recommendation.required_source_ids
-    assert "dted_earth_explorer" in recommendation.optional_source_ids
-    assert "copernicus_dem" in recommendation.selected_source_ids
+    assert "dted_earth_explorer" in recommendation.required_source_ids
+    assert "copernicus_dem" not in recommendation.required_source_ids
+    assert "dted_earth_explorer" in recommendation.selected_source_ids
 
 
 def test_esri_imagery_exports_use_official_export_tiles_contract() -> None:
@@ -1067,7 +1087,7 @@ def test_esri_imagery_exports_use_official_export_tiles_contract() -> None:
     assert source.jetson_query_formats[0].artifact_type == "esri_tpkx_imagery_package"
 
 
-def test_free_imagery_sources_use_sentinel_and_wintak_tile_caches() -> None:
+def test_free_imagery_sources_use_wintak_osm_naip_and_dted() -> None:
     sentinel = kmh_app.SOURCE_BY_ID["sentinel_2"]
     naip = kmh_app.SOURCE_BY_ID["naip"]
     usgs = kmh_app.SOURCE_BY_ID["usgs_imagery_only"]
@@ -1081,16 +1101,16 @@ def test_free_imagery_sources_use_sentinel_and_wintak_tile_caches() -> None:
         .read_text(encoding="utf-8")
     )
 
-    assert naip.download_methods[0].id == "naip_aws_public_prefix"
-    assert naip.download_methods[0].params["bucket"] == "{naip_aws_bucket}"
-    assert naip.download_methods[0].params["prefix"] == "{naip_s3_prefix}"
+    assert naip.download_methods[0].id == "naip_earthexplorer_geotiff_import"
+    assert naip.download_methods[0].endpoint == "${NAIP_EARTHEXPLORER_DIR}"
+    assert naip.download_methods[0].requires_account is False
     assert naip.jetson_query_formats[0].artifact_type == "naip_imagery_index"
     assert sentinel.download_methods[0].endpoint == kmh_app.EARTH_SEARCH_STAC_SEARCH_URL
     assert sentinel.download_methods[0].params["collections"] == ["sentinel-2-l2a"]
     assert sentinel.download_methods[0].requires_token_env is None
     assert sentinel.jetson_query_formats[0].artifact_type == "sentinel2_cog_band_stack"
-    assert osm.download_methods[0].id == "osm_geofabrik_pbf"
-    assert osm.download_methods[0].params["region_url"] == "{geofabrik_osm_pbf_url}"
+    assert osm.download_methods[0].id == "osm_wintak_imagery_import"
+    assert osm.download_methods[0].endpoint == "${TERA_WINTAK_IMAGERY_DIR}"
     assert copernicus.download_methods[0].id == "copernicus_dem_glo30_cog"
     assert copernicus.download_methods[0].params["tile_urls"] == "{copernicus_dem_tile_urls}"
     assert dted.download_methods[0].id == "dted_earthexplorer_import_convert"
@@ -1100,8 +1120,8 @@ def test_free_imagery_sources_use_sentinel_and_wintak_tile_caches() -> None:
     assert "basemap.nationalmap.gov" in usgs.source_url
     assert nrl.download_methods[0].id == "nrl_naip_tile_cache"
     assert "geoint.nrlssc.navy.mil" in nrl.source_url
-    assert "NAIP is the high-detail U.S. imagery default" in js
-    assert "NAIP is the U.S. downloadable default" in prompt
+    assert "Jetson demo file selection is fixed to root-staged data" in js
+    assert "NAIP and OSM imagery under `/WINTAK Imagery`" in prompt
 
 
 def test_naip_osm_and_copernicus_download_params_are_aoi_scoped() -> None:
@@ -1153,6 +1173,7 @@ def test_cesium_sources_are_stream_only_not_offline_downloads() -> None:
 def test_cesium_archive_manifest_uses_configured_archive_or_clip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("TERA_JETSON_LOCAL_SOURCES_ONLY", "0")
     bounds = kmh_app.ViewBounds(west=-122.5, south=37.7, east=-122.4, north=37.8)
     source = kmh_app.SOURCE_BY_ID["cesium_ion_archive"]
 
@@ -1329,8 +1350,11 @@ async def test_source_package_plan_persists_manifest_and_storage_urls(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    monkeypatch.setenv("DTED_SOURCE_DIR", str(tmp_path / "DTED"))
+    monkeypatch.setenv("TERA_WINTAK_IMAGERY_DIR", str(tmp_path / "WINTAK Imagery"))
+    monkeypatch.setenv("NAIP_EARTHEXPLORER_DIR", str(tmp_path / "WINTAK Imagery"))
     request = kmh_app.DownloadPlanRequest(
-        source_ids=["naip", "osm_extract", "copernicus_dem"],
+        source_ids=["naip", "osm_extract", "dted_earth_explorer"],
         mission_focus="terrain-routing",
         map_context=kmh_app.MapContext(
             selected_area=kmh_app.ViewBounds(
@@ -1360,8 +1384,11 @@ async def test_package_execution_writes_jetson_artifacts_without_tokens(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("OFFLINE_PACKAGE_ROOT", str(tmp_path / "packages"))
+    monkeypatch.setenv("DTED_SOURCE_DIR", str(tmp_path / "DTED"))
+    monkeypatch.setenv("TERA_WINTAK_IMAGERY_DIR", str(tmp_path / "WINTAK Imagery"))
+    monkeypatch.setenv("NAIP_EARTHEXPLORER_DIR", str(tmp_path / "WINTAK Imagery"))
     request = kmh_app.DownloadPlanRequest(
-        source_ids=["naip", "osm_extract", "copernicus_dem"],
+        source_ids=["naip", "osm_extract", "dted_earth_explorer"],
         mission_focus="terrain-routing",
         map_context=kmh_app.MapContext(
             selected_area=kmh_app.ViewBounds(
@@ -1494,9 +1521,19 @@ async def test_package_terrain_query_algorithm_route_and_cot(
     assert "<wayfinder>" in cot["events"][0]["cot_xml"]
 
 
-def test_source_package_manifest_contains_download_jobs_and_algorithm_contracts() -> None:
+def test_source_package_manifest_uses_jetson_root_osm_dted_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dted_dir = tmp_path / "DTED"
+    imagery_dir = tmp_path / "WINTAK Imagery"
+    dted_dir.mkdir()
+    imagery_dir.mkdir()
+    monkeypatch.setenv("DTED_SOURCE_DIR", str(dted_dir))
+    monkeypatch.setenv("TERA_WINTAK_IMAGERY_DIR", str(imagery_dir))
+    monkeypatch.setenv("NAIP_EARTHEXPLORER_DIR", str(imagery_dir))
     request = kmh_app.DownloadPlanRequest(
-        source_ids=["naip", "osm_extract", "copernicus_dem"],
+        source_ids=["naip", "osm_extract", "dted_earth_explorer"],
         mission_focus="terrain-routing",
         map_context=kmh_app.MapContext(
             selected_area=kmh_app.ViewBounds(
@@ -1519,22 +1556,34 @@ def test_source_package_manifest_contains_download_jobs_and_algorithm_contracts(
     )
 
     operations = {operation["id"]: operation for operation in manifest["download_operations"]}
-    assert "naip_aws_public_prefix" in operations
-    assert "osm_geofabrik_pbf" in operations
-    assert "copernicus_dem_glo30_cog" in operations
-    assert operations["naip_aws_public_prefix"]["params"]["state"] == "ca"
-    assert operations["naip_aws_public_prefix"]["params"]["prefix"] == "ca/2022/60cm/rgbir/"
-    assert operations["osm_geofabrik_pbf"]["params"]["region_slug"] == "north-america/us/california"
-    assert operations["copernicus_dem_glo30_cog"]["params"]["tile_urls"][0]["tile_id"].startswith(
-        "Copernicus_DSM_COG_10_N37_00_W123_00_DEM"
+    assert "naip_earthexplorer_geotiff_import" in operations
+    assert "osm_wintak_imagery_import" in operations
+    assert "dted_earthexplorer_import_convert" in operations
+    assert "naip_aws_public_prefix" not in operations
+    assert "osm_geofabrik_pbf" not in operations
+    assert "copernicus_dem_glo30_cog" not in operations
+    assert (
+        operations["naip_earthexplorer_geotiff_import"]["params"]["source_dir"]
+        == "${NAIP_EARTHEXPLORER_DIR}"
     )
-    assert any(item["id"] == "raster_cost_distance" for item in manifest["deterministic_algorithms"])
+    assert (
+        operations["osm_wintak_imagery_import"]["params"]["source_dir"]
+        == "${TERA_WINTAK_IMAGERY_DIR}"
+    )
+    assert (
+        operations["dted_earthexplorer_import_convert"]["params"]["source_dir"]
+        == "${DTED_SOURCE_DIR}"
+    )
     assert any(
-        contract["artifact_type"] == "copernicus_dem_cog_index"
+        item["id"] == "raster_cost_distance"
+        for item in manifest["deterministic_algorithms"]
+    )
+    assert any(
+        contract["artifact_type"] == "dted_geotiff_index"
         for contract in manifest["jetson_query_contracts"]
     )
     assert any(
-        contract["artifact_type"] == "osm_pbf_extract"
+        contract["artifact_type"] == "osm_wintak_index"
         for contract in manifest["jetson_query_contracts"]
     )
 
@@ -1716,11 +1765,11 @@ def test_source_recommendation_tolerates_rough_phrasing_and_spelling() -> None:
 
     assert recommendation.mission_focus in {"water-access", "terrain-routing"}
     assert "osm_extract" in recommendation.required_source_ids
-    assert "copernicus_dem" in recommendation.required_source_ids
-    assert "dted_earth_explorer" in recommendation.optional_source_ids
-    assert any(
+    assert "dted_earth_explorer" in recommendation.required_source_ids
+    assert "copernicus_dem" not in recommendation.required_source_ids
+    assert not any(
         source_id in recommendation.required_source_ids
-        for source_id in ("usgs_3dhp", "hydrosheds")
+        for source_id in ("usgs_3dhp", "hydrosheds", "nlcd", "esa_worldcover")
     )
 
 

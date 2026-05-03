@@ -18,7 +18,15 @@ services:
       TERA_ATAK_WARMUP_TIMEOUT_S: ${TERA_ATAK_WARMUP_TIMEOUT_S:-20}
       TERA_PUBLIC_BASE_URL: ${TERA_PUBLIC_BASE_URL:-}
       TERA_JETSON_IP: ${TERA_JETSON_IP:-}
+      DTED_SOURCE_DIR: ${DTED_SOURCE_DIR:-/mnt/jetson/DTED}
+      TERA_WINTAK_IMAGERY_DIR: ${TERA_WINTAK_IMAGERY_DIR:-/mnt/jetson/WINTAK Imagery}
+      TERA_OSM_ROOT_DIRS: ${TERA_OSM_ROOT_DIRS:-/mnt/jetson/WINTAK Imagery}
+      NAIP_EARTHEXPLORER_DIR: ${NAIP_EARTHEXPLORER_DIR:-/mnt/jetson/WINTAK Imagery}
+      TERA_JETSON_LOCAL_SOURCES_ONLY: ${TERA_JETSON_LOCAL_SOURCES_ONLY:-1}
       REQUEST_TIMEOUT_S: ${REQUEST_TIMEOUT_S:-120}
       CESIUM_ION_TOKEN: ${CESIUM_ION_TOKEN:-}
+    volumes:
+      - "${JETSON_DTED_DIR:-/DTED}:/mnt/jetson/DTED:ro"
+      - "${JETSON_WINTAK_IMAGERY_DIR:-/WINTAK Imagery}:/mnt/jetson/WINTAK Imagery:ro"
     extra_hosts:
       - "host.docker.internal:host-gateway"

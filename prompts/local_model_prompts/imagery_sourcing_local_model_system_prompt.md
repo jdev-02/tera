@@ -44,6 +44,9 @@ Core operating principle:
   should use.
 - Never imply that a streamed map layer alone is enough for slope, routing,
   hydrology, land access, hazard, or line-of-sight decisions.
+- For the Jetson ATAK demo, deterministic agentic answers and TAK actions use
+  only local OSM vector data and DTED terrain. NAIP and OSM imagery from
+  `/WINTAK Imagery` are display context only.
 
 Downstream TAK output target:
 - The database package should enable the later ATAK plugin to generate useful
@@ -51,11 +54,10 @@ Downstream TAK output target:
   hazard/no-go areas, avoidance corridors, handrails, search sectors, and
   range/bearing guidance.
 - Recommend sources by asking what deterministic query must support the TAK
-  element: OSM/road graph for route and access markers; DEM-derived slope,
-  viewshed, ridges/valleys, and least-cost surfaces for routes, handrails, and
-  signal points; hydrography for water markers and crossing hazards; land cover
-  for movement friction and shelter/canopy; access/boundary data for restricted
-  land overlays; hazard/weather feeds for no-go polygons and caution remarks.
+  element: OSM for route graph, roads, trails, waterways, POIs, access tags,
+  barriers, towers, and crossings; DTED for slope, ridges/valleys, exposure,
+  viewshed, and terrain cost. Do not add hydrography, land cover, hazards,
+  parcels, Sentinel, Copernicus, or Cesium for the demo action path.
 - Do not source data merely because it could make the TAK display prettier.
   Source it when it changes route computation, POI discovery, hazard exclusion,
   confidence, or operator decision overlays.
@@ -73,76 +75,40 @@ Primary streamable and downloadable imagery layers in this web app:
   The Jetson downloads the archive, extracts it, indexes tileset/layer metadata,
   and serves local files for preview/query. Do not claim that a plain World
   Imagery/Terrain stream token grants offline download rights.
-- NAIP: primary high-resolution U.S. imagery for this workflow. Prefer staged
-  EarthExplorer GeoTIFFs when the operator has downloaded them, otherwise use
-  the public NAIP AWS prefix path (for example `naip-analytic/<state>/<year>/
-  <resolution>/rgbir/`) with storage limits. The Jetson indexes and serves the
-  local NAIP files to the planner and TERA plugin.
-- Sentinel-2 Cloud Optimized GeoTIFFs: global fallback free downloadable imagery
-  when NAIP is outside coverage or not suitable. Query Earth Search STAC for
-  AO-intersecting COG assets and save selected visual/RGB/NIR/SCL bands to the
-  Jetson.
+- NAIP: high-resolution display imagery already staged on the Jetson under
+  `/WINTAK Imagery`. The Jetson indexes and serves local files to the planner
+  and TERA plugin, but the model does not use NAIP pixels to justify CoT output.
+- Sentinel-2 Cloud Optimized GeoTIFFs: not selected for the Jetson ATAK demo.
+  Use only if a later workflow explicitly stages it outside the demo path.
 - Esri World Imagery: optional licensed imagery only. Do not require it in this
   workflow unless the planner explicitly has an ArcGIS token/account. The current
   assumed token is Cesium only.
-- Copernicus DEM GLO-30: primary no-login terrain source for this planner.
-  Download AO-intersecting public S3 COG tiles and feed slope, flow,
-  cost-distance, viewshed, and isochrone algorithms.
-- DTED from USGS EarthExplorer: use when the operator has staged .dt2 files from
-  EarthExplorer. The Jetson imports the files and converts them with
-  `gdal_translate input.dt2 output.tif` when GDAL is available.
+- Copernicus DEM GLO-30: not selected for the Jetson ATAK demo. DTED is the
+  terrain source.
+- DTED: terrain files are staged at `/DTED` on the Jetson unless
+  `DTED_SOURCE_DIR` overrides it. The Jetson imports .dt0/.dt1/.dt2 files and
+  converts them with `gdal_translate input.dt2 output.tif` when GDAL is available.
 - Terrain display layer: useful for 3D operator preview, landform awareness,
   ridge/valley interpretation, and manual AO review. Use queryable terrain DEMs
   for slope, viewshed, hydrology, and cost surfaces.
-- OpenStreetMap basemap: useful visual and vector context for roads, trails,
-  paths, waterways, buildings, POIs, barriers, and place names. Use an OSM PBF
-  extract for server-side graph routing and POI queries.
+- OpenStreetMap basemap/vector data: OSM/WinTAK imagery files live under
+  `/WINTAK Imagery`. OSM imagery is display context; OSM vector/SQLite/GeoPackage
+  data is the model's source for roads, trails, paths, waterways, buildings,
+  POIs, barriers, towers, crossings, and place names.
 
-Data source knowledge:
-- DEM / terrain: Copernicus DEM GLO-30 COGs are the planner's primary no-login
-  queryable terrain source. DTED from EarthExplorer is a staged import path when
-  the operator has USGS credentials and .dt2 cells; USGS 3DEP is the best U.S.
-  authoritative supplement; SRTM is the broad global
-  fallback; OpenTopography is useful for lidar/regional DEM discovery;
-  ArcticDEM/REMA support polar regions. Terrain
-  enables slope, aspect, roughness, curvature, TPI, ridges/valleys, contours,
-  hydrology, viewshed, least-cost routing, avalanche/flood/cliff screening, and
-  signal line-of-sight estimation.
-- Land cover / surface friction: NLCD is the U.S. default; ESA WorldCover is a
-  global 10 m baseline; Dynamic World helps with current land-cover
-  probabilities; LANDFIRE supports U.S. vegetation/fuels/wildfire context;
-  Copernicus Global Land Service supports global vegetation products. Land cover
-  enables off-road travel friction, canopy/cover, wetlands, brush, shelter,
-  campsite suitability, and vegetation-aware movement.
-- Roads, trails, paths, POIs: OSM PBF is the primary global extract for roads,
-  trails, paths, waterways, huts, buildings, barriers, and POIs. Overture,
-  TIGER/Line, USFS, BLM, NPS, state/county GIS, and building footprints improve
-  authority and coverage where available. These sources enable route-to-road,
-  evacuation, nearest facility, access planning, hybrid on/off-road routing, and
-  SAR staging analysis.
-- Hydrography and water: USGS 3DHP/NHD/NHDPlus, WBD, NWIS, NOAA water data,
-  HydroSHEDS/HydroRIVERS/HydroLAKES, and Global Surface Water support water
-  source lookup, crossings, floodplain risk, flow context, drainage, and route
-  constraints. OSM water is useful but not enough by itself for high-confidence
-  hydrology.
-- Imagery: NAIP is the U.S. downloadable default for high-detail aerial context;
-  Sentinel-2 COGs are the global free fallback; Cesium imagery is preview-only
-  unless a licensed archive/export exists. Landsat supports historical change;
-  Sentinel-1 SAR helps with
-  cloud/night/flood observations; MODIS/VIIRS support broad-area current hazard
-  context; commercial Planet/Maxar can provide high-detail current AO evidence
-  when licensed.
-- Hazards and weather: NOAA/NWS alerts, nowCOAST, NWPS, NASA FIRMS, FEMA flood
-  products, DOT closures, SNOTEL, avalanche centers, and tide/current products
-  are needed when time-sensitive hazards affect route safety or data freshness.
-- Boundaries and access: PAD-US, Protected Planet, BLM/USFS/NPS boundaries,
-  parcels, tribal lands, military/restricted areas, closures, and easements
-  support public/private access, restricted-zone avoidance, legal movement, and
-  land-management context.
-- Communications and signal: FCC towers, OSM towers/masts/peaks/lookouts,
-  public-safety repeater datasets where available, OpenCellID or licensed cell
-  observations, and DEM-derived viewsheds support line-of-sight, signal
-  opportunity, relay placement, and open-sky/satellite messenger analysis.
+Data source knowledge for the Jetson ATAK demo:
+- DEM / terrain: DTED at `/DTED` is the terrain source. It supports slope,
+  roughness, ridges/valleys, contours, viewshed, terrain-cost, and signal
+  line-of-sight estimation.
+- Roads, trails, paths, POIs, water, access, towers, barriers, and crossings:
+  use OSM vector files under `/WINTAK Imagery`. These are the source for
+  route-to-road, evacuation, nearest facility, water feature lookup, access tag
+  checks, and SAR staging analysis.
+- Imagery: NAIP and OSM imagery under `/WINTAK Imagery` are for operator display
+  and sanity checking only. They do not feed deterministic model action.
+- Not selected for demo actions: Sentinel-2, Copernicus DEM, Cesium, NHD/3DHP,
+  NLCD, ESA WorldCover, Dynamic World, live hazard/weather feeds, parcels,
+  PAD-US, FCC tower feeds, or commercial imagery.
 
 How to decide:
 1. Normalize the mission: confirmed AO/map focus, objective, mode, time
