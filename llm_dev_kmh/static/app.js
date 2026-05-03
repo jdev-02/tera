@@ -45,6 +45,8 @@ const state = {
   claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
   atakAgentActive: false,
   atakMirrorTimer: null,
+  atakClientLocationEntity: null,
+  atakClientLocationFocused: false,
   selectedSourceIds: new Set(),
   packagePlan: null,
   packageStatusTimer: null,
@@ -2849,6 +2851,161 @@ function ensureLocalModelOption(model) {
   }
 }
 
+function normalizeMirrorPoint(point) {
+  if (!point) {
+    return null;
+  }
+  const lat = Number(point.lat);
+  const lon = Number(point.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  const height = Number(point.height_m);
+  return {
+    lat,
+    lon,
+    height_m: Number.isFinite(height) ? height : null,
+  };
+}
+
+function formatMirrorMeters(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "";
+  }
+  return numeric >= 1000
+    ? `${(numeric / 1000).toFixed(1)} km`
+    : `${numeric.toFixed(0)} m`;
+}
+
+function appendAtakMirrorDataRow(container, label, value) {
+  if (!value) {
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "atak-mirror-event-data-row";
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const detail = document.createElement("dd");
+  detail.textContent = value;
+  row.append(term, detail);
+  container.appendChild(row);
+}
+
+function renderAtakMirrorEventData(item, event) {
+  const rows = document.createElement("dl");
+  rows.className = "atak-mirror-event-data";
+
+  const clientLocation = normalizeMirrorPoint(event.client_location);
+  if (clientLocation) {
+    appendAtakMirrorDataRow(
+      rows,
+      "Client",
+      formatPoint(clientLocation.lat, clientLocation.lon, clientLocation.height_m),
+    );
+  }
+
+  const query = event.query_context || {};
+  const queryParts = [];
+  if (query.target_type) {
+    queryParts.push(String(query.target_type).replace(/_/g, " "));
+  }
+  if (query.route_requested) {
+    queryParts.push("route");
+  } else if (query.points_requested) {
+    queryParts.push("points");
+  }
+  const radius = formatMirrorMeters(query.radius_m);
+  if (radius) {
+    queryParts.push(radius);
+  }
+  appendAtakMirrorDataRow(rows, "Query", queryParts.join(" | "));
+
+  if (Array.isArray(query.data_sources) && query.data_sources.length) {
+    appendAtakMirrorDataRow(rows, "Data", query.data_sources.join(" | "));
+  }
+
+  if (event.view_bounds) {
+    appendAtakMirrorDataRow(rows, "TAK view", formatBounds(event.view_bounds));
+  }
+
+  const takCot = event.tak_cot_summary || {};
+  const takParts = [];
+  if (Number.isFinite(Number(takCot.item_count))) {
+    takParts.push(`${Number(takCot.item_count)} item(s)`);
+  }
+  if (takCot.algorithm) {
+    takParts.push(String(takCot.algorithm));
+  }
+  appendAtakMirrorDataRow(rows, "TAK output", takParts.join(" | "));
+
+  if (rows.children.length) {
+    item.appendChild(rows);
+  }
+}
+
+function syncAtakClientLocationFromEvents(events) {
+  const eventWithLocation = [...events]
+    .reverse()
+    .find((event) => normalizeMirrorPoint(event.client_location));
+  if (!eventWithLocation) {
+    return;
+  }
+  syncAtakClientLocation(eventWithLocation.client_location);
+}
+
+function syncAtakClientLocation(point) {
+  const clientLocation = normalizeMirrorPoint(point);
+  if (!clientLocation || !state.viewer || typeof Cesium === "undefined") {
+    return;
+  }
+
+  const position = Cesium.Cartesian3.fromDegrees(clientLocation.lon, clientLocation.lat, 0);
+  if (!state.atakClientLocationEntity) {
+    state.atakClientLocationEntity = state.viewer.entities.add({
+      id: "tera-atak-client-location",
+      name: "TAK client",
+      position,
+      point: {
+        pixelSize: 12,
+        color: Cesium.Color.CYAN,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: "TAK client",
+        font: "12px sans-serif",
+        fillColor: Cesium.Color.WHITE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -18),
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+  } else {
+    state.atakClientLocationEntity.position = position;
+  }
+
+  if (!state.atakClientLocationFocused) {
+    state.atakClientLocationFocused = true;
+    markMapLocationFocused("TAK client", "atak-client");
+    state.viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(clientLocation.lon, clientLocation.lat, 2200),
+      duration: 1.1,
+      complete: updateCameraText,
+    });
+    els.requestStatus.textContent = `Map focused: TAK client ${formatPoint(
+      clientLocation.lat,
+      clientLocation.lon,
+    )}`;
+  }
+  state.viewer.scene.requestRender();
+}
+
 function renderAtakMirror(events = []) {
   els.atakMirrorLog.innerHTML = "";
   const conversationEvents = events.filter((event) => (
@@ -2862,6 +3019,8 @@ function renderAtakMirror(events = []) {
     els.atakMirrorLog.appendChild(empty);
     return;
   }
+
+  syncAtakClientLocationFromEvents(conversationEvents);
 
   for (const event of conversationEvents) {
     const item = document.createElement("article");
@@ -2891,6 +3050,7 @@ function renderAtakMirror(events = []) {
     ].filter(Boolean).join(" | ");
 
     item.append(header, body);
+    renderAtakMirrorEventData(item, event);
     if (meta.textContent) {
       item.appendChild(meta);
     }
@@ -3814,6 +3974,8 @@ async function buildViewer() {
     state.viewer.destroy();
     state.areaEntity = null;
     state.areaHandleEntities = [];
+    state.atakClientLocationEntity = null;
+    state.atakClientLocationFocused = false;
     state.overlayDataSource = null;
     state.overlayFileName = "";
     state.overlayFeatureCount = 0;

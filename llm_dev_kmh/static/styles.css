@@ -1159,6 +1159,35 @@ textarea {
   white-space: pre-wrap;
 }
 
+.atak-mirror-event-data {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--color-border);
+}
+
+.atak-mirror-event-data-row {
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.atak-mirror-event-data-row dt {
+  color: var(--color-accent-gold);
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.atak-mirror-event-data-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 body.atak-monitor-mode #sourcePanel,
 body.atak-monitor-mode #chatLog,
 body.atak-monitor-mode #promptForm,
