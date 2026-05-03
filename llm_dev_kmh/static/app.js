@@ -540,10 +540,10 @@ const FALLBACK_SOURCE_CATALOG = [
   },
   {
     id: "dted_earth_explorer",
-    name: "DTED from USGS EarthExplorer",
-    provider: "USGS EarthExplorer",
+    name: "Root DTED Terrain",
+    provider: "Local Jetson /DTED folder",
     category: "terrain",
-    purpose: "Operator-staged DTED cells imported to the Jetson and converted to GeoTIFF when GDAL is available.",
+    purpose: "Root-staged DTED cells from /DTED for local slope, elevation, terrain cost, and viewshed analysis.",
     stream_status: "not-streamed",
     download_status: "manual-stage-import",
   },
@@ -2081,9 +2081,8 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   const questions = [];
   const rationale = [`Planner API unavailable: ${plannerErrorMessage}. Using embedded deterministic source rules.`];
 
-  appendUniqueSourceIds(optionalIds, "naip", "osm_basemap");
   rationale.push(
-    "Jetson demo file selection is fixed to root-staged data: OSM and NAIP imagery under /WINTAK Imagery for display, with model actions derived only from OSM vectors and DTED terrain.",
+    "Jetson analytical source selection is fixed to OSM vectors under /WINTAK Imagery and DTED terrain under /DTED. Do not select any source outside that allowlist.",
   );
 
   const needsRouting = textHasAny(promptText, [
@@ -2168,7 +2167,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   ]);
 
   if (needsCesiumArchive) {
-    rationale.push("Cesium archive requests are out of scope for this Jetson demo; use staged WinTAK imagery instead.");
+    rationale.push("External archive requests are ignored for this Jetson demo; use the root-staged OSM and DTED allowlist instead.");
   }
   if (needsRouting) {
     appendUniqueSourceIds(requiredIds, "osm_extract");
@@ -2201,8 +2200,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   }
   if (needsSar) {
     appendUniqueSourceIds(requiredIds, "osm_extract");
-    appendUniqueSourceIds(optionalIds, "naip");
-    rationale.push("SAR planning uses OSM access/feature data for action and NAIP only as operator display context.");
+    rationale.push("SAR planning uses OSM access/feature data and DTED terrain constraints; no separate imagery or hazard source is selected.");
   }
   if (needsHazards) {
     rationale.push(
@@ -2220,8 +2218,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     );
   }
   if (needsCurrentImagery && !needsWater && !needsHazards) {
-    appendUniqueSourceIds(optionalIds, "naip");
-    rationale.push("Current imagery feeds are not selected; root-staged NAIP/OSM imagery is display only.");
+    rationale.push("Current imagery feeds are not selected. The Jetson agentic path answers from local OSM vectors plus DTED terrain only.");
   }
 
   if (!mapContext?.location_confirmed) {
@@ -2256,8 +2253,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   }
 
   const selectedIds = [];
-  const previewIds = optionalIds.filter((sourceId) => ["naip", "osm_basemap"].includes(sourceId));
-  appendUniqueSourceIds(selectedIds, ...requiredIds, ...previewIds);
+  appendUniqueSourceIds(selectedIds, ...requiredIds);
   const missionSummary = missionText.length > 220 ? `${missionText.slice(0, 217)}...` : missionText;
 
   return {
