@@ -265,6 +265,10 @@ class JetsonAtakMirrorEvent(BaseModel):
     model: str | None = None
     provider: str | None = None
     direction: str | None = None
+    client_location: "MapPoint | None" = None
+    view_bounds: "ViewBounds | None" = None
+    query_context: dict[str, Any] = Field(default_factory=dict)
+    tak_cot_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class JetsonAtakModeResponse(BaseModel):
@@ -2638,6 +2642,10 @@ def _append_atak_mirror_event(
     model: str | None = None,
     provider: str | None = None,
     direction: str | None = None,
+    client_location: MapPoint | None = None,
+    view_bounds: ViewBounds | None = None,
+    query_context: dict[str, Any] | None = None,
+    tak_cot_summary: dict[str, Any] | None = None,
 ) -> JetsonAtakMirrorEvent:
     event = JetsonAtakMirrorEvent(
         id=str(uuid4()),
@@ -2648,6 +2656,10 @@ def _append_atak_mirror_event(
         model=model,
         provider=provider,
         direction=direction,
+        client_location=client_location,
+        view_bounds=view_bounds,
+        query_context=query_context or {},
+        tak_cot_summary=tak_cot_summary or {},
     )
     path = _atak_mirror_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -5369,6 +5381,64 @@ def _tak_alternate_requested(prompt: str, map_context: MapContext | None) -> boo
             "avoid that",
         ),
     )
+
+
+def _atak_monitor_client_location(map_context: MapContext | None) -> MapPoint | None:
+    return map_context.client_location if map_context and map_context.client_location else None
+
+
+def _atak_monitor_view_bounds(map_context: MapContext | None) -> ViewBounds | None:
+    return map_context.view_bounds if map_context and map_context.view_bounds else None
+
+
+def _atak_monitor_query_context(request: PromptRequest) -> dict[str, Any]:
+    map_context = request.map_context
+    origin = _origin_from_map_context(map_context)
+    target_type = _tak_target_type_for_prompt(request.prompt)
+    alternate_requested = _tak_alternate_requested(request.prompt, map_context)
+    if target_type is None and alternate_requested:
+        target_type = _tak_target_type_from_active_items(map_context)
+
+    context: dict[str, Any] = {
+        "data_sources": [
+            "OSM vectors from /WINTAK Imagery",
+            "DTED terrain from /DTED",
+        ],
+        "active_tak_items": _active_tak_item_count(map_context),
+        "route_requested": _tak_route_requested(request.prompt) or alternate_requested,
+        "points_requested": _tak_points_requested(request.prompt),
+    }
+    if target_type:
+        context["target_type"] = target_type
+    if origin is not None:
+        context["origin"] = origin.model_dump()
+        context["radius_m"] = _tak_query_radius_m(request.prompt, map_context, origin)
+    if alternate_requested:
+        context["reroute"] = True
+    if map_context and map_context.client_location:
+        context["client_location_source"] = "atak_self_marker"
+    if map_context and map_context.view_bounds:
+        context["bounds_source"] = "atak_displayed_map_view"
+    return context
+
+
+def _tak_cot_monitor_summary(tak_cot: TakCotPayload) -> dict[str, Any]:
+    return {
+        "summary": tak_cot.summary,
+        "algorithm": tak_cot.algorithm,
+        "item_count": len(tak_cot.items),
+        "items": [
+            {
+                "uid": item.uid,
+                "item_type": item.item_type,
+                "cot_type": item.cot_type,
+                "title": item.title,
+                "coordinate_count": len(item.coordinates),
+                "checkpoint_count": len(item.checkpoints),
+            }
+            for item in tak_cot.items
+        ],
+    }
 
 
 def _feature_to_poi(feature: Any) -> dict[str, Any]:
@@ -8650,6 +8720,9 @@ async def create_package_cot(
 async def prompt_ollama(request: PromptRequest) -> PromptResponse:
     request = _coerce_atak_prompt_request(request)
     mirror = _request_is_atak_mirror_candidate(request)
+    mirror_query_context = _atak_monitor_query_context(request) if mirror else {}
+    mirror_client_location = _atak_monitor_client_location(request.map_context)
+    mirror_view_bounds = _atak_monitor_view_bounds(request.map_context)
     if mirror:
         _append_atak_mirror_event(
             source=_mirror_source_for_request(request),
@@ -8658,6 +8731,9 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
             model=request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
             provider=_request_llm_provider(request),
             direction="inbound",
+            client_location=mirror_client_location,
+            view_bounds=mirror_view_bounds,
+            query_context=mirror_query_context,
         )
     try:
         result = await _post_prompt_with_fallback(request)
@@ -8670,6 +8746,9 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
                 model=request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
                 provider=_request_llm_provider(request),
                 direction="error",
+                client_location=mirror_client_location,
+                view_bounds=mirror_view_bounds,
+                query_context=mirror_query_context,
             )
         raise
     result.tak_cot = _build_tak_cot_payload(request, result.response)
@@ -8685,6 +8764,10 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
             model=result.model,
             provider=result.provider,
             direction="outbound",
+            client_location=mirror_client_location,
+            view_bounds=mirror_view_bounds,
+            query_context=mirror_query_context,
+            tak_cot_summary=_tak_cot_monitor_summary(result.tak_cot),
         )
     return result
 
@@ -8693,6 +8776,9 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
     request = _coerce_atak_prompt_request(request)
     mirror = _request_is_atak_mirror_candidate(request)
+    mirror_query_context = _atak_monitor_query_context(request) if mirror else {}
+    mirror_client_location = _atak_monitor_client_location(request.map_context)
+    mirror_view_bounds = _atak_monitor_view_bounds(request.map_context)
     if mirror:
         _append_atak_mirror_event(
             source=_mirror_source_for_request(request),
@@ -8701,6 +8787,9 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
             model=request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
             provider=_request_llm_provider(request),
             direction="inbound",
+            client_location=mirror_client_location,
+            view_bounds=mirror_view_bounds,
+            query_context=mirror_query_context,
         )
 
     async def event_stream():
@@ -8734,6 +8823,18 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                             }
                         )
                         continue
+                    if mirror:
+                        _append_atak_mirror_event(
+                            source="tera-agent",
+                            role="assistant",
+                            text=f"ERROR: {exc.detail}",
+                            model=model,
+                            provider="claude",
+                            direction="error",
+                            client_location=mirror_client_location,
+                            view_bounds=mirror_view_bounds,
+                            query_context=mirror_query_context,
+                        )
                     yield _sse_event(
                         {
                             "type": "error",
@@ -8763,6 +8864,10 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                         model=result.model,
                         provider="claude",
                         direction="outbound",
+                        client_location=mirror_client_location,
+                        view_bounds=mirror_view_bounds,
+                        query_context=mirror_query_context,
+                        tak_cot_summary=_tak_cot_monitor_summary(result.tak_cot),
                     )
                 yield _sse_event(
                     {
@@ -8848,6 +8953,10 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                             model=model,
                                             provider="ollama",
                                             direction="outbound",
+                                            client_location=mirror_client_location,
+                                            view_bounds=mirror_view_bounds,
+                                            query_context=mirror_query_context,
+                                            tak_cot_summary=_tak_cot_monitor_summary(tak_cot),
                                         )
                                     yield _sse_event(
                                         {
@@ -8876,6 +8985,9 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                     model=model,
                     provider="ollama",
                     direction="error",
+                    client_location=mirror_client_location,
+                    view_bounds=mirror_view_bounds,
+                    query_context=mirror_query_context,
                 )
             yield _sse_event(
                 {

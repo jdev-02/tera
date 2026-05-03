@@ -258,6 +258,50 @@ def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
     assert "OSM vectors from /WINTAK Imagery and DTED terrain from /DTED" in system_prompt
 
 
+def test_atak_mirror_event_records_client_location_and_query_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("TERA_ATAK_MIRROR_LOG", str(tmp_path / "atak-mirror.jsonl"))
+    request = kmh_app.PromptRequest(
+        prompt="Route me to nearest freshwater within 5km.",
+        llm_provider="ollama",
+        agent_profile="tera-atak-live",
+        map_context=kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(lat=37.79, lon=-122.4, height_m=14.0),
+            view_bounds=kmh_app.ViewBounds(
+                west=-122.405,
+                south=37.785,
+                east=-122.390,
+                north=37.800,
+                center_lat=37.7925,
+                center_lon=-122.3975,
+            ),
+        ),
+    )
+
+    event = kmh_app._append_atak_mirror_event(
+        source="atak-plugin",
+        role="operator",
+        text=request.prompt,
+        provider="ollama",
+        direction="inbound",
+        client_location=kmh_app._atak_monitor_client_location(request.map_context),
+        view_bounds=kmh_app._atak_monitor_view_bounds(request.map_context),
+        query_context=kmh_app._atak_monitor_query_context(request),
+    )
+    reloaded = kmh_app._read_atak_mirror_events()[0]
+
+    assert event.client_location is not None
+    assert reloaded.client_location is not None
+    assert reloaded.client_location.lat == 37.79
+    assert reloaded.view_bounds is not None
+    assert reloaded.query_context["target_type"] == "freshwater"
+    assert reloaded.query_context["radius_m"] == 5000.0
+    assert reloaded.query_context["client_location_source"] == "atak_self_marker"
+    assert "OSM vectors from /WINTAK Imagery" in reloaded.query_context["data_sources"]
+
+
 def test_source_recommendation_questions_prioritize_source_scope() -> None:
     recommendation = kmh_app._infer_source_recommendation(
         "Build an offline package for a patrol to find reliable water while avoiding steep exposed terrain.",
@@ -315,6 +359,7 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         ".top-provider-shell",
         ".atak-mirror-panel",
         ".atak-mirror-event",
+        ".atak-mirror-event-data",
         "grid-auto-rows: max-content",
         "align-content: start",
         ".chip-button",
@@ -327,6 +372,11 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "teraLlmProvider",
         "activateAtakLocalAgent",
         "atakMirrorPanel",
+        "atakClientLocationEntity",
+        "syncAtakClientLocationFromEvents",
+        "event.client_location",
+        "query_context",
+        "tak_cot_summary",
         "/api/jetson/atak-agent/activate",
         "/api/jetson/atak-agent/mirror",
         "gemma3:4b",
