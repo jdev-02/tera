@@ -33,6 +33,16 @@ Usage
   # List every term the glossary can explain:
   python scripts/demo_voice.py --explain-list
 
+  # Override which Piper voice model to use (must be downloaded to models/piper/):
+  python scripts/demo_voice.py --voice en_US-ryan-high
+
+  # Apply radio-comms post-processing FX (clean/light/comms/degraded):
+  python scripts/demo_voice.py --fx comms
+
+  # Voice + FX bake-off: render the canonical PRD scenario across all
+  # downloaded voices and FX intensities so you can A/B them:
+  python scripts/demo_voice.py --bakeoff
+
 In interactive mode (default), at each phrase prompt:
   [Enter]   -> next phrase (no notes captured)
   r         -> replay current phrase
@@ -57,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import shutil
 import subprocess
 import sys
@@ -64,9 +75,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from voice.audio_fx import Intensity, apply_radio_fx
 from voice.glossary import known_terms
 from voice.phrases import PHRASES, by_category, by_id, categories
-from voice.piper_client import get_piper, reset_piper
+from voice.piper_client import PiperClient, get_piper, reset_piper
 from voice.rationale import to_operator_cadence
 from voice.tts import synthesize_explanation_b64, synthesize_rationale_b64
 
@@ -118,6 +130,134 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  text:    {text}")
     print(f"  cadence: {to_operator_cadence(text)}")
     print(f"  listen:  {listen_for}")
+
+
+def _run_severity_demo(operator_mode: str | None) -> int:
+    """Render three phrases that exercise the auto-elevation rule.
+
+    Phrase A: routine briefing -- no cues, stays at the operator's base mode.
+    Phrase B: contains 'BE ADVISED' -- bumps one level (calm->comms or
+              comms->critical).
+    Phrase C: contains 'CASEVAC' -- bumps two levels to critical.
+
+    Plays them back-to-back so the listener hears the voice change.
+    """
+    from voice.profiles import OperatorMode, detect_severity_bump, select_profile
+    from voice.tts import synthesize_rationale_b64
+
+    base_mode: OperatorMode = operator_mode or "comms"  # type: ignore[assignment]
+
+    phrases: list[tuple[str, str]] = [
+        ("routine", "Routed to Lobos Creek. Distance 2.1 kilometers. ETA 38 minutes."),
+        (
+            "urgent",
+            "Be advised, route blocked at waypoint 3. Rerouting through alternate.",
+        ),
+        (
+            "critical",
+            "CASEVAC inbound. Routing to open field at grid 11SMS1234 5678. Suitable HLZ.",
+        ),
+    ]
+    out_dir = Path(tempfile.gettempdir()) / "tera_severity_demo"
+    out_dir.mkdir(exist_ok=True)
+    for old in out_dir.glob("*.wav"):
+        old.unlink()
+
+    print(f"base operator mode: {base_mode}")
+    print(f"phrases: {len(phrases)} -- routine, urgent (BE ADVISED), critical (CASEVAC)\n")
+
+    for tag, text in phrases:
+        bump = detect_severity_bump(text)
+        profile = select_profile(text, operator_mode=base_mode)
+        print(
+            f"  [{tag}] cue_bump={bump}  profile={profile.name}  "
+            f"voice={profile.voice}  fx={profile.fx}"
+        )
+        audio = synthesize_rationale_b64(text, operator_mode=base_mode)
+        if audio is None:
+            print(f"    ! synth returned None for {tag}")
+            continue
+        out_path = out_dir / f"{tag}_{profile.name}.wav"
+        out_path.write_bytes(base64.b64decode(audio))
+        print(f"    -> {out_path}")
+        _play(out_path)
+
+    print(f"\nAll renders in {out_dir}/")
+    return 0
+
+
+def _run_bakeoff() -> int:
+    """Render the canonical PRD scenario A across every downloaded voice and
+    FX intensity. Writes WAVs to /tmp/tera_bakeoff/<voice>_<fx>.wav so Jon
+    can listen and pick the demo configuration.
+
+    Looks at models/piper/ for *.onnx files; if none beyond the default
+    exist, prints download hints.
+    """
+    models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
+    voices = sorted(p.stem for p in models_dir.glob("*.onnx"))
+    if not voices:
+        print(f"No voice models in {models_dir}/. Run `make install-voice` first.")
+        return 1
+
+    intensities: list[Intensity] = ["clean", "light", "comms", "degraded"]
+
+    out_dir = Path(tempfile.gettempdir()) / "tera_bakeoff"
+    out_dir.mkdir(exist_ok=True)
+    for old in out_dir.glob("*.wav"):
+        old.unlink()
+
+    rationale = "Routed to Lobos Creek, distance 2.1 kilometers, ETA 38 minutes on foot covered."
+    cadence = to_operator_cadence(rationale)
+    print(f"input:    {rationale}")
+    print(f"cadence:  {cadence}")
+    print(f"voices:   {voices}")
+    print(f"fx:       {intensities}")
+    print()
+
+    # On-disk size of each voice model -- feeds Jetson budget tracking (#56).
+    print("voice model sizes (issue #56 budget):")
+    total_mb = 0.0
+    for voice in voices:
+        size_mb = (models_dir / f"{voice}.onnx").stat().st_size / (1024 * 1024)
+        total_mb += size_mb
+        print(f"  {voice:<32s} {size_mb:>6.1f} MB")
+    print(f"  {'TOTAL':<32s} {total_mb:>6.1f} MB on disk")
+    print()
+
+    # Print on-disk size of each voice model -- feeds the Jetson budget
+    # tracking in issue #56.
+    print("voice model sizes (issue #56 budget):")
+    total_mb = 0.0
+    for voice in voices:
+        size_mb = (models_dir / f"{voice}.onnx").stat().st_size / (1024 * 1024)
+        total_mb += size_mb
+        print(f"  {voice:<32s} {size_mb:>6.1f} MB")
+    print(f"  {'TOTAL':<32s} {total_mb:>6.1f} MB on disk")
+    print()
+
+    for voice in voices:
+        model_path = models_dir / f"{voice}.onnx"
+        client = PiperClient(model_path=model_path, length_scale=1.15)
+        if not client.is_available():
+            print(f"  ! {voice}: model file present but piper-tts not importable; skipping")
+            continue
+        try:
+            base_wav = client.synthesize_wav(cadence)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! {voice}: synth failed ({e}); skipping")
+            continue
+        for fx in intensities:
+            wav = base_wav if fx == "clean" else apply_radio_fx(base_wav, intensity=fx)
+            out_path = out_dir / f"{voice}__{fx}.wav"
+            out_path.write_bytes(wav)
+            print(f"  + {out_path.relative_to(out_dir.parent)}  ({len(wav):,} bytes)")
+
+    print()
+    print(f"All renders in {out_dir}/")
+    print("Listen with:")
+    print(f"  for f in {out_dir}/*.wav; do echo == $f ==; afplay $f; done")
+    return 0
 
 
 def _write_notes(notes: list[tuple[str, str, str, str]], length_scale: float) -> Path:
@@ -267,6 +407,38 @@ def main() -> int:
         action="store_true",
         help="print every term the glossary can explain, and exit",
     )
+    p.add_argument(
+        "--voice",
+        metavar="VOICE_ID",
+        help="Piper voice model to use (e.g. 'en_US-ryan-high'). "
+        "Must exist at models/piper/<voice_id>.onnx. "
+        "Default: en_US-libritts_r-medium.",
+    )
+    p.add_argument(
+        "--fx",
+        choices=["clean", "light", "comms", "degraded"],
+        default="clean",
+        help="radio-comms post-processing intensity (default: clean)",
+    )
+    p.add_argument(
+        "--bakeoff",
+        action="store_true",
+        help="render the canonical PRD scenario A across every downloaded "
+        "voice and FX intensity for A/B listening (no interactive prompts)",
+    )
+    p.add_argument(
+        "--profile",
+        choices=["calm", "comms", "critical"],
+        help="operator voice profile (overrides TERA_VOICE_PROFILE env var). "
+        "comms = demo default; critical = degraded comms for CASEVAC etc.",
+    )
+    p.add_argument(
+        "--severity-demo",
+        action="store_true",
+        help="render 3 phrases (calm, urgent cue, critical cue) and play them "
+        "back-to-back so you can hear the auto-elevation. Combine with "
+        "--profile to set the base mode.",
+    )
     args = p.parse_args()
 
     if args.list:
@@ -299,11 +471,33 @@ def main() -> int:
             print("  (audio unavailable -- text-only explanation)")
         return 0
 
-    # Set the global length_scale for this session.
-    reset_piper()
-    from voice import piper_client
+    if args.bakeoff:
+        return _run_bakeoff()
 
-    piper_client._client = piper_client.PiperClient(length_scale=args.rate)
+    if args.severity_demo:
+        return _run_severity_demo(args.profile)
+
+    # Set TERA_VOICE_PROFILE so the synth path (tts.py) auto-routes by
+    # profile. --voice and --fx are still honored as overrides for the
+    # corpus walk in case the user wants to bypass profile selection.
+    if args.profile:
+        os.environ["TERA_VOICE_PROFILE"] = args.profile
+    if args.voice:
+        models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
+        model_path = models_dir / f"{args.voice}.onnx"
+        if not model_path.exists():
+            print(f"voice model not found: {model_path}")
+            print("Download it from https://huggingface.co/rhasspy/piper-voices first.")
+            return 1
+        # Direct voice override -- bypass profile selection by pinning the
+        # singleton client to this voice.
+        reset_piper()
+        from voice import piper_client
+
+        piper_client._client = piper_client.PiperClient(
+            model_path=model_path,
+            length_scale=args.rate,
+        )
 
     if args.text:
         phrases = [("custom", "custom", args.text, "your phrase")]
