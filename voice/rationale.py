@@ -121,8 +121,78 @@ _UNIT_FULL = {
 
 
 # ---------------------------------------------------------------------------
+# Acronyms. Two flavors:
+#   _ACRONYM_SPELL  -- read letter-by-letter ("ETA" -> "E T A").
+#   _ACRONYM_WORD   -- read as a word, with hyphens hinting syllable splits
+#                      ("CASEVAC" -> "case-vac"). Operators say these as words.
+# Order: _SPELL first (longer abbreviations take precedence), then _WORD.
+# Word-boundary anchored so we don't touch sub-words.
+# ---------------------------------------------------------------------------
+
+_ACRONYM_SPELL = {
+    "ETA": "E T A",
+    "HLZ": "H L Z",
+    "LZ": "L Z",
+    "PZ": "P Z",
+    "IED": "I E D",
+    "EOD": "E O D",
+    "AO": "A O",
+    "CP": "C P",
+    "OP": "O P",
+    "TOC": "T O C",
+    "POI": "P O I",
+    "MGRS": "M G R S",
+    "QRF": "Q R F",
+    "TRP": "T R P",
+}
+
+_ACRONYM_WORD = {
+    "CASEVAC": "case-vac",
+    "MEDEVAC": "med-evac",
+    "RECON": "ree-kon",
+}
+
+
+# ---------------------------------------------------------------------------
+# Clause-boundary punctuation. Commas give Piper ~120ms; periods give the
+# full sentence_silence (350ms). For radio cadence we want full pause between
+# count/range/bearing/ETA elements, so promote "," before these cue words to
+# a period. Operator notes (Sat 17:03): without this the elements blur.
+# ---------------------------------------------------------------------------
+
+_CLAUSE_CUES = ("ETA", "bearing", "range", "altitude", "distance")
+
+
+# ---------------------------------------------------------------------------
 # Transformation passes
 # ---------------------------------------------------------------------------
+
+
+def _promote_clause_commas(text: str) -> str:
+    """Replace ', <cue>' with '. <cue>' so Piper takes a full sentence pause.
+
+    Before: "Distance 2.1 km, ETA 38 minutes, on foot covered."
+    After:  "Distance 2.1 km. ETA 38 minutes. on foot covered."
+
+    The lowercase second clause start ('on') stays lowercase -- Piper's
+    prosody handles it fine. Promoting cuts ETA-blurring complaints
+    (operator notes 17:03 #5/6/14/17/18).
+    """
+    pattern = "|".join(re.escape(c) for c in _CLAUSE_CUES)
+    return re.sub(rf",\s+(?=({pattern})\b)", ". ", text, flags=re.IGNORECASE)
+
+
+def _expand_acronyms(text: str) -> str:
+    """Spell out known acronyms.
+
+    Run AFTER _expand_mgrs_grids so MGRS letter groups (which become lowercase
+    phonetic words) don't accidentally re-match an uppercase acronym pattern.
+    """
+    for word, spelled in _ACRONYM_WORD.items():
+        text = re.sub(rf"\b{word}\b", spelled, text)
+    for acronym, spelled in _ACRONYM_SPELL.items():
+        text = re.sub(rf"\b{acronym}\b", spelled, text)
+    return text
 
 
 def _expand_mgrs_grids(text: str) -> str:
@@ -153,7 +223,10 @@ def _expand_mgrs_grids(text: str) -> str:
             digits1, digits2 = digits1[:half], digits1[half:]
 
         zone_words = _digits_spoken(zone)
-        letter_words = " ".join(_MGRS_PHONETIC.get(c, c) for c in letters.upper())
+        # Comma-separate phonetic letters so each lands as its own beat in
+        # Piper. Without this, runs like 'sierra mike sierra' or 'whiskey
+        # lima' slur into each other (operator notes 17:03 #4/5/6/16).
+        letter_words = ", ".join(_MGRS_PHONETIC.get(c, c) for c in letters.upper())
         d1_words = _digits_spoken(digits1)
         d2_words = _digits_spoken(digits2)
 
@@ -233,19 +306,25 @@ def to_operator_cadence(text: str) -> str:
     """Convert plain-English rationale into operator-cadence speech.
 
     The order of passes matters:
-      1. MGRS grids first (their digits + letters need to win before generic
-         passes touch them).
-      2. Cardinal abbreviations (NE etc.) -> full words.
-      3. Units (km, kph) -> spelled-out (so number+unit reads naturally).
-      4. Decimals (2.1) -> 'two point one'.
-      5. Plain integers (38) -> 'three eight' digit-by-digit.
+      1. _promote_clause_commas: ', ETA'/'bearing'/'range' -> '. <cue>' so
+         Piper takes a full sentence pause between elements (radio tradition).
+      2. _expand_mgrs_grids: their digits + letters need to win before generic
+         passes touch them. Now comma-separates phonetic letters too.
+      3. _expand_acronyms: spell out ETA/HLZ/etc. Must run AFTER MGRS so
+         MGRS-internal letters (now lowercase phonetic words) don't re-match.
+      4. _expand_cardinals: NE -> northeast.
+      5. _expand_units: km -> kilometers (number+unit reads naturally).
+      6. _expand_decimals: 2.1 -> 'two point one'.
+      7. _expand_counted_numbers: 38 -> 'three eight' digit-by-digit.
 
     The result is fed straight to Piper. No further normalization required.
     """
     if not text:
         return text
 
+    text = _promote_clause_commas(text)
     text = _expand_mgrs_grids(text)
+    text = _expand_acronyms(text)
     text = _expand_cardinals(text)
     text = _expand_units(text)
     text = _expand_decimals(text)
