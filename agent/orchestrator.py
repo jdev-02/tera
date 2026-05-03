@@ -42,6 +42,7 @@ from agent.schemas import (
 )
 from agent.tools import find_pois, route
 from ontology import build_system_prompt, load_route_query_schema
+from security.audit_log import audit_event, prompt_digest
 
 log = structlog.get_logger(__name__)
 
@@ -294,6 +295,14 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
         mode=mode,
         source=req.source,
     )
+    audit_event(
+        "prompt_received",
+        request_id=request_id,
+        prompt_sha256=prompt_digest(req.prompt),
+        prompt_len=len(req.prompt),
+        mode=mode,
+        source=req.source,
+    )
 
     # 1. Get the LLM client (profile + mode gated).
     client: LLMClient = get_registry().get(mode)
@@ -320,6 +329,15 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
         objective=structured_query.get("objective"),
         destination_type=structured_query.get("destination_type"),
     )
+    audit_event(
+        "route_query_emitted",
+        request_id=request_id,
+        provider=client.name,
+        mission_type=structured_query.get("mission_type"),
+        objective=structured_query.get("objective"),
+        destination_type=structured_query.get("destination_type"),
+        max_distance_km=structured_query.get("max_distance_km"),
+    )
 
     # 3. Security pipeline (Satriyo's 6 stages).
     pipeline_result = await _run_security_pipeline(
@@ -332,14 +350,41 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
             "pipeline_blocked",
             blocked_at=pipeline_result["blocked_at"],
         )
+        audit_event(
+            "security_pipeline_blocked",
+            request_id=request_id,
+            blocked_at=pipeline_result["blocked_at"],
+            stage_count=len(pipeline_result.get("stages", [])),
+            atak_display=pipeline_result.get("atak_display"),
+        )
         raise PlanBlockedError(
             blocked_at=pipeline_result["blocked_at"] or "unknown",
             stages=pipeline_result["stages"],
             reason=pipeline_result.get("atak_display", "blocked by security pipeline"),
         )
 
+    audit_event(
+        "security_pipeline_allowed",
+        request_id=request_id,
+        stage_count=len(pipeline_result.get("stages", [])),
+        trust_status=(pipeline_result.get("trust_result") or {}).get("trust_status"),
+    )
+
     # 4. Translate RouteQuery -> tool calls -> dispatch.
+    planned_tools = _tool_names_for_query(structured_query)
+    audit_event(
+        "tool_dispatch_started",
+        request_id=request_id,
+        tools=planned_tools,
+    )
     dispatch = _dispatch_tools(structured_query, req.current)
+    audit_event(
+        "tool_dispatch_completed",
+        request_id=request_id,
+        tools=planned_tools,
+        waypoint_count=len(dispatch["waypoints"]),
+        distance_m=dispatch["cost_breakdown"].get("distance_m"),
+    )
 
     # 5. Sign.
     signature = _sign_response(
@@ -351,6 +396,20 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
     )
     if signature is None:
         logger.warning("plan_unsigned", note="ML-DSA signer unavailable; degraded mode")
+        audit_event(
+            "route_signing_degraded",
+            request_id=request_id,
+            signed=False,
+            reason="signer_unavailable",
+        )
+    else:
+        audit_event(
+            "route_signed",
+            request_id=request_id,
+            signed=True,
+            scheme=signature.scheme,
+            key_id=signature.key_id,
+        )
 
     # 6. Build response.
     response = PlanResponse(
@@ -367,6 +426,13 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto") -> PlanResponse:
         provider=client.name,
         signed=signature is not None,
         trust_status=(pipeline_result.get("trust_result") or {}).get("trust_status"),
+    )
+    audit_event(
+        "plan_response_ready",
+        request_id=request_id,
+        signed=signature is not None,
+        trust_status=(pipeline_result.get("trust_result") or {}).get("trust_status"),
+        waypoint_count=len(response.waypoints),
     )
     return response
 
@@ -409,6 +475,20 @@ def _pipeline_passed(result: dict[str, Any]) -> bool:
     if "pipeline_passed" in result:
         return bool(result["pipeline_passed"])
     return bool(result.get("allowed", False))
+
+
+def _tool_names_for_query(query: dict[str, Any]) -> list[str]:
+    dest_type = query.get("destination_type", "none")
+    objective = query.get("objective")
+    tools: list[str] = []
+    if dest_type in {"freshwater", "safe_zone", "trailhead"}:
+        tools.append("find_pois")
+    if (
+        objective in {"fastest_route", "fastest_covered_route", "nearest_water"}
+        and dest_type != "none"
+    ):
+        tools.append("route")
+    return tools
 
 
 def _route_hash(route: dict[str, Any], waypoints: list[Waypoint]) -> str:
@@ -461,12 +541,26 @@ def _sign_operator_commit(
 def approve_plan(req: PlanApprovalRequest) -> PlanApprovalResponse:
     """Commit a provisional device-signed route after operator review."""
     route_hash = _route_hash(req.route, req.waypoints)
+    audit_event(
+        "operator_approval_requested",
+        route_id=req.route_id,
+        route_hash=route_hash,
+        operator_key_id=req.operator_key_id,
+        waypoint_count=len(req.waypoints),
+    )
     operator_signature = _sign_operator_commit(
         route_id=req.route_id,
         route_hash=route_hash,
         device_signature=req.device_signature,
         operator_key_id=req.operator_key_id,
         approved_by=req.approved_by,
+    )
+    audit_event(
+        "operator_approval_committed",
+        route_id=req.route_id,
+        route_hash=route_hash,
+        operator_key_id=operator_signature.key_id,
+        scheme=operator_signature.scheme,
     )
     return PlanApprovalResponse(
         route_id=req.route_id,
