@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run demo eval clean
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo eval clean
 .DEFAULT_GOAL := help
 
 PY := python3.11
@@ -82,6 +82,12 @@ ci: lint test security ## Full CI gate (must pass before push)
 
 run: install ## Start the agent service locally (stub)
 	$(VENV)/bin/uvicorn agent.app:app --host 0.0.0.0 --port 8000 --reload
+
+tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
+	@bash infra/security_demo_monitors.sh
+
+audit-log: ## Tail structured security audit events
+	@bash infra/audit_log_scroll.sh
 
 demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
 	@echo "make demo: not yet wired - will run hero scenario E2E by Sun 0500"

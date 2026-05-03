@@ -115,27 +115,42 @@ or point coordinates and still have ATAK treat the route as trusted.
 
 ## Proof 4: Offline / No-Outbound Traffic
 
-On Jetson or Linux demo hardware, run this in a second terminal before the
-`/plan` demo:
+On Jetson or Linux demo hardware, run this before the `/plan` demo:
 
 ```bash
 sudo bash infra/jetson_firewall.sh enable
-sudo bash infra/tcpdump_demo.sh any
+make tcpdump-demo
 ```
 
-Then run the plan request from the demo terminal.
+`make tcpdump-demo` opens two live proof monitors when `tmux`, `gnome-terminal`,
+or `x-terminal-emulator` is available:
+
+- real `tcpdump` outbound capture from `infra/tcpdump_demo.sh`
+- structured JSONL audit scroll from `infra/audit_log_scroll.sh`
+
+If no terminal multiplexer is installed, the script prints the two commands to
+run manually in separate terminals.
+
+Then run the plan request from the demo terminal. The capture artifacts land in
+`logs/security_demo/`, and structured audit events append to
+`logs/security_audit.jsonl`.
 
 Expected result:
 
 ```text
 [OK] No outbound packets.
+{"event":"prompt_received", ...}
+{"event":"tool_dispatch_completed", ...}
+{"event":"route_signed", ...}
 ```
 
 Security interpretation:
 
 In Phase 3, the agent must not call frontier APIs or external map services.
 The demo should show route planning while WiFi is disabled or outbound egress
-is blocked.
+is blocked. The audit log provides a local, structured scroll of prompt hash,
+security-gate, tool-dispatch, signing, and operator-approval events without
+storing raw prompt text.
 
 Restore connectivity after the demo:
 
@@ -178,6 +193,7 @@ Before merging P2 changes:
 [ ] python -m pytest security crypto -q
 [ ] python security\pipeline.py
 [ ] python crypto\cot_signer.py
+[ ] bash -n infra/tcpdump_demo.sh infra/audit_log_scroll.sh infra/security_demo_monitors.sh
 [ ] No real API keys committed
 [ ] If touching /plan integration, guard runs before routing/signing
 ```
