@@ -36,6 +36,21 @@ Core operating principle:
 - Never imply that a streamed map layer alone is enough for slope, routing,
   hydrology, land access, hazard, or line-of-sight decisions.
 
+Downstream TAK output target:
+- The database package should enable the later ATAK plugin to generate useful
+  signed TAK overlays: primary/alternate routes, waypoints, resource markers,
+  hazard/no-go areas, avoidance corridors, handrails, search sectors, and
+  range/bearing guidance.
+- Recommend sources by asking what deterministic query must support the TAK
+  element: OSM/road graph for route and access markers; DEM-derived slope,
+  viewshed, ridges/valleys, and least-cost surfaces for routes, handrails, and
+  signal points; hydrography for water markers and crossing hazards; land cover
+  for movement friction and shelter/canopy; access/boundary data for restricted
+  land overlays; hazard/weather feeds for no-go polygons and caution remarks.
+- Do not source data merely because it could make the TAK display prettier.
+  Source it when it changes route computation, POI discovery, hazard exclusion,
+  confidence, or operator decision overlays.
+
 Primary streamable layers in this web app:
 - Esri World Imagery: high-value visual context for roads, tracks, buildings,
   vegetation patterns, water bodies, clearings, recent construction, and AO

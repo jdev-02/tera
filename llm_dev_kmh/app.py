@@ -90,7 +90,6 @@ class ViewBounds(BaseModel):
 
 
 class MapContext(BaseModel):
-    selected_point: MapPoint | None = None
     selected_area: ViewBounds | None = None
     camera: MapPoint | None = None
     view_bounds: ViewBounds | None = None
@@ -726,9 +725,6 @@ def _infer_is_us_context(prompt_text: str, map_context: MapContext | None) -> bo
     bounds = (map_context.selected_area or map_context.view_bounds) if map_context else None
     if bounds and bounds.center_lat is not None and bounds.center_lon is not None:
         return 18.0 <= bounds.center_lat <= 72.0 and -170.0 <= bounds.center_lon <= -50.0
-    point = map_context.selected_point if map_context else None
-    if point:
-        return 18.0 <= point.lat <= 72.0 and -170.0 <= point.lon <= -50.0
     return False
 
 
@@ -1426,7 +1422,6 @@ def _build_system_prompt(request: PromptRequest) -> str:
         prompt_family, PROMPT_FAMILY_GUIDANCE["terrain-aware-routing"]
     )
     map_lines = [
-        _format_point("Selected point", map_context.selected_point if map_context else None),
         _format_view_bounds(map_context.selected_area if map_context else None).replace(
             "Visible map bounds", "Selected AO bounds"
         ),
