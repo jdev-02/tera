@@ -19,7 +19,8 @@ final class TeraPlanClient {
     }
 
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
-    private static final int TIMEOUT_MS = 15000;
+    private static final int CONNECT_TIMEOUT_MS = 5000;
+    private static final int READ_TIMEOUT_MS = 180000;
 
     private TeraPlanClient() {
     }
@@ -40,8 +41,8 @@ final class TeraPlanClient {
                 URL url = new URL(endpoint.trim());
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("POST");
-                connection.setConnectTimeout(TIMEOUT_MS);
-                connection.setReadTimeout(TIMEOUT_MS);
+                connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                connection.setReadTimeout(READ_TIMEOUT_MS);
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setDoOutput(true);
 
