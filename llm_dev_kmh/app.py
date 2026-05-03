@@ -5896,6 +5896,35 @@ def _looks_like_blocking_clarification(text: str) -> bool:
     )
 
 
+def _looks_like_forbidden_atak_data_request(text: str) -> bool:
+    return _text_has_any(
+        text,
+        (
+            "usgs_3dep",
+            "usgs 3dep",
+            "3dep",
+            "usgs_3dhp",
+            "usgs 3dhp",
+            "3dhp",
+            "cesium world terrain",
+            "copernicus dem",
+            "sentinel",
+            "initiate a download",
+            "download",
+            "more imagery",
+            "additional imagery",
+            "additional data",
+            "new files",
+            "terrain dataset",
+            "hydrography data",
+            "source package",
+            "stage data",
+            "data staging",
+            "external dataset",
+        ),
+    )
+
+
 def _tak_item_target_label(item: TakCotItem) -> str:
     metadata_target = item.metadata.get("target")
     if isinstance(metadata_target, dict):
@@ -5922,7 +5951,10 @@ def _tak_item_distance_text(item: TakCotItem) -> str:
 
 
 def _decisive_tak_response_text(text: str, tak_cot: TakCotPayload) -> str:
-    if not _looks_like_blocking_clarification(text):
+    if not (
+        _looks_like_blocking_clarification(text)
+        or _looks_like_forbidden_atak_data_request(text)
+    ):
         return text
 
     if tak_cot.items:
@@ -6274,6 +6306,7 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
     "tera-atak-live": dedent(
         """
         You are TERA's live ATAK plugin agent running locally on the Jetson.
+        You are not a data-source planner in ATAK live mode.
         Treat the operator prompt as coming from a Samsung ATAK end-user device
         over the local IP link. Optimize for the demo path: nearest water,
         covered foot movement, reroutes when the operator rejects a route,
@@ -6288,13 +6321,15 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
         Ask at most one question only when no safe route or point set can be
         resolved from the supplied context. End with a short refinement option
         such as "reply alternate" or "tell me what is blocked" instead of a
-        blocking question. Your only analytical data sources are local OSM
-        vectors under /WINTAK Imagery and local
-        DTED terrain under /DTED. Never recommend, require, or cite any source
-        outside that allowlist for the Jetson action path. Never claim that ATAK
-        map objects, CoT tracks, routes, or live device state exist unless
-        they are present in the supplied map context, active TERA TAK item
-        list, or request payload.
+        blocking question. Your only analytical data sources are mounted local
+        OSM vectors under /WINTAK Imagery and mounted local DTED terrain under
+        /DTED. Never request additional imagery, terrain, hydrography, files,
+        source packages, or data staging. Never recommend, require, or cite
+        any source outside that allowlist for the Jetson action path. Use the
+        deterministic server route, point, terrain, CoT, and KMZ outputs when
+        they are available. Never claim that ATAK map objects, CoT tracks,
+        routes, or live device state exist unless they are present in the
+        supplied map context, active TERA TAK item list, or request payload.
         """
     ).strip(),
     "tera-atak-link-test": dedent(
@@ -6802,6 +6837,120 @@ def _build_system_prompt(request: PromptRequest) -> str:
         f"- Future deterministic action likely: {'yes' if prompt_schema['action_ready'] else 'no'}",
     ]
 
+    shared_rules = [
+        "Rules:",
+        "- Keep the answer concise and operational.",
+        "- Mention visible terrain relationships before recommendations.",
+        "- Do not invent exact trails, water, roads, hazards, or route geometry.",
+        (
+            "- For route-like requests, give assessment, recommended action, "
+            "and only the minimum caveat needed for review."
+        ),
+        "- For alternates, compare fastest, safest, and easiest when feasible.",
+    ]
+    if atak_live:
+        context_sections = [
+            (
+                "Live TAK deterministic data context:\n"
+                "- Root-staged OSM vector data: local OSM vectors from /WINTAK Imagery "
+                "for roads, trails, waterways, water POIs, crossings, barriers, and "
+                "candidate route features.\n"
+                "- Root DTED Terrain: local DTED terrain from /DTED for elevation, slope, "
+                "viewshed, terrain cost, and terrain caveats.\n"
+                "- These mounted files are the complete analytical evidence set. Request "
+                "no additional imagery, terrain, hydrography, source packages, files, "
+                "services, or data staging for ATAK prompts.\n"
+                "- The server computes deterministic TAK CoT/KMZ output from the prompt, "
+                "client location, displayed map bounds, local OSM features, and DTED terrain."
+            )
+        ]
+        rules = shared_rules + [
+            (
+                "- Be decisive: if the prompt names a target class and the map context gives "
+                "a TAK client location, use that client location as the route origin and "
+                "answer with the recommended action now. The server will attach any "
+                "deterministic TAK CoT route or points separately."
+            ),
+            (
+                "- Never ask the operator whether to add imagery, terrain, hydrography, "
+                "source packages, files, services, or data staging. That is not an option "
+                "in ATAK live mode."
+            ),
+            (
+                "- In ATAK live mode, do not ask the operator to choose among streams, "
+                "springs, lakes, roads, trails, or similar subtypes when local OSM "
+                "can rank nearby candidates. "
+                "Pick the best candidate and tell the operator they can refine or request "
+                "an alternate."
+            ),
+            (
+                "- Use the displayed ATAK map bounds as the visible operating area: prefer "
+                "targets, checkpoints, and caveats that fit inside that map view unless the "
+                "user explicitly gives a different radius or objective."
+            ),
+            (
+                "- Deterministic action can query only local OSM vectors from /WINTAK "
+                "Imagery and DTED terrain from /DTED. Treat NAIP and OSM imagery as display "
+                "context, not as model evidence for generated CoT."
+            ),
+            (
+                "- Use deterministic server outputs first. Once a route, checkpoint set, "
+                "water point, or CoT/KMZ package is available, summarize that action and "
+                "give the operator a quick refinement path instead of asking for more data."
+            ),
+            (
+                "- For follow-up rejection like 'that route does not work' or 'we cannot "
+                "walk that way', acknowledge and provide a concise reroute intent instead "
+                "of asking the operator to restate the mission."
+            ),
+            (
+                "- If deterministic tools return no local feature, state that no local OSM "
+                "candidate was found in the current radius/bounds and give the fastest useful "
+                "refinement option: widen radius, move bounds, or ask for an alternate target."
+            ),
+        ]
+    else:
+        context_sections = [
+            f"Current source package context:\n{_format_source_context(request.source_context)}",
+            f"Available data source catalog:\n{_format_source_catalog_brief()}",
+        ]
+        rules = shared_rules + [
+            (
+                "- For imagery-sourcing requests, separate display streams from "
+                "analysis/download datasets and explain required, optional, and "
+                "not-needed sources."
+            ),
+            (
+                "- Do not recommend the full catalog. Optimize for the smallest package "
+                "that enables the mission and explain what would be missing if a source "
+                "is omitted."
+            ),
+            (
+                "- Drive source planning to mission scope in the fewest useful turns: "
+                "combine missing AO, objective, movement mode, time horizon, and "
+                "constraints into one ranked scope pass when possible."
+            ),
+            (
+                "- If the planner-confirmed mission map focus is not confirmed, tell the "
+                "planner to move the map with location search, import a KML/KMZ overlay, "
+                "or draw an AO before final source confirmation."
+            ),
+            (
+                "- Ask no more than three clarifying questions, and only ask questions "
+                "that would materially change the data package."
+            ),
+            (
+                "- Use a Socratic sourcing dialogue for imagery-sourcing: reflect the "
+                "mission read, ask ranked questions that broaden or limit the package, "
+                "and state what source decision each answer controls."
+            ),
+            (
+                "- Do not present a final manifest-style answer until the planner has "
+                "confirmed mission scope and source families."
+            ),
+            "- If map context or deterministic tools are missing, say what is needed next.",
+        ]
+
     base_prompt = "\n\n".join(
         [
             profile_prompt,
@@ -6812,92 +6961,8 @@ def _build_system_prompt(request: PromptRequest) -> str:
             ),
             f"Inferred request normalization:\n{chr(10).join(normalized_request_lines)}",
             f"Current map context:\n{chr(10).join(map_lines)}",
-            f"Current source package context:\n{_format_source_context(request.source_context)}",
-            f"Available data source catalog:\n{_format_source_catalog_brief()}",
-            "\n".join(
-                [
-                    "Rules:",
-                    "- Keep the answer concise and operational.",
-                    "- Mention visible terrain relationships before recommendations.",
-                    (
-                        "- For imagery-sourcing requests, separate display streams from "
-                        "analysis/download datasets and explain required, optional, and "
-                        "not-needed sources."
-                    ),
-                    (
-                        "- Do not recommend the full catalog. Optimize for the smallest "
-                        "package that enables the mission and explain what would be missing "
-                        "if a source is omitted."
-                    ),
-                    (
-                        "- Drive source planning to mission scope in the fewest useful turns: "
-                        "combine missing AO, objective, movement mode, time horizon, and "
-                        "constraints into one ranked scope pass when possible."
-                    ),
-                    (
-                        "- If the planner-confirmed mission map focus is not confirmed, "
-                        "tell the planner to move the map with location search, import a "
-                        "KML/KMZ overlay, or draw an AO before final source confirmation."
-                    ),
-                    (
-                        "- Ask no more than three clarifying questions, and only ask "
-                        "questions that would materially change the data package."
-                    ),
-                    (
-                        "- Use a Socratic sourcing dialogue for imagery-sourcing: "
-                        "reflect the mission read, ask ranked questions that broaden "
-                        "or limit the package, and state what source decision each "
-                        "answer controls."
-                    ),
-                    (
-                        "- Do not present a final manifest-style answer until the "
-                        "planner has confirmed mission scope and source families."
-                    ),
-                    (
-                        "- In ATAK live mode, be decisive: if the prompt names a target "
-                        "class and the map context gives a TAK client location, use that "
-                        "client location as the route origin and answer with the recommended "
-                        "action now. The server will attach any deterministic TAK CoT route "
-                        "or points separately."
-                    ),
-                    (
-                        "- In ATAK live mode, do not ask the operator to choose among "
-                        "streams, springs, lakes, roads, trails, or similar subtypes when "
-                        "local OSM can rank nearby candidates. Pick the best candidate and "
-                        "tell the operator they can refine or request an alternate."
-                    ),
-                    (
-                        "- Use the displayed ATAK map bounds as the visible operating area: "
-                        "prefer targets, checkpoints, and caveats that fit inside that map "
-                        "view unless the user explicitly gives a different radius or objective."
-                    ),
-                    (
-                        "- In Jetson ATAK mode, deterministic action can query only local OSM "
-                        "vectors from the WinTAK imagery folder and DTED terrain from the "
-                        "Jetson DTED folder. Treat NAIP and OSM imagery as display context, "
-                        "not as model evidence for generated CoT."
-                    ),
-                    (
-                        "- Never recommend or require any source outside root /DTED "
-                        "and root /WINTAK Imagery OSM for the Jetson agentic path. "
-                        "If the operator asks for slope, viewshed, route, water, "
-                        "access, or points, answer with the best result possible "
-                        "from those two local sources only."
-                    ),
-                    (
-                        "- For follow-up rejection like 'that route does not work' or "
-                        "'we cannot walk that way', acknowledge and provide a concise "
-                        "reroute intent instead of asking the operator to restate the mission."
-                    ),
-                    "- Do not invent exact trails, water, roads, hazards, or route geometry.",
-                    (
-                        "- For route-like requests, give assessment, recommended action, "
-                        "and only the minimum caveat needed for review."
-                    ),
-                    "- For alternates, compare fastest, safest, and easiest when feasible.",
-                    "- If map context or deterministic tools are missing, say what is needed next.",
-                ]
-            ),
+            *context_sections,
+            "\n".join(rules),
         ]
     )
 

@@ -278,6 +278,10 @@ def test_atak_prompt_source_catalog_is_limited_to_root_osm_and_dted() -> None:
     assert "local DTED terrain from /DTED" in system_prompt
     assert "Root DTED Terrain" in system_prompt
     assert "Root-staged OSM vector data" in system_prompt
+    assert "Socratic sourcing dialogue" not in system_prompt
+    assert "Current source package context" not in system_prompt
+    assert "Available data source catalog" not in system_prompt
+    assert "Request no additional imagery, terrain, hydrography" in system_prompt
     assert "USGS 3DEP" not in system_prompt
     assert "Cesium World Terrain" not in system_prompt
     assert "Copernicus DEM" not in system_prompt
@@ -928,6 +932,21 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
     assert "TAK route, checkpoints, and package are attached" in decisive
     assert "streams, springs, or lakes" not in decisive
     assert "reply 'alternate'" in decisive
+
+    forbidden_source_response = kmh_app._decisive_tak_response_text(
+        (
+            "To identify the closest water source, I recommend prioritizing "
+            "the `usgs_3dep` terrain dataset with the `usgs_3dhp` hydrography data. "
+            "Do you want me to initiate a download of `usgs_3dep` and `usgs_3dhp` "
+            "to the Jetson?"
+        ),
+        payload,
+    )
+    assert "Best route generated to Demo Creek" in forbidden_source_response
+    assert "TAK route, checkpoints, and package are attached" in forbidden_source_response
+    assert "usgs_3dep" not in forbidden_source_response
+    assert "usgs_3dhp" not in forbidden_source_response
+    assert "download" not in forbidden_source_response.lower()
 
 
 def test_tak_cot_payload_prefers_client_location_and_visible_bounds(
