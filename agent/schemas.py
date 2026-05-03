@@ -57,7 +57,7 @@ class Coord(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    """The operator's natural-language request + their current position.
+    """ATAK plugin request: operator text/STT prompt + current TAK position.
 
     `voice_profile` lets the caller pin which voice the orchestrator uses
     for the spoken rationale (PRD §6, issue #54). 'calm' = briefer voice,
