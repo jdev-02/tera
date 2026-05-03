@@ -154,9 +154,7 @@ def _dispatch_tools(query: dict[str, Any], origin: Coord) -> dict[str, Any]:
     )
 
     # Step 3: build waypoints + rationale.
-    waypoints = [
-        {"lat": dest_coord["lat"], "lon": dest_coord["lon"], "label": dest_label}
-    ]
+    waypoints = [{"lat": dest_coord["lat"], "lon": dest_coord["lon"], "label": dest_label}]
     rationale = _build_rationale(
         dest_label=dest_label,
         cost=route_result["cost_breakdown"],
@@ -193,9 +191,7 @@ def _build_rationale(
     """
     distance_km = cost.get("distance_m", 0.0) / 1000.0
     time_min = cost.get("time_s", 0.0) / 60.0
-    avoid_str = (
-        f" Avoiding {', '.join(a.replace('_', ' ') for a in avoid)}." if avoid else ""
-    )
+    avoid_str = f" Avoiding {', '.join(a.replace('_', ' ') for a in avoid)}." if avoid else ""
     return (
         f"Routed to {dest_label}, distance {distance_km:.1f} kilometers, "
         f"ETA {time_min:.0f} minutes on {profile.replace('_', ' ')}.{avoid_str}"
@@ -281,9 +277,7 @@ class PlanBlockedError(Exception):
         self.reason = reason
 
 
-async def plan(
-    req: PlanRequest, mode: ModeOrAuto = "auto", with_tts: bool = False
-) -> PlanResponse:
+async def plan(req: PlanRequest, mode: ModeOrAuto = "auto", with_tts: bool = False) -> PlanResponse:
     """End-to-end /plan handler.
 
     Args:

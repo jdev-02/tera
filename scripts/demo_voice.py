@@ -120,9 +120,7 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  listen:  {listen_for}")
 
 
-def _write_notes(
-    notes: list[tuple[str, str, str, str]], length_scale: float
-) -> Path:
+def _write_notes(notes: list[tuple[str, str, str, str]], length_scale: float) -> Path:
     """Write captured notes to a timestamped markdown file. Returns the path.
 
     Format mirrors what's useful when triaging cadence rules: phrase id,
@@ -152,9 +150,7 @@ def _write_notes(
     return out
 
 
-def _interactive_loop(
-    phrases: list[tuple[str, str, str, str]], length_scale: float
-) -> int:
+def _interactive_loop(phrases: list[tuple[str, str, str, str]], length_scale: float) -> int:
     """Walk through phrases. Returns exit code."""
     client = get_piper()
     if not client.is_available():
@@ -176,8 +172,10 @@ def _interactive_loop(
     notes: list[tuple[str, str, str, str]] = []  # (id, category, cadence, note)
 
     def _commands_help() -> None:
-        print("  -- single-char commands: r=replay s=slower f=faster q=quit; "
-              "any other text becomes a note for this phrase --")
+        print(
+            "  -- single-char commands: r=replay s=slower f=faster q=quit; "
+            "any other text becomes a note for this phrase --"
+        )
 
     i = 0
     while i < len(phrases):
@@ -195,9 +193,7 @@ def _interactive_loop(
         wav.unlink(missing_ok=True)
 
         try:
-            raw = input(
-                f"  [{i + 1}/{len(phrases)}] note (or r/s/f/q, Enter=next) > "
-            )
+            raw = input(f"  [{i + 1}/{len(phrases)}] note (or r/s/f/q, Enter=next) > ")
         except EOFError:
             print()
             break

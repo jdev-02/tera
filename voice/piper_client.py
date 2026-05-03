@@ -97,9 +97,7 @@ class PiperClient:
         try:
             from piper import PiperVoice
         except ImportError as e:
-            raise RuntimeError(
-                "piper-tts not installed; run: make install-voice"
-            ) from e
+            raise RuntimeError("piper-tts not installed; run: make install-voice") from e
         if not self.model_path.exists():
             raise RuntimeError(
                 f"Piper voice model not found at {self.model_path}. "

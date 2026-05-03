@@ -11,26 +11,21 @@ _CASES: list[tuple[str, str, str]] = [
     # Empty / no-op cases
     ("", "", "empty stays empty"),
     ("Hello operator.", "Hello operator.", "no numbers, no transform"),
-
     # Cardinal abbreviations
     ("Heading NE.", "Heading northeast.", "NE -> northeast"),
     ("Bearing SW from origin.", "Bearing southwest from origin.", "SW -> southwest"),
     ("Move NNE through draw.", "Move north-northeast through draw.", "3-letter cardinal"),
-
     # Decimal expansion
     ("2.1 kilometers", "two point one kilometers", "decimal expanded"),
     ("0.5", "zero point five", "leading zero"),
     ("12.345", "one two point three four five", "multi-digit decimal"),
-
     # Plain integer expansion (digit-by-digit)
     ("ETA 38 minutes", "echo tango alpha three eight minutes", "two-digit count + acronym"),
     ("over 4 kilometers per hour", "over four kilometers per hour", "single digit"),
-
     # Unit expansion
     ("2 km", "two kilometers", "km -> kilometers"),
     ("4 kph", "four kilometers per hour", "kph -> kilometers per hour"),
     ("500 m", "five zero zero meters", "m -> meters"),
-
     # MGRS grid -- single 8-digit precision pair. Phonetic letters comma-
     # separated so 'sierra mike sierra' doesn't slur (op note 17:03 #4).
     (
@@ -38,7 +33,6 @@ _CASES: list[tuple[str, str, str]] = [
         "Grid one one sierra, mike, sierra one two three four, five six seven eight",
         "MGRS with two 4-digit halves",
     ),
-
     # MGRS grid -- 4-digit no-space form (1km precision, 2+2 split).
     # The standard read inserts a beat between easting and northing.
     (
@@ -46,14 +40,12 @@ _CASES: list[tuple[str, str, str]] = [
         "Hill at one one sierra, mike, sierra one two, three four",
         "MGRS no-space 4-digit precision (split 2+2)",
     ),
-
     # MGRS grid -- 8-digit no-space form (10m precision, 4+4 split).
     (
         "Hill at 11SMS12345678.",
         "Hill at one one sierra, mike, sierra one two three four, five six seven eight.",
         "MGRS no-space 8-digit precision",
     ),
-
     # Acronym expansion -- NATO phonetic (Piper-safe; can't swallow letters).
     (
         "ETA 5 minutes.",
@@ -70,7 +62,6 @@ _CASES: list[tuple[str, str, str]] = [
         "Identify charlie papa and tock.",
         "multiple acronyms in one line (mix of spell + word forms)",
     ),
-
     # Acronym expansion -- read as a word with hyphen hint or natural syllables.
     (
         "CASEVAC inbound.",
@@ -82,7 +73,6 @@ _CASES: list[tuple[str, str, str]] = [
         "med-evac requested.",
         "MEDEVAC -> 'med-evac'",
     ),
-
     # Clause-comma promotion -- ', ETA' -> '. ETA' for radio cadence.
     (
         "Distance 2.1 km, ETA 38 minutes.",
@@ -94,7 +84,6 @@ _CASES: list[tuple[str, str, str]] = [
         "Hold position. bearing two seven zero. range eight zero zero meters.",
         "commas before bearing/range promoted",
     ),
-
     # The flagship rationale from PRD §6 (hero scenario A). Note: ', distance'
     # is also promoted to '. distance' (clause-comma rule), and ', ETA' to
     # '. ETA'. Result: three full-sentence beats between the elements, ETA
@@ -107,7 +96,6 @@ _CASES: list[tuple[str, str, str]] = [
         ),
         "PRD scenario A canonical rationale",
     ),
-
     # Combined: cardinal + decimal + integer + acronym. Note '; ETA' is
     # not promoted -- the rule only promotes ', ' (comma+space) before cues.
     (
