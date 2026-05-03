@@ -26,6 +26,43 @@ IMAGERY_SOURCING_PROMPT_FILE = (
 )
 INDEX_FILE = BASE_DIR / "static" / "index.html"
 STATIC_DIR = BASE_DIR / "static"
+
+
+def _load_dotenv_file(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        key = key.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        if key in os.environ:
+            continue
+        value = value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {'"', "'"}
+        ):
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+_load_dotenv_file(BASE_DIR.parent / ".env")
+_load_dotenv_file(BASE_DIR.parent / ".env.local")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma2:2b")
 ANTHROPIC_API_URL = os.getenv(
@@ -78,7 +115,13 @@ GOOGLE_MAPS_COORD_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"@(?P<lat>[+-]?\d+(?:\.\d+)?),(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE),
     re.compile(r"[?&](?:q|ll|center)=(?P<lat>[+-]?\d+(?:\.\d+)?),(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE),
 )
-CESIUM_ION_TOKEN = os.getenv("CESIUM_ION_TOKEN", "")
+CESIUM_ION_TOKEN = (
+    os.getenv("CESIUM_ION_TOKEN")
+    or os.getenv("CESIUM_TOKEN")
+    or os.getenv("CESIUM_ACCESS_TOKEN")
+    or os.getenv("CESIUM_ION_ACCESS_TOKEN")
+    or ""
+).strip()
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
