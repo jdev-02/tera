@@ -22,7 +22,7 @@ from uuid import uuid4
 
 import httpx
 import structlog
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -176,6 +176,9 @@ TERA_ATAK_MODEL = os.getenv("TERA_ATAK_MODEL", "gemma3:4b")
 TERA_ATAK_AGENT_PROFILE = os.getenv("TERA_ATAK_AGENT_PROFILE", "tera-atak-live")
 TERA_ATAK_DEVICE_URL = os.getenv("TERA_ATAK_DEVICE_URL", "").strip()
 TERA_ATAK_ACTIVATE_COMMAND = os.getenv("TERA_ATAK_AGENT_COMMAND", "").strip()
+TERA_ATAK_OLLAMA_KEEP_ALIVE = os.getenv("TERA_ATAK_OLLAMA_KEEP_ALIVE", "30m")
+TERA_PUBLIC_BASE_URL = os.getenv("TERA_PUBLIC_BASE_URL", "").strip().rstrip("/")
+TERA_JETSON_IP = os.getenv("TERA_JETSON_IP", "").strip()
 ACTIVE_OLLAMA_BASE_URL: str | None = None
 ACTIVE_OLLAMA_MODEL: str | None = None
 ACTIVE_CLAUDE_MODELS: list[str] | None = None
@@ -188,6 +191,10 @@ JETSON_ATAK_MODE: dict[str, Any] = {
     "provider": "ollama",
     "agent_profile": TERA_ATAK_AGENT_PROFILE,
     "atak_device_url": TERA_ATAK_DEVICE_URL or None,
+    "ollama_base_url": None,
+    "ollama_ready": False,
+    "jetson_ip": TERA_JETSON_IP or None,
+    "plugin_endpoint": None,
     "activated_at": None,
 }
 
@@ -270,6 +277,10 @@ class JetsonAtakModeResponse(BaseModel):
     provider: str
     agent_profile: str
     atak_device_url: str | None = None
+    ollama_base_url: str | None = None
+    ollama_ready: bool = False
+    jetson_ip: str | None = None
+    plugin_endpoint: str | None = None
     mirror_url: str
     events: list[JetsonAtakMirrorEvent] = Field(default_factory=list)
 
@@ -2591,9 +2602,60 @@ def _jetson_atak_response(detail: str | None = None) -> JetsonAtakModeResponse:
             JETSON_ATAK_MODE.get("agent_profile") or TERA_ATAK_AGENT_PROFILE
         ),
         atak_device_url=JETSON_ATAK_MODE.get("atak_device_url"),
+        ollama_base_url=JETSON_ATAK_MODE.get("ollama_base_url"),
+        ollama_ready=bool(JETSON_ATAK_MODE.get("ollama_ready")),
+        jetson_ip=JETSON_ATAK_MODE.get("jetson_ip"),
+        plugin_endpoint=JETSON_ATAK_MODE.get("plugin_endpoint"),
         mirror_url="/api/jetson/atak-agent/mirror",
         events=_read_atak_mirror_events(),
     )
+
+
+def _normalize_ollama_model_name(model: str | None) -> str:
+    candidate = (model or TERA_ATAK_MODEL).strip() or TERA_ATAK_MODEL
+    compact = candidate.lower().replace(" ", "")
+    if compact in {"gemma3:4", "gemma-3:4", "gemma3-4"}:
+        return "gemma3:4b"
+    return candidate
+
+
+def _ollama_model_is_available(models: list[str], model: str) -> bool:
+    requested = _normalize_ollama_model_name(model)
+    requested_name = requested.split(":", 1)[0]
+    for installed in models:
+        if installed == requested:
+            return True
+        if ":" not in requested and installed.split(":", 1)[0] == requested_name:
+            return True
+    return False
+
+
+def _public_base_url_from_request(http_request: Request | None = None) -> str | None:
+    if TERA_PUBLIC_BASE_URL:
+        return TERA_PUBLIC_BASE_URL
+    if http_request is not None:
+        forwarded_host = http_request.headers.get("x-forwarded-host", "").strip()
+        host = forwarded_host or http_request.headers.get("host", "").strip()
+        if host:
+            scheme = (
+                http_request.headers.get("x-forwarded-proto", "").strip()
+                or http_request.url.scheme
+                or "http"
+            )
+            return f"{scheme}://{host}".rstrip("/")
+    if TERA_JETSON_IP:
+        return f"http://{TERA_JETSON_IP}:8080"
+    return None
+
+
+def _plugin_endpoint_for_request(
+    http_request: Request | None = None,
+) -> tuple[str | None, str | None]:
+    base_url = _public_base_url_from_request(http_request)
+    if not base_url:
+        return None, None
+    host = base_url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    return host, f"{base_url.rstrip('/')}/api/prompt"
 
 
 def _start_jetson_atak_command(
@@ -5142,6 +5204,24 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
         Keep outputs analytical and tied to the map context.
         """
     ).strip(),
+    "tera-atak-live": dedent(
+        """
+        You are TERA's live ATAK plugin agent running locally on the Jetson.
+        Treat the operator prompt as coming from a Samsung ATAK end-user device
+        over the local IP link. Use terse tactical language, prioritize route
+        intent, terrain constraints, CoT/signature readiness, and what the
+        plugin should render or verify next. Never claim that ATAK map objects,
+        CoT tracks, routes, or live device state exist unless they are present
+        in the supplied map context or request payload.
+        """
+    ).strip(),
+    "tera-atak-link-test": dedent(
+        """
+        You are TERA's ATAK link-test agent. Confirm Jetson local model,
+        endpoint, and readiness in one short response. Prefer JSON-shaped
+        status when the operator asks for a connectivity test.
+        """
+    ).strip(),
     "survival-sar": dedent(
         """
         You are TERA's survival and SAR terrain assistant.
@@ -5690,12 +5770,13 @@ def _build_system_prompt(request: PromptRequest) -> str:
 def _build_ollama_payload_for_model(
     request: PromptRequest, model: str, *, stream: bool
 ) -> dict[str, object]:
+    profile = (request.agent_profile or "").strip().lower()
     payload: dict[str, object] = {
         "model": model,
         "stream": stream,
         "prompt": request.prompt,
         "system": _build_system_prompt(request),
-        "keep_alive": "10m",
+        "keep_alive": TERA_ATAK_OLLAMA_KEEP_ALIVE if "atak" in profile else "10m",
         "options": {
             "temperature": 0.1,
             "num_predict": 512,
@@ -6077,6 +6158,161 @@ async def _fetch_ollama_models_from(base_url: str) -> list[str]:
         for model in data.get("models", [])
         if str(model.get("name", "")).strip()
     ]
+
+
+def _start_local_ollama_runtime() -> str | None:
+    attempts: list[str] = []
+    if shutil.which("systemctl"):
+        commands = (
+            ["systemctl", "--user", "start", "ollama"],
+            ["sudo", "-n", "systemctl", "start", "ollama"],
+            ["systemctl", "start", "ollama"],
+        )
+        for command in commands:
+            try:
+                completed = subprocess.run(
+                    command,
+                    timeout=12,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                attempts.append(f"{' '.join(command)} failed: {exc}")
+                continue
+            if completed.returncode == 0:
+                return f"started Ollama via {' '.join(command)}"
+            stderr = (completed.stderr or completed.stdout or "").strip()
+            if stderr:
+                attempts.append(f"{' '.join(command)}: {stderr[:180]}")
+
+    ollama_bin = shutil.which("ollama")
+    if ollama_bin:
+        log_path = _runtime_dir() / "ollama-serve.log"
+        env = os.environ.copy()
+        env.setdefault("OLLAMA_HOST", "0.0.0.0:11434")
+        with log_path.open("ab") as output:
+            process = subprocess.Popen(
+                [ollama_bin, "serve"],
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                env=env,
+                cwd=str(BASE_DIR.parent),
+            )
+        return f"started Ollama serve with pid {process.pid}"
+
+    if attempts:
+        return "Ollama start attempted but did not succeed: " + " | ".join(attempts[:2])
+    return "Ollama executable/systemd service not found in this runtime."
+
+
+async def _wait_for_ollama(base_url: str, *, attempts: int = 20) -> list[str] | None:
+    for _ in range(attempts):
+        try:
+            return await _fetch_ollama_models_from(base_url)
+        except httpx.HTTPError:
+            await asyncio.sleep(0.5)
+    return None
+
+
+async def _pull_ollama_model(base_url: str, model: str) -> str:
+    timeout = httpx.Timeout(900.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            f"{base_url}/api/pull",
+            json={"name": model, "stream": False},
+        )
+        response.raise_for_status()
+    return f"Pulled Ollama model {model}."
+
+
+async def _warm_ollama_atak_model(base_url: str, model: str, agent_profile: str) -> str:
+    warm_request = PromptRequest(
+        prompt="TERA ATAK readiness check. Reply READY in one short sentence.",
+        model=model,
+        llm_provider="ollama",
+        agent_profile=agent_profile,
+    )
+    payload = _build_ollama_payload_for_model(warm_request, model, stream=False)
+    payload["keep_alive"] = TERA_ATAK_OLLAMA_KEEP_ALIVE
+    options = dict(payload.get("options") or {})
+    options["num_predict"] = 24
+    payload["options"] = options
+
+    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(f"{base_url}/api/generate", json=payload)
+        response.raise_for_status()
+    return f"Warmed {model} with TERA ATAK profile; keep_alive={TERA_ATAK_OLLAMA_KEEP_ALIVE}."
+
+
+async def _prepare_ollama_for_atak(model: str, agent_profile: str) -> dict[str, object]:
+    details: list[str] = []
+    selected_base_url: str | None = None
+    models: list[str] | None = None
+
+    for base_url in _ollama_base_url_candidates():
+        try:
+            models = await _fetch_ollama_models_from(base_url)
+            selected_base_url = base_url
+            details.append(f"Ollama reachable at {base_url}.")
+            break
+        except httpx.HTTPError as exc:
+            details.append(f"{base_url} unavailable: {exc}")
+
+    if selected_base_url is None:
+        start_detail = _start_local_ollama_runtime()
+        if start_detail:
+            details.append(start_detail)
+        for base_url in _ollama_base_url_candidates():
+            models = await _wait_for_ollama(base_url)
+            if models is not None:
+                selected_base_url = base_url
+                details.append(f"Ollama became reachable at {base_url}.")
+                break
+
+    if selected_base_url is None or models is None:
+        return {
+            "ready": False,
+            "base_url": None,
+            "detail": " ".join(details[-4:]) or "Ollama is not reachable.",
+        }
+
+    if not _ollama_model_is_available(models, model):
+        try:
+            details.append(await _pull_ollama_model(selected_base_url, model))
+            models = await _fetch_ollama_models_from(selected_base_url)
+        except httpx.HTTPError as exc:
+            details.append(f"Could not pull {model}: {exc}")
+            return {
+                "ready": False,
+                "base_url": selected_base_url,
+                "detail": " ".join(details[-4:]),
+            }
+
+    if not _ollama_model_is_available(models, model):
+        details.append(f"{model} still not listed by Ollama after pull.")
+        return {
+            "ready": False,
+            "base_url": selected_base_url,
+            "detail": " ".join(details[-4:]),
+        }
+
+    try:
+        details.append(await _warm_ollama_atak_model(selected_base_url, model, agent_profile))
+    except httpx.HTTPError as exc:
+        details.append(f"Ollama warmup failed for {model}: {exc}")
+        return {
+            "ready": False,
+            "base_url": selected_base_url,
+            "detail": " ".join(details[-4:]),
+        }
+
+    return {
+        "ready": True,
+        "base_url": selected_base_url,
+        "detail": " ".join(details[-4:]),
+    }
 
 
 def _score_ollama_model_for_default(model: str, configured_model: str) -> int:
@@ -6667,50 +6903,46 @@ async def jetson_atak_agent_mirror() -> JetsonAtakModeResponse:
 
 @app.post("/api/jetson/atak-agent/activate", response_model=JetsonAtakModeResponse)
 async def activate_jetson_atak_agent(
-    request: JetsonAtakActivateRequest,
+    activation: JetsonAtakActivateRequest,
+    http_request: Request,
 ) -> JetsonAtakModeResponse:
     global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
-    model = (request.model or TERA_ATAK_MODEL).strip() or TERA_ATAK_MODEL
+    model = _normalize_ollama_model_name(activation.model)
     agent_profile = (
-        request.agent_profile or TERA_ATAK_AGENT_PROFILE
+        activation.agent_profile or TERA_ATAK_AGENT_PROFILE
     ).strip() or TERA_ATAK_AGENT_PROFILE
-    atak_device_url = (request.atak_device_url or TERA_ATAK_DEVICE_URL).strip() or None
+    atak_device_url = (activation.atak_device_url or TERA_ATAK_DEVICE_URL).strip() or None
+    jetson_ip, plugin_endpoint = _plugin_endpoint_for_request(http_request)
 
     ACTIVE_OLLAMA_MODEL = model
     JETSON_ATAK_MODE.update(
         {
             "active": True,
             "status": "activating",
-            "detail": "Switching Jetson runtime to local Ollama ATAK agent mode.",
+            "detail": "Starting and warming local Ollama for TERA ATAK agent mode.",
             "model": model,
             "provider": "ollama",
             "agent_profile": agent_profile,
             "atak_device_url": atak_device_url,
+            "ollama_base_url": None,
+            "ollama_ready": False,
+            "jetson_ip": jetson_ip,
+            "plugin_endpoint": plugin_endpoint,
             "activated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
 
-    model_detail = f"Configured local Ollama model {model}."
-    for base_url in _ollama_base_url_candidates():
-        try:
-            models = await _fetch_ollama_models_from(base_url)
-        except httpx.HTTPError:
-            continue
-        ACTIVE_OLLAMA_BASE_URL = base_url
-        if model in models:
-            model_detail = f"Ollama model {model} detected at {base_url}."
-            break
-        model_detail = (
-            f"Ollama is reachable at {base_url}, but {model} was not reported by /api/tags."
-        )
-        break
+    ollama_ready = await _prepare_ollama_for_atak(model, agent_profile)
+    ACTIVE_OLLAMA_BASE_URL = (
+        str(ollama_ready["base_url"]) if ollama_ready.get("base_url") else ACTIVE_OLLAMA_BASE_URL
+    )
 
     command_detail = _start_jetson_atak_command(
         model=model,
         agent_profile=agent_profile,
         atak_device_url=atak_device_url,
     )
-    details = [model_detail]
+    details = [str(ollama_ready.get("detail") or "Ollama readiness check complete.")]
     if command_detail:
         details.append(command_detail)
     else:
@@ -6718,19 +6950,30 @@ async def activate_jetson_atak_agent(
             "No TERA_ATAK_AGENT_COMMAND configured; this server will handle ATAK-profile "
             "prompt calls directly."
         )
+    if plugin_endpoint:
+        details.append(f"Samsung ATAK plugin endpoint: {plugin_endpoint}.")
     if atak_device_url:
         details.append(f"ATAK device target configured: {atak_device_url}.")
     else:
         details.append("Waiting for the ATAK plugin to POST prompts to this Jetson.")
 
     detail = " ".join(details)
-    JETSON_ATAK_MODE.update({"status": "active", "detail": detail})
+    JETSON_ATAK_MODE.update(
+        {
+            "status": "active" if ollama_ready.get("ready") else "error",
+            "detail": detail,
+            "ollama_base_url": ollama_ready.get("base_url"),
+            "ollama_ready": bool(ollama_ready.get("ready")),
+        }
+    )
     _append_atak_mirror_event(
         source="jetson",
         role="system",
         text=(
-            f"Local TERA ATAK agent active on Ollama {model}. "
-            "Mirroring ATAK-profile prompt traffic in this panel."
+            f"Local TERA ATAK agent {'ready' if ollama_ready.get('ready') else 'not ready'} "
+            f"on Ollama {model}. "
+            "Configure Samsung ATAK endpoint "
+            f"{plugin_endpoint or 'http://<JETSON_IP>:8080/api/prompt'}."
         ),
         model=model,
         provider="ollama",
