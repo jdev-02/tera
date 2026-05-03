@@ -424,7 +424,10 @@ async def plan(req: PlanRequest, mode: ModeOrAuto = "auto", with_tts: bool = Fal
         try:
             from voice.tts import synthesize_rationale_b64
 
-            audio_b64 = synthesize_rationale_b64(dispatch["rationale"])
+            audio_b64 = synthesize_rationale_b64(
+                dispatch["rationale"],
+                operator_mode=req.voice_profile,
+            )
         except Exception as e:  # noqa: BLE001 -- TTS failure must not fail /plan
             logger.warning("tts_synth_failed", error=str(e))
 
