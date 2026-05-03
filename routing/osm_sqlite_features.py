@@ -31,11 +31,21 @@ from pathlib import Path
 from typing import Any
 
 
+SQLITE_SUFFIXES = {".gpkg", ".sqlite", ".sqlite3", ".db"}
+
 DEFAULT_DATA_GLOBS = (
     "data/extracts/*.gpkg",
     "data/extracts/*.sqlite",
     "data/extracts/*.sqlite3",
     "data/extracts/*.db",
+    "/WINTAK Imagery/**/*.gpkg",
+    "/WINTAK Imagery/**/*.sqlite",
+    "/WINTAK Imagery/**/*.sqlite3",
+    "/WINTAK Imagery/**/*.db",
+    "/mnt/jetson/WINTAK Imagery/**/*.gpkg",
+    "/mnt/jetson/WINTAK Imagery/**/*.sqlite",
+    "/mnt/jetson/WINTAK Imagery/**/*.sqlite3",
+    "/mnt/jetson/WINTAK Imagery/**/*.db",
 )
 
 GEOMETRY_COLUMN_CANDIDATES = (
@@ -133,15 +143,45 @@ def configured_sqlite_paths() -> list[Path]:
     """Return configured local OSM SQLite files.
 
     `TERA_OSM_SQLITE_PATHS` accepts an OS-pathsep-separated list. If unset, the
-    repo's AOI extract directory is searched for common SQLite vector suffixes.
+    repo's AOI extract directory and the Jetson WinTAK imagery root are searched
+    for common SQLite vector suffixes.
     """
     configured = os.getenv("TERA_OSM_SQLITE_PATHS") or os.getenv("WAYFINDER_OSM_SQLITE_PATHS")
     if configured:
-        return [Path(part) for part in configured.split(os.pathsep) if part.strip()]
+        return _sqlite_paths_from_entries(configured.split(os.pathsep))
+
+    configured_roots = (
+        os.getenv("TERA_OSM_ROOT_DIRS")
+        or os.getenv("TERA_WINTAK_IMAGERY_DIR")
+        or os.getenv("WINTAK_IMAGERY_DIR")
+    )
+    if configured_roots:
+        return _sqlite_paths_from_entries(configured_roots.split(os.pathsep))
 
     paths: list[Path] = []
     for pattern in DEFAULT_DATA_GLOBS:
         paths.extend(Path(p) for p in glob.glob(pattern))
+    return sorted({path for path in paths if path.is_file()})
+
+
+def _sqlite_paths_from_entries(entries: Iterable[str]) -> list[Path]:
+    paths: list[Path] = []
+    for raw_entry in entries:
+        entry = raw_entry.strip()
+        if not entry:
+            continue
+        if any(char in entry for char in "*?["):
+            paths.extend(Path(p) for p in glob.glob(entry, recursive=True))
+            continue
+        path = Path(entry).expanduser()
+        if path.is_dir():
+            paths.extend(
+                candidate
+                for candidate in path.rglob("*")
+                if candidate.is_file() and candidate.suffix.lower() in SQLITE_SUFFIXES
+            )
+        elif path.suffix.lower() in SQLITE_SUFFIXES:
+            paths.append(path)
     return sorted({path for path in paths if path.is_file()})
 
 
