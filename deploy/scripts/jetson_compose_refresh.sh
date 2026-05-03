@@ -6,7 +6,8 @@ REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-main}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 SERVICE_NAME="${SERVICE_NAME:-llm-dev-kmh}"
-PLANNER_URL="${PLANNER_URL:-http://127.0.0.1:8080}"
+PLANNER_PORT="${PLANNER_PORT:-8080}"
+PLANNER_URL="${PLANNER_URL:-http://127.0.0.1:${PLANNER_PORT}}"
 
 cd "$REPO_DIR"
 
@@ -34,6 +35,73 @@ compose() {
   else
     echo "[jetson-refresh] docker compose was not found" >&2
     exit 1
+  fi
+}
+
+detect_lan_ip() {
+  if [[ -n "${TERA_JETSON_IP:-}" ]]; then
+    printf '%s\n' "$TERA_JETSON_IP"
+    return 0
+  fi
+  if [[ -n "${JETSON_IP:-}" ]]; then
+    printf '%s\n' "$JETSON_IP"
+    return 0
+  fi
+  local detected=""
+  if command -v hostname >/dev/null 2>&1; then
+    detected="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [[ -n "$detected" ]]; then
+      printf '%s\n' "$detected"
+      return 0
+    fi
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}'
+  fi
+}
+
+wait_for_url() {
+  local url="$1"
+  local label="$2"
+  local tries="${3:-30}"
+  local body_path="${4:-/tmp/tera-health.json}"
+  for _ in $(seq 1 "$tries"); do
+    if curl -fsS --connect-timeout 2 --max-time 5 "$url" >"$body_path"; then
+      echo "[jetson-refresh] OK: $label reachable at $url"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[jetson-refresh] ERROR: $label is not reachable at $url" >&2
+  return 1
+}
+
+print_network_diagnostics() {
+  echo "[jetson-refresh] network diagnostics" >&2
+  if command -v ip >/dev/null 2>&1; then
+    ip -br addr >&2 || true
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp "( sport = :$PLANNER_PORT )" >&2 || true
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    compose ps >&2 || true
+    compose logs --tail=80 "$SERVICE_NAME" >&2 || true
+  fi
+  if command -v ufw >/dev/null 2>&1; then
+    sudo -n ufw status >&2 || ufw status >&2 || true
+  fi
+}
+
+allow_planner_port_if_firewall_active() {
+  if ! command -v ufw >/dev/null 2>&1; then
+    return 0
+  fi
+  local status
+  status="$(sudo -n ufw status 2>/dev/null || ufw status 2>/dev/null || true)"
+  if grep -qi "Status: active" <<<"$status"; then
+    echo "[jetson-refresh] ufw is active; allowing ${PLANNER_PORT}/tcp"
+    sudo -n ufw allow "${PLANNER_PORT}/tcp" || echo "[jetson-refresh] warning: could not update ufw without sudo password" >&2
   fi
 }
 
@@ -114,12 +182,23 @@ git pull --ff-only "$REMOTE" "$BRANCH"
 head_short="$(git rev-parse --short HEAD)"
 echo "[jetson-refresh] now at $head_short"
 
+LAN_IP="$(detect_lan_ip || true)"
+if [[ -z "$LAN_IP" ]]; then
+  echo "[jetson-refresh] warning: could not detect Jetson LAN IP; set TERA_JETSON_IP=10.1.63.96" >&2
+else
+  export TERA_JETSON_IP="$LAN_IP"
+  export TERA_PUBLIC_BASE_URL="${TERA_PUBLIC_BASE_URL:-http://${LAN_IP}:${PLANNER_PORT}}"
+  echo "[jetson-refresh] Jetson LAN endpoint: ${TERA_PUBLIC_BASE_URL}"
+fi
+
 if ! grep -q 'id="atakAgentBtn"' llm_dev_kmh/static/index.html; then
   echo "[jetson-refresh] warning: ATAK Local button marker not found in static HTML" >&2
 fi
 
-if systemctl list-unit-files tera-planner.service >/dev/null 2>&1; then
-  echo "[jetson-refresh] stopping tera-planner.service to free port 8080"
+allow_planner_port_if_firewall_active
+
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tera-planner.service >/dev/null 2>&1; then
+  echo "[jetson-refresh] stopping tera-planner.service to free port $PLANNER_PORT"
   sudo systemctl stop tera-planner.service || true
 fi
 
@@ -133,17 +212,29 @@ echo "[jetson-refresh] compose status"
 compose ps
 
 if command -v curl >/dev/null 2>&1; then
-  for _ in $(seq 1 30); do
-    if curl -fsS "$PLANNER_URL/" >/tmp/tera-planner-index.html; then
-      break
-    fi
-    sleep 1
-  done
+  if ! wait_for_url "${PLANNER_URL}/health" "local health endpoint" 45 /tmp/tera-health-local.json; then
+    print_network_diagnostics
+    exit 1
+  fi
 
-  if grep -q 'id="atakAgentBtn"' /tmp/tera-planner-index.html; then
-    echo "[jetson-refresh] OK: new planner is serving ATAK Local button at $PLANNER_URL"
-  else
-    echo "[jetson-refresh] warning: planner responded, but ATAK Local button was not found" >&2
-    echo "[jetson-refresh] inspect logs with: docker compose -f $COMPOSE_FILE logs -f $SERVICE_NAME" >&2
+  if ! wait_for_url "${PLANNER_URL}/" "local web app" 10 /tmp/tera-planner-index.html; then
+    print_network_diagnostics
+    exit 1
+  fi
+
+  if ! grep -q 'id="atakAgentBtn"' /tmp/tera-planner-index.html; then
+    echo "[jetson-refresh] ERROR: planner responded, but ATAK Local button was not found" >&2
+    print_network_diagnostics
+    exit 1
+  fi
+
+  if [[ -n "$LAN_IP" ]]; then
+    LAN_HEALTH_URL="http://${LAN_IP}:${PLANNER_PORT}/health"
+    if ! wait_for_url "$LAN_HEALTH_URL" "LAN health endpoint for ATAK plugin" 10 /tmp/tera-health-lan.json; then
+      echo "[jetson-refresh] ATAK plugin will fail until this LAN health URL works: $LAN_HEALTH_URL" >&2
+      print_network_diagnostics
+      exit 1
+    fi
+    echo "[jetson-refresh] ATAK plugin endpoint: http://${LAN_IP}:${PLANNER_PORT}/api/prompt"
   fi
 fi

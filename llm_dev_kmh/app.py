@@ -209,7 +209,7 @@ JETSON_ATAK_MODE: dict[str, Any] = {
     "activated_at": None,
 }
 
-app = FastAPI(title="TERA Source Planner", version="0.2.0")
+app = FastAPI(title="TERA TAK Planner", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -895,7 +895,7 @@ SOURCE_CATALOG: list[SourceOption] = [
     ),
     SourceOption(
         id="cesium_world_terrain",
-        name="Cesium World Terrain",
+        name="Cesium Terrain Display",
         provider="Cesium ion",
         category="terrain-display",
         purpose="3D terrain visualization for operator and planner preview.",
@@ -908,7 +908,7 @@ SOURCE_CATALOG: list[SourceOption] = [
         derived_layers=["preview_only_terrain_stream"],
         notes=(
             "Good for online visualization, not a substitute for indexed DEM rasters. "
-            "Do not download Cesium World Terrain into offline packages by default."
+            "Do not download the Cesium terrain stream into offline packages by default."
         ),
     ),
     SourceOption(
@@ -8479,9 +8479,19 @@ async def serve_index() -> FileResponse:
     return FileResponse(INDEX_FILE)
 
 
+def _health_payload() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "service": "tera-tak-planner",
+        "ollama_base_url": OLLAMA_BASE_URL,
+    }
+
+
 @app.get("/health")
+@app.get("/api/health")
+@app.get("/api/prompt/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "ollama_base_url": OLLAMA_BASE_URL}
+    return _health_payload()
 
 
 @app.get("/api/jetson/atak-agent/status", response_model=JetsonAtakModeResponse)
@@ -8722,7 +8732,7 @@ async def search_locations(
                     params=params,
                     headers={
                         "Accept-Language": "en",
-                        "User-Agent": "TERA Source Planner local web app; optional online geocode",
+                        "User-Agent": "TERA TAK Planner local web app; optional online geocode",
                     },
                 )
                 response.raise_for_status()

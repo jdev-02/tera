@@ -182,7 +182,7 @@ const WORKFLOW_STAGES = [
   {
     key: "area",
     label: "AO",
-    meta: "Set package coverage",
+    meta: "Set local coverage",
   },
 ];
 
@@ -501,7 +501,7 @@ const FALLBACK_SOURCE_CATALOG = [
   },
   {
     id: "cesium_world_terrain",
-    name: "Cesium World Terrain",
+    name: "Cesium Terrain Display",
     provider: "Cesium ion",
     category: "terrain-display",
     purpose: "Streamable 3D terrain preview for landform awareness.",
@@ -2545,12 +2545,12 @@ function resetPlannerWorkflow() {
   state.areaEntity = null;
   clearAreaHandles();
   updateSelectedArea();
-  els.inferredMission.textContent = "Describe the mission in chat to draft a focused source package.";
+  els.inferredMission.textContent = "Describe the mission in chat to draft a focused local package.";
   els.packageNameInput.value = "";
   setChip(els.packageModeChip, "Awaiting mission");
   hidePackageOutput();
   renderSourceList();
-  els.packageStatus.textContent = "No sources selected yet. Send a mission description to plan the needed package.";
+  els.packageStatus.textContent = "No local sources selected yet. Send a mission description to plan the needed package.";
   updateWorkflowPanel();
 }
 
@@ -2571,7 +2571,7 @@ function clearChat() {
   state.chatCount = 0;
   appendMessage(
     "assistant",
-    "Source planner ready. Describe the mission and move the map to the mission area with search, KML/KMZ import, or AO selection. I will keep the source-scope dialogue short.",
+    "TERA TAK planner ready. Send a mission and move the map to the operating area with search, KML/KMZ import, or AO selection. I will keep the source-scope dialogue short.",
   );
 }
 
@@ -3180,7 +3180,7 @@ function makeMapContextAppendix() {
 }
 
 async function planSourcesFromMission(missionText, mapContext) {
-  els.packageStatus.textContent = "Planning compact source package from mission text...";
+  els.packageStatus.textContent = "Planning compact local package from mission text...";
   setChip(els.packageModeChip, "Planning", "warn");
 
   try {
@@ -3469,7 +3469,7 @@ async function submitPrompt(event) {
   const finalPrompt = `${prompt}${makeMapContextAppendix()}`;
   const mapContext = els.includeMapContext.checked ? buildMapContext() : null;
   els.promptInput.value = "";
-  els.requestStatus.textContent = "Planning source package...";
+  els.requestStatus.textContent = "Planning local package...";
   try {
     await planSourcesFromMission(prompt, mapContext);
   } catch (error) {
@@ -3651,7 +3651,7 @@ async function resolveTerrainProvider() {
   try {
     return {
       provider: await Cesium.createWorldTerrainAsync(),
-      label: "Terrain: Cesium World Terrain",
+      label: "Terrain: Cesium display",
       shortLabel: "Cesium terrain",
       usingIon: true,
     };
@@ -3664,7 +3664,7 @@ async function resolveTerrainProvider() {
       label: "Terrain: Ellipsoid fallback",
       shortLabel: "ellipsoid terrain",
       usingIon: false,
-      fallbackReason: "Cesium World Terrain request failed.",
+      fallbackReason: "Cesium terrain display request failed.",
     };
   }
 }

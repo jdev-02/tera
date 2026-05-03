@@ -1,8 +1,8 @@
-# KICKOFF.md — Jon's runbook for Sat 1145
+# KICKOFF.md - Historical Hackathon Runbook
 
-> Personal play-by-play. **Do not commit this file to the public repo.** Add to `.gitignore` or delete after kickoff.
->
-> Goal: at 1230, every teammate has run `make onboard`, has their tailored Codex prompt loaded, has picked their first issue, and is coding.
+> This file is preserved as an internal kickoff record from the first build day.
+> It is not the current product description, demo contract, or setup guide.
+> Use [`README.md`](README.md), [`AGENTS.md`](AGENTS.md), and [`docs/PRD.md`](docs/PRD.md) for current project truth.
 
 ---
 

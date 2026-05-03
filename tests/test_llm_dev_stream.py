@@ -731,7 +731,7 @@ def test_source_planner_degrades_without_false_inference_failure() -> None:
     assert "buildClientSourceRecommendation" in js
     assert "Planner fallback" in js
     assert "Source planner unavailable" in js
-    assert "Planning source package" in js
+    assert "Planning local package" in js
     assert "Local model offline; rules active" in js
     assert "deterministic planner response" in js
     assert "plan the needed package" in html
@@ -2007,8 +2007,8 @@ def test_header_title_precedes_kicker_and_map_imports_kml_overlays() -> None:
     css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
-    assert html.index("<h1>TERA Source Planner</h1>") < html.index(
-        '<div class="eyebrow">Mission data sourcing workspace</div>'
+    assert html.index("<h1>TERA TAK Planner</h1>") < html.index(
+        '<div class="eyebrow">Offline TAK route planning workspace</div>'
     )
     assert 'id="importOverlayBtn"' in html
     assert 'id="overlayFileInput"' in html
