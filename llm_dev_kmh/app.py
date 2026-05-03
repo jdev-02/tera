@@ -177,6 +177,7 @@ TERA_ATAK_AGENT_PROFILE = os.getenv("TERA_ATAK_AGENT_PROFILE", "tera-atak-live")
 TERA_ATAK_DEVICE_URL = os.getenv("TERA_ATAK_DEVICE_URL", "").strip()
 TERA_ATAK_ACTIVATE_COMMAND = os.getenv("TERA_ATAK_AGENT_COMMAND", "").strip()
 TERA_ATAK_OLLAMA_KEEP_ALIVE = os.getenv("TERA_ATAK_OLLAMA_KEEP_ALIVE", "30m")
+TERA_ATAK_WARMUP_TIMEOUT_S = float(os.getenv("TERA_ATAK_WARMUP_TIMEOUT_S", "20"))
 TERA_PUBLIC_BASE_URL = os.getenv("TERA_PUBLIC_BASE_URL", "").strip().rstrip("/")
 TERA_JETSON_IP = os.getenv("TERA_JETSON_IP", "").strip()
 ACTIVE_OLLAMA_BASE_URL: str | None = None
@@ -6239,7 +6240,7 @@ async def _warm_ollama_atak_model(base_url: str, model: str, agent_profile: str)
     options["num_predict"] = 24
     payload["options"] = options
 
-    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=5.0)
+    timeout = httpx.Timeout(TERA_ATAK_WARMUP_TIMEOUT_S, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{base_url}/api/generate", json=payload)
         response.raise_for_status()
@@ -6303,7 +6304,7 @@ async def _prepare_ollama_for_atak(model: str, agent_profile: str) -> dict[str, 
     except httpx.HTTPError as exc:
         details.append(f"Ollama warmup failed for {model}: {exc}")
         return {
-            "ready": False,
+            "ready": True,
             "base_url": selected_base_url,
             "detail": " ".join(details[-4:]),
         }
