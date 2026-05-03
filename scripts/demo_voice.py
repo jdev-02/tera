@@ -33,6 +33,16 @@ Usage
   # List every term the glossary can explain:
   python scripts/demo_voice.py --explain-list
 
+  # Override which Piper voice model to use (must be downloaded to models/piper/):
+  python scripts/demo_voice.py --voice en_US-ryan-high
+
+  # Apply radio-comms post-processing FX (clean/light/comms/degraded):
+  python scripts/demo_voice.py --fx comms
+
+  # Voice + FX bake-off: render the canonical PRD scenario across all
+  # downloaded voices and FX intensities so you can A/B them:
+  python scripts/demo_voice.py --bakeoff
+
 In interactive mode (default), at each phrase prompt:
   [Enter]   -> next phrase (no notes captured)
   r         -> replay current phrase
@@ -64,9 +74,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from voice.audio_fx import Intensity, apply_radio_fx
 from voice.glossary import known_terms
 from voice.phrases import PHRASES, by_category, by_id, categories
-from voice.piper_client import get_piper, reset_piper
+from voice.piper_client import PiperClient, get_piper, reset_piper
 from voice.rationale import to_operator_cadence
 from voice.tts import synthesize_explanation_b64, synthesize_rationale_b64
 
@@ -118,6 +129,59 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  text:    {text}")
     print(f"  cadence: {to_operator_cadence(text)}")
     print(f"  listen:  {listen_for}")
+
+
+def _run_bakeoff() -> int:
+    """Render the canonical PRD scenario A across every downloaded voice and
+    FX intensity. Writes WAVs to /tmp/tera_bakeoff/<voice>_<fx>.wav so Jon
+    can listen and pick the demo configuration.
+
+    Looks at models/piper/ for *.onnx files; if none beyond the default
+    exist, prints download hints.
+    """
+    models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
+    voices = sorted(p.stem for p in models_dir.glob("*.onnx"))
+    if not voices:
+        print(f"No voice models in {models_dir}/. Run `make install-voice` first.")
+        return 1
+
+    intensities: list[Intensity] = ["clean", "light", "comms", "degraded"]
+
+    out_dir = Path(tempfile.gettempdir()) / "tera_bakeoff"
+    out_dir.mkdir(exist_ok=True)
+    for old in out_dir.glob("*.wav"):
+        old.unlink()
+
+    rationale = "Routed to Lobos Creek, distance 2.1 kilometers, ETA 38 minutes on foot covered."
+    cadence = to_operator_cadence(rationale)
+    print(f"input:    {rationale}")
+    print(f"cadence:  {cadence}")
+    print(f"voices:   {voices}")
+    print(f"fx:       {intensities}")
+    print()
+
+    for voice in voices:
+        model_path = models_dir / f"{voice}.onnx"
+        client = PiperClient(model_path=model_path, length_scale=1.15)
+        if not client.is_available():
+            print(f"  ! {voice}: model file present but piper-tts not importable; skipping")
+            continue
+        try:
+            base_wav = client.synthesize_wav(cadence)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! {voice}: synth failed ({e}); skipping")
+            continue
+        for fx in intensities:
+            wav = base_wav if fx == "clean" else apply_radio_fx(base_wav, intensity=fx)
+            out_path = out_dir / f"{voice}__{fx}.wav"
+            out_path.write_bytes(wav)
+            print(f"  + {out_path.relative_to(out_dir.parent)}  ({len(wav):,} bytes)")
+
+    print()
+    print(f"All renders in {out_dir}/")
+    print("Listen with:")
+    print(f"  for f in {out_dir}/*.wav; do echo == $f ==; afplay $f; done")
+    return 0
 
 
 def _write_notes(notes: list[tuple[str, str, str, str]], length_scale: float) -> Path:
@@ -267,6 +331,25 @@ def main() -> int:
         action="store_true",
         help="print every term the glossary can explain, and exit",
     )
+    p.add_argument(
+        "--voice",
+        metavar="VOICE_ID",
+        help="Piper voice model to use (e.g. 'en_US-ryan-high'). "
+        "Must exist at models/piper/<voice_id>.onnx. "
+        "Default: en_US-libritts_r-medium.",
+    )
+    p.add_argument(
+        "--fx",
+        choices=["clean", "light", "comms", "degraded"],
+        default="clean",
+        help="radio-comms post-processing intensity (default: clean)",
+    )
+    p.add_argument(
+        "--bakeoff",
+        action="store_true",
+        help="render the canonical PRD scenario A across every downloaded "
+        "voice and FX intensity for A/B listening (no interactive prompts)",
+    )
     args = p.parse_args()
 
     if args.list:
@@ -299,11 +382,23 @@ def main() -> int:
             print("  (audio unavailable -- text-only explanation)")
         return 0
 
-    # Set the global length_scale for this session.
+    if args.bakeoff:
+        return _run_bakeoff()
+
+    # Set the global length_scale + voice for this session.
     reset_piper()
     from voice import piper_client
 
-    piper_client._client = piper_client.PiperClient(length_scale=args.rate)
+    voice_kwargs: dict[str, object] = {"length_scale": args.rate}
+    if args.voice:
+        models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
+        model_path = models_dir / f"{args.voice}.onnx"
+        if not model_path.exists():
+            print(f"voice model not found: {model_path}")
+            print("Download it from https://huggingface.co/rhasspy/piper-voices first.")
+            return 1
+        voice_kwargs["model_path"] = model_path
+    piper_client._client = piper_client.PiperClient(**voice_kwargs)  # type: ignore[arg-type]
 
     if args.text:
         phrases = [("custom", "custom", args.text, "your phrase")]

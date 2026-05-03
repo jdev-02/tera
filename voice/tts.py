@@ -21,6 +21,7 @@ import base64
 
 import structlog
 
+from voice.audio_fx import Intensity, apply_radio_fx
 from voice.glossary import explain, render_explanation_text
 from voice.piper_client import get_piper
 from voice.rationale import to_operator_cadence
@@ -28,18 +29,27 @@ from voice.rationale import to_operator_cadence
 log = structlog.get_logger(__name__)
 
 
-def synthesize_rationale_b64(rationale: str, length_scale: float | None = None) -> str | None:
+def synthesize_rationale_b64(
+    rationale: str,
+    length_scale: float | None = None,
+    radio_fx: Intensity = "clean",
+) -> str | None:
     """Take an English rationale, return base64-encoded WAV (or None).
 
     Steps:
       1. Convert to operator cadence.
       2. Synthesize via Piper.
-      3. Base64-encode for JSON transport.
+      3. Optional radio-comms FX post-processing (band-pass + compression).
+      4. Base64-encode for JSON transport.
 
     Args:
         rationale: plain English. Empty string returns None.
         length_scale: optional pacing override (1.0 = default, 1.15 = ops
                       cadence, 1.3 = slow). None uses the client default.
+        radio_fx: post-processing intensity -- 'clean' (no-op, default),
+                  'light', 'comms', 'degraded'. Severity-routing (#54)
+                  will select this from rationale cues; for now it's a
+                  caller-side toggle.
 
     Returns None if Piper isn't available (no model, package missing) so
     the caller can degrade gracefully. Never raises -- TTS is auxiliary
@@ -59,6 +69,12 @@ def synthesize_rationale_b64(rationale: str, length_scale: float | None = None) 
     except Exception as e:  # noqa: BLE001 -- TTS failure must not fail /plan
         log.warning("piper_synth_failed", error=str(e))
         return None
+
+    if radio_fx != "clean":
+        try:
+            wav_bytes = apply_radio_fx(wav_bytes, intensity=radio_fx)
+        except Exception as e:  # noqa: BLE001 -- FX failure -> ship clean audio
+            log.warning("radio_fx_failed", intensity=radio_fx, error=str(e))
 
     return base64.b64encode(wav_bytes).decode("ascii")
 
