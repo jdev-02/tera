@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+node_modules
+llm_dev_kmh/uvicorn-*.log
+llm_dev_kmh/uvicorn-*.err.log
