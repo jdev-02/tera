@@ -74,12 +74,12 @@ create_issue() {
 
     if gh issue list --search "in:title \"$title\"" --json title -q '.[].title' | grep -Fxq "$title"; then
         echo "  [skip] already exists: $title"
-        return
+        retun
     fi
 
     if [[ $DRY_RUN -eq 1 ]]; then
         echo "  [dry-run] would create: $title  [labels: $labels]"
-        return
+        retun
     fi
 
     gh issue create --title "$title" --body "$body" --label "$labels" >/dev/null
@@ -117,7 +117,7 @@ create_issue "[agent] Wire frontier LLM client behind LLMClient interface" \
 create_issue "[agent] Implement /plan orchestrator with tool-calling loop" \
     "lane:agent,phase:P1,priority:P0" \
     "**Owner:** P1
-**Acceptance:** \`/plan\` accepts a prompt, invokes LLM with tool schemas from \`/docs/contracts/agent_routing.schema.json\`, validates returned tool args, dispatches to a stub tool, returns valid PlanResponse.
+**Acceptance:** \`/plan\` accepts a prompt, invokes LLM with tool schemas from \`/docs/contracts/agent_routing.schema.json\`, validates retuned tool args, dispatches to a stub tool, retuns valid PlanResponse.
 **Source:** TASKS.md #5"
 
 create_issue "[ontology] Author ontology.yml v1 (water, cover, slope, road, trail)" \
@@ -147,7 +147,7 @@ create_issue "[atak] Emit KML route file from /plan response (Phase 1 fallback)"
 create_issue "[agent] Web frontend (Leaflet or kepler.gl) showing routes" \
     "lane:agent,phase:P1,priority:P1" \
     "**Owner:** P1
-**Acceptance:** Static page served by FastAPI; click on map -> POST /plan -> render returned route. Leaflet first; kepler.gl only if time permits.
+**Acceptance:** Static page served by FastAPI; click on map -> POST /plan -> render retuned route. Leaflet first; kepler.gl only if time permits.
 **Source:** TASKS.md #10"
 
 create_issue "[hardware] Jetson Orin Nano bring-up complete" \
@@ -171,7 +171,7 @@ create_issue "[atak] Signed CoT bridge over multicast" \
 create_issue "[deploy] systemd unit for agent + bridge on Jetson" \
     "lane:deploy,phase:P2,priority:P1" \
     "**Owner:** P3
-**Acceptance:** \`wayfinder-agent.service\` + \`wayfinder-bridge.service\` start on boot, restart on failure, log to journald.
+**Acceptance:** \`wayfinder-agent.service\` + \`wayfinder-bridge.service\` start on boot, restart on failure, log to jounald.
 **Source:** TASKS.md #14"
 
 create_issue "[security] tcpdump demo capture + audit log scroll" \
@@ -195,7 +195,7 @@ create_issue "[agent] Wire ollama (Gemma) as Phase 3 LLM" \
 create_issue "[voice] Whisper-tiny push-to-talk endpoint (voice IN)" \
     "lane:voice,phase:P3,priority:P1" \
     "**Owner:** Jon (P1)
-**Acceptance:** \`POST /plan/voice\` accepts WAV/Opus, transcribes via Whisper-tiny, calls orchestrator, returns plan. End-to-end < 5s on Jetson.
+**Acceptance:** \`POST /plan/voice\` accepts WAV/Opus, transcribes via Whisper-tiny, calls orchestrator, retuns plan. End-to-end < 5s on Jetson.
 **Source:** TASKS.md #18"
 
 create_issue "[agent] CesiumJS 3D globe frontend (Phase 1 web visualization)" \
