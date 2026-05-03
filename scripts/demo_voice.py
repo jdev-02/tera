@@ -26,6 +26,13 @@ Usage
   # Print-only (no audio) to dry-run the cadence transform.
   python scripts/demo_voice.py --dry-run
 
+  # On-demand acronym explain (deterministic, no LLM):
+  python scripts/demo_voice.py --explain HLZ
+  python scripts/demo_voice.py --explain CASEVAC
+
+  # List every term the glossary can explain:
+  python scripts/demo_voice.py --explain-list
+
 In interactive mode (default), at each phrase prompt:
   [Enter]   -> next phrase (no notes captured)
   r         -> replay current phrase
@@ -57,10 +64,11 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from voice.glossary import known_terms
 from voice.phrases import PHRASES, by_category, by_id, categories
 from voice.piper_client import get_piper, reset_piper
 from voice.rationale import to_operator_cadence
-from voice.tts import synthesize_rationale_b64
+from voice.tts import synthesize_explanation_b64, synthesize_rationale_b64
 
 CHECKLIST = """
 Listen-for checklist (operator-radio):
@@ -253,11 +261,46 @@ def main() -> int:
     )
     p.add_argument("--dry-run", action="store_true", help="print cadence transform only, no audio")
     p.add_argument("--list", action="store_true", help="list phrases and exit")
+    p.add_argument(
+        "--explain",
+        metavar="TERM",
+        help="speak a deterministic explanation of the given acronym (e.g. 'HLZ')",
+    )
+    p.add_argument(
+        "--explain-list",
+        action="store_true",
+        help="print every term the glossary can explain, and exit",
+    )
     args = p.parse_args()
 
     if args.list:
         for pid, cat, text, _ in PHRASES:
             print(f"  {pid:12s} ({cat:10s}) {text}")
+        return 0
+
+    if args.explain_list:
+        for term in known_terms():
+            print(f"  {term}")
+        return 0
+
+    if args.explain:
+        result = synthesize_explanation_b64(args.explain, length_scale=args.rate)
+        if result is None:
+            print(
+                f"  '{args.explain}' is not in the glossary. "
+                "Operator hears nothing or 'term not recognized'."
+            )
+            print("  Run --explain-list to see all known terms.")
+            return 1
+        print(f"  term:  {result['term']}")
+        print(f"  text:  {result['text']}")
+        if result["audio_b64"]:
+            out = Path(tempfile.gettempdir()) / f"tera_explain_{result['term']}.wav"
+            out.write_bytes(base64.b64decode(result["audio_b64"]))
+            print(f"  wav:   {out}")
+            _play(out)
+        else:
+            print("  (audio unavailable -- text-only explanation)")
         return 0
 
     # Set the global length_scale for this session.

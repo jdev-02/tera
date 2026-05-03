@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import re
 
+from voice.glossary import acronym_readings_spell, acronym_readings_word
+
 # ---------------------------------------------------------------------------
 # Single-digit phonetics. Each digit gets its own word, no contractions
 # (so "0" is "zero" not "oh").
@@ -121,43 +123,21 @@ _UNIT_FULL = {
 
 
 # ---------------------------------------------------------------------------
-# Acronyms. Two flavors:
-#   _ACRONYM_SPELL  -- expand to NATO phonetic words ("ETA" -> "echo tango
-#                      alpha"). Operator note 17:24 #1: Piper drops the
-#                      trailing "A" in space-separated forms ("E T A" reads
-#                      as "E tay"). NATO phonetics are mil-correct AND
-#                      physically impossible for Piper to swallow because
-#                      every letter becomes a multi-syllable word.
-#   _ACRONYM_WORD   -- read as a word, with hyphens hinting syllable splits
-#                      ("CASEVAC" -> "case-vac"). Operators say these as
-#                      words on net, not as letters.
-# Order: _WORD first (so e.g. "MEDEVAC" doesn't get partially-matched by an
-# acronym in _SPELL), then _SPELL. Word-boundary anchored.
+# Acronym readings -- source of truth is voice.glossary. Two flavors:
+#   _ACRONYM_SPELL  -- NATO phonetic ("ETA" -> "echo tango alpha"). Operator
+#                      note 17:24: Piper drops trailing solo letters in
+#                      space-separated forms ("E T A" reads as "E tay").
+#                      NATO multi-syllable words are physically impossible
+#                      for Piper to swallow.
+#   _ACRONYM_WORD   -- single pronounceable word ("case-vac", "tock") that
+#                      operators universally read as a word, not letters.
+#
+# Application order in the cadence transform: _WORD first, then _SPELL --
+# avoids partial matches (e.g. 'MEDEVAC' before any 'EVAC' rule).
 # ---------------------------------------------------------------------------
 
-_ACRONYM_SPELL = {
-    "ETA": "echo tango alpha",
-    "HLZ": "hotel lima zulu",
-    "LZ": "lima zulu",
-    "PZ": "papa zulu",
-    "IED": "india echo delta",
-    "EOD": "echo oscar delta",
-    "AO": "alpha oscar",
-    "CP": "charlie papa",
-    "OP": "oscar papa",
-    "POI": "papa oscar india",
-    "MGRS": "mike golf romeo sierra",
-    "QRF": "quebec romeo foxtrot",
-    "TRP": "tango romeo papa",
-}
-
-_ACRONYM_WORD = {
-    "CASEVAC": "case-vac",
-    "MEDEVAC": "med-evac",
-    "RECON": "ree-kon",
-    # TOC is universally pronounced 'tock' on net, not letters.
-    "TOC": "tock",
-}
+_ACRONYM_SPELL = acronym_readings_spell()
+_ACRONYM_WORD = acronym_readings_word()
 
 
 # ---------------------------------------------------------------------------
