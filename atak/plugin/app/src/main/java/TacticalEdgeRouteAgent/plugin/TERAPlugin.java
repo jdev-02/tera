@@ -21,6 +21,7 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.atak.plugins.impl.PluginContextProvider;
 import com.atak.plugins.impl.PluginLayoutInflater;
@@ -133,8 +134,8 @@ public class TERAPlugin implements IPlugin {
                     .setMetaValue(Pane.RELATIVE_LOCATION, Pane.Location.Default)
                     // pane will take up 50% of screen width in landscape mode
                     .setMetaValue(Pane.PREFERRED_WIDTH_RATIO, 0.5D)
-                    // pane will take up 50% of screen height in portrait mode
-                    .setMetaValue(Pane.PREFERRED_HEIGHT_RATIO, 0.5D)
+                    // keep the panel close to its content height in landscape ATAK panes
+                    .setMetaValue(Pane.PREFERRED_HEIGHT_RATIO, 0.35D)
                     .build();
         }
 
@@ -149,12 +150,12 @@ public class TERAPlugin implements IPlugin {
         final View infoButton = teraView.findViewById(R.id.tera_info);
         final TextView connectionStatus = teraView.findViewById(R.id.tera_connection_status);
         final ScrollView chatScroll = teraView.findViewById(R.id.tera_chat_scroll);
-        final TextView transcript = teraView.findViewById(R.id.tera_chat_transcript);
+        final LinearLayout transcript = teraView.findViewById(R.id.tera_chat_transcript);
         final EditText chatInput = teraView.findViewById(R.id.tera_chat_input);
         final View sendMessage = teraView.findViewById(R.id.tera_send_message);
         final View voiceMessage = teraView.findViewById(R.id.tera_voice_message);
         final View ttsToggle = teraView.findViewById(R.id.tera_tts_toggle);
-        final StringBuilder chatHistory = new StringBuilder();
+        final boolean[] hasMessages = new boolean[] { false };
         final StringBuilder hostState = new StringBuilder();
         final boolean[] ttsEnabled = new boolean[] { false };
         final boolean[] listening = new boolean[] { false };
@@ -182,9 +183,7 @@ public class TERAPlugin implements IPlugin {
             String endpoint = buildEndpoint(host);
             JSONObject mapContext = buildMapContext();
 
-            appendChatLine(chatHistory, host.isEmpty() ? "Operator (local)" : "Operator (" + host + ")", message);
-            transcript.setText(chatHistory.toString());
-            scrollChatToBottom(chatScroll);
+            appendChatMessage(transcript, chatScroll, hasMessages, "Me", message, true);
             chatInput.setText("");
             sendMessage.setEnabled(false);
             connectionStatus.setText(R.string.connection_connecting);
@@ -198,14 +197,9 @@ public class TERAPlugin implements IPlugin {
                         public void onComplete(boolean ok, String msg, JSONObject planJson) {
                             mainHandler.post(() -> {
                                 sendMessage.setEnabled(true);
-                                connectionStatus.setText(ok
-                                        ? pluginContext.getString(R.string.connection_online)
-                                        : (msg.startsWith("Route signature invalid")
-                                                ? "Route signature invalid - REJECTED"
-                                                : pluginContext.getString(R.string.connection_error)));
-                                appendChatLine(chatHistory, ok ? "Agent" : "Error", msg);
-                                transcript.setText(chatHistory.toString());
-                                scrollChatToBottom(chatScroll);
+                                connectionStatus.setText(statusForPlanResult(ok, msg));
+                                appendChatMessage(transcript, chatScroll, hasMessages,
+                                        "TERA", msg, false);
                                 if (ok && planJson != null) {
                                     drawRoute(planJson);
                                 }
@@ -554,6 +548,32 @@ public class TERAPlugin implements IPlugin {
         }
     }
 
+    private String statusForPlanResult(boolean ok, String message) {
+        if (ok) {
+            return pluginContext.getString(R.string.connection_online);
+        }
+        if (message == null) {
+            return pluginContext.getString(R.string.connection_error);
+        }
+
+        String lower = message.toLowerCase(java.util.Locale.US);
+        if (message.startsWith("Route signature invalid")) {
+            return "Route signature invalid";
+        }
+        if (lower.contains("ollama")) {
+            return pluginContext.getString(R.string.connection_ollama_offline);
+        }
+        if (lower.contains("model providers failed") || lower.contains("model provider")) {
+            return pluginContext.getString(R.string.connection_model_offline);
+        }
+        if (lower.contains("health check") || lower.contains("cannot reach jetson")
+                || lower.contains("jetson timed out") || lower.contains("socket")
+                || lower.contains("unknownhost") || lower.contains("connectexception")) {
+            return pluginContext.getString(R.string.connection_error);
+        }
+        return pluginContext.getString(R.string.connection_model_error);
+    }
+
     private JSONObject buildMapContext() {
         try {
             MapView mapView = MapView.getMapView();
@@ -670,10 +690,43 @@ public class TERAPlugin implements IPlugin {
         chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
     }
 
-    private void appendChatLine(StringBuilder chatHistory, String sender, String message) {
-        if (chatHistory.length() > 0) {
-            chatHistory.append("\n\n");
+    private void appendChatMessage(LinearLayout transcript, ScrollView chatScroll,
+                                   boolean[] hasMessages, String sender,
+                                   String message, boolean outgoing) {
+        if (!hasMessages[0]) {
+            transcript.removeAllViews();
+            hasMessages[0] = true;
         }
-        chatHistory.append(sender).append(": ").append(message);
+
+        LinearLayout row = new LinearLayout(pluginContext);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setGravity(outgoing ? Gravity.RIGHT : Gravity.LEFT);
+        row.setPadding(0, dp(4), 0, dp(4));
+
+        TextView senderView = new TextView(pluginContext);
+        senderView.setText(sender);
+        senderView.setTextColor(Color.WHITE);
+        senderView.setTextSize(12);
+        senderView.setTypeface(null, android.graphics.Typeface.BOLD);
+        senderView.setGravity(outgoing ? Gravity.RIGHT : Gravity.LEFT);
+
+        TextView messageView = new TextView(pluginContext);
+        messageView.setText(message);
+        messageView.setTextColor(Color.WHITE);
+        messageView.setTextSize(13);
+        messageView.setGravity(outgoing ? Gravity.RIGHT : Gravity.LEFT);
+        messageView.setLineSpacing(dp(2), 1.0f);
+
+        row.addView(senderView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.addView(messageView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        transcript.addView(row, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        scrollChatToBottom(chatScroll);
     }
 }

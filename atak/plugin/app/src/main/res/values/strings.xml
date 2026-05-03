@@ -16,6 +16,9 @@
     <string name="connection_connecting">Connecting</string>
     <string name="connection_online">Online</string>
     <string name="connection_error">Connection error</string>
+    <string name="connection_model_error">Connected, model error</string>
+    <string name="connection_model_offline">Connected, model offline</string>
+    <string name="connection_ollama_offline">Connected, ollama offline</string>
     <string name="model_local">local</string>
     <string name="model_remote">remote</string>
     <string name="model_hybrid">hybrid</string>
