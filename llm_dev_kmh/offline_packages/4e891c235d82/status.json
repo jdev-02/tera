@@ -1,0 +1,45 @@
+{
+  "package_id": "4e891c235d82",
+  "package_name": "naip-osm-dted-test",
+  "state": "planned",
+  "message": "Package manifest is ready. Downloads have not started.",
+  "created_at": "2026-05-03T05:36:11.935040+00:00",
+  "updated_at": "2026-05-03T05:36:11.935050+00:00",
+  "estimated_bytes": 2411724800,
+  "bytes_written": 0,
+  "operations": [
+    {
+      "id": "naip_aws_public_prefix",
+      "source_id": "naip",
+      "source_name": "NAIP Aerial Imagery",
+      "state": "planned",
+      "message": "",
+      "estimated_bytes": 1310720000,
+      "bytes_written": 0,
+      "artifact_path": null,
+      "updated_at": "2026-05-03T05:36:11.935021+00:00"
+    },
+    {
+      "id": "osm_geofabrik_pbf",
+      "source_id": "osm_extract",
+      "source_name": "OpenStreetMap PBF Extract",
+      "state": "planned",
+      "message": "",
+      "estimated_bytes": 786432000,
+      "bytes_written": 0,
+      "artifact_path": null,
+      "updated_at": "2026-05-03T05:36:11.935032+00:00"
+    },
+    {
+      "id": "copernicus_dem_glo30_cog",
+      "source_id": "copernicus_dem",
+      "source_name": "Copernicus DEM GLO-30 COG",
+      "state": "planned",
+      "message": "",
+      "estimated_bytes": 314572800,
+      "bytes_written": 0,
+      "artifact_path": null,
+      "updated_at": "2026-05-03T05:36:11.935038+00:00"
+    }
+  ]
+}

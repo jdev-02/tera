@@ -5,10 +5,11 @@ The LLM does NOT call these directly. The orchestrator calls them based on
 a deterministic translation from RouteQuery (Satriyo's schema) to tool args.
 This is by design -- the LLM is sandboxed to JSON intent only.
 
-Implementations are stubs in `stubs.py`; Ben fills in real Valhalla / OSM
-calls in his lane.
+Routing and terrain are still stubs; find_pois now reads local OSM SQLite
+feature packages when present and falls back to the demo stub otherwise.
 """
 
-from agent.tools.stubs import find_pois, route, terrain_query
+from agent.tools.find_pois import find_pois
+from agent.tools.stubs import route, terrain_query
 
 __all__ = ["find_pois", "route", "terrain_query"]

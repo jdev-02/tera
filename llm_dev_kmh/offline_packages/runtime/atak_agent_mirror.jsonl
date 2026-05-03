@@ -1,0 +1,1 @@
+{"id":"97282450-a9b7-4c8b-9496-001914f76009","timestamp":"2026-05-03T06:35:50.726772+00:00","source":"jetson","role":"system","text":"Local TERA ATAK agent active on Ollama gemma3:4b. Mirroring ATAK-profile prompt traffic in this panel.","model":"gemma3:4b","provider":"ollama","direction":"mode-switch"}

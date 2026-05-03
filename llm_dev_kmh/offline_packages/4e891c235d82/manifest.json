@@ -1,0 +1,691 @@
+{
+  "package_id": "4e891c235d82",
+  "package_name": "naip-osm-dted-test",
+  "mission_focus": "terrain-routing",
+  "created_at": "2026-05-03T05:36:11.931594+00:00",
+  "aoi": {
+    "west": -117.5,
+    "south": 36.0,
+    "east": -114.0,
+    "north": 38.5,
+    "center_lat": 37.2,
+    "center_lon": -116.0
+  },
+  "selected_source_ids": [
+    "naip",
+    "osm_extract",
+    "copernicus_dem",
+    "dted_earth_explorer"
+  ],
+  "sources": [
+    {
+      "id": "naip",
+      "name": "NAIP Aerial Imagery",
+      "provider": "USDA / USGS EarthExplorer / AWS Open Data",
+      "category": "imagery-analysis",
+      "purpose": "High-resolution U.S. aerial imagery downloaded to the Jetson from EarthExplorer GeoTIFF staging or NAIP public S3 prefixes.",
+      "stream_status": "not-streamed",
+      "download_status": "download-required",
+      "stream_layer": null,
+      "analysis_role": "Primary high-detail U.S. imagery source for this workflow. Use EarthExplorer GeoTIFFs when staged, or pull public NAIP AWS state/year/resolution prefixes with requester-pays headers for local query and serving.",
+      "derived_layers": [
+        "naip_local_imagery",
+        "high_detail_aerial_reference",
+        "feature_extraction_review"
+      ],
+      "source_url": "https://registry.opendata.aws/naip/",
+      "license_or_terms": "NAIP on AWS is public domain with attribution; EarthExplorer downloads follow USGS terms.",
+      "download_methods": [
+        {
+          "id": "naip_aws_public_prefix",
+          "label": "NAIP AWS public S3 prefix download",
+          "endpoint": "https://{bucket}.s3.amazonaws.com",
+          "method": "GET",
+          "output_format": "NAIP MRF/GeoTIFF/COG files",
+          "local_artifact_template": "offline_packages/{package_id}/imagery/naip/aws/naip_index.json",
+          "params": {
+            "bucket": "{naip_aws_bucket}",
+            "prefix": "{naip_s3_prefix}",
+            "state": "{naip_state}",
+            "year": "{naip_year}",
+            "resolution": "{naip_resolution}",
+            "bandset": "{naip_bandset}",
+            "max_files": "{naip_max_files}",
+            "request_payer": "requester"
+          },
+          "requires_account": false,
+          "terms_url": "https://registry.opendata.aws/naip/",
+          "notes": "Mirrors the operator workflow `aws s3 cp s3://naip-analytic/<state>/<year>/<resolution>/rgbir/ ... --recursive`. Limit max files and confirm storage before pulling large state prefixes."
+        },
+        {
+          "id": "naip_earthexplorer_geotiff_import",
+          "label": "Import staged EarthExplorer NAIP GeoTIFFs",
+          "endpoint": "${NAIP_EARTHEXPLORER_DIR}",
+          "method": "GET",
+          "output_format": "NAIP GeoTIFF imagery",
+          "local_artifact_template": "offline_packages/{package_id}/imagery/naip/earthexplorer/naip_earthexplorer_index.json",
+          "params": {
+            "source_dir": "${NAIP_EARTHEXPLORER_DIR}",
+            "bbox": "{aoi_bbox_wgs84}",
+            "max_files": "{naip_max_files}"
+          },
+          "requires_account": true,
+          "terms_url": "https://www.usgs.gov/tools/earthexplorer",
+          "notes": "Set NAIP_EARTHEXPLORER_DIR to the folder containing downloaded NAIP GeoTIFFs from EarthExplorer."
+        }
+      ],
+      "jetson_query_formats": [
+        {
+          "artifact_type": "naip_imagery_index",
+          "local_path_template": "offline_packages/{package_id}/imagery/naip/**/naip*_index.json",
+          "query_interfaces": [
+            "imagery_file(relative_path)",
+            "rasterio.open()",
+            "read_window(west, south, east, north)",
+            "visual_chip(west, south, east, north)"
+          ],
+          "feeds_algorithms": [
+            "operator_route_review",
+            "feature_extraction_review",
+            "sar_probability_context"
+          ],
+          "notes": "Local NAIP files are served to the planner/TERA plugin and can be read by GDAL/rasterio."
+        }
+      ],
+      "notes": "Check acquisition date; may be stale for fast-changing environments."
+    },
+    {
+      "id": "osm_extract",
+      "name": "OpenStreetMap PBF Extract",
+      "provider": "Geofabrik / OpenStreetMap contributors",
+      "category": "vector",
+      "purpose": "Geofabrik regional OSM PBF downloaded to the Jetson and clipped to the selected AOI for roads, trails, waterways, buildings, POIs, and barriers.",
+      "stream_status": "not-streamed",
+      "download_status": "download-required",
+      "stream_layer": null,
+      "analysis_role": "Primary local vector dataset for database-backed graph, POI, hydro, access, and Valhalla tile-build queries.",
+      "derived_layers": [
+        "routable_graph",
+        "poi_index",
+        "waterway_index",
+        "barrier_index"
+      ],
+      "source_url": "https://download.geofabrik.de",
+      "license_or_terms": "OpenStreetMap data from Geofabrik is under the Open Database License.",
+      "download_methods": [
+        {
+          "id": "osm_geofabrik_pbf",
+          "label": "Geofabrik regional PBF download and AOI clip",
+          "endpoint": "{geofabrik_osm_pbf_url}",
+          "method": "GET",
+          "output_format": "OSM PBF",
+          "local_artifact_template": "offline_packages/{package_id}/vectors/osm/aoi.osm.pbf",
+          "params": {
+            "region_url": "{geofabrik_osm_pbf_url}",
+            "region_slug": "{geofabrik_region_slug}",
+            "clip_bbox": "{aoi_bbox_wgs84}",
+            "clip_with_osmium": true
+          },
+          "requires_account": false,
+          "terms_url": "https://www.geofabrik.de/en/data/download.html",
+          "notes": "Downloads the AO's Geofabrik state/region extract. If osmium is installed on the Jetson, it clips to AOI; otherwise it registers the regional PBF and marks clipping as pending."
+        }
+      ],
+      "jetson_query_formats": [
+        {
+          "artifact_type": "osm_pbf_extract",
+          "local_path_template": "offline_packages/{package_id}/vectors/osm/aoi.osm.pbf",
+          "query_interfaces": [
+            "osmium tags-filter",
+            "pyosmium scan",
+            "valhalla_build_tiles",
+            "find_pois(osm_tags, bbox)"
+          ],
+          "feeds_algorithms": [
+            "routable_graph",
+            "nearest_feature",
+            "water_source_lookup",
+            "evacuation_route"
+          ],
+          "notes": "Main vector artifact for deterministic route and POI algorithms."
+        }
+      ],
+      "notes": "Clip tightly to AO and preserve source/version metadata."
+    },
+    {
+      "id": "copernicus_dem",
+      "name": "Copernicus DEM GLO-30 COG",
+      "provider": "Copernicus",
+      "category": "terrain",
+      "purpose": "Free no-account 30 m terrain COG tiles from the public Copernicus DEM S3 mirror for slope, viewshed, hydrology, and terrain-cost analysis.",
+      "stream_status": "not-streamed",
+      "download_status": "download-required",
+      "stream_layer": null,
+      "analysis_role": "Main no-login terrain download path. Select 1-degree GLO-30 COG tiles intersecting the AOI and store them under the Jetson package root.",
+      "derived_layers": [
+        "dem_cog",
+        "slope_degrees",
+        "aspect",
+        "roughness",
+        "flow_accumulation",
+        "viewshed_surfaces",
+        "walking_cost_surface"
+      ],
+      "source_url": "https://copernicus-dem-30m.s3.amazonaws.com",
+      "license_or_terms": "Copernicus DEM GLO-30 Public is free for public use under Copernicus DEM terms.",
+      "download_methods": [
+        {
+          "id": "copernicus_dem_glo30_cog",
+          "label": "Copernicus GLO-30 public S3 COG tiles",
+          "endpoint": "https://copernicus-dem-30m.s3.amazonaws.com",
+          "method": "GET",
+          "output_format": "Cloud Optimized GeoTIFF DEM tiles",
+          "local_artifact_template": "offline_packages/{package_id}/rasters/copernicus_dem/{tile_id}.tif",
+          "params": {
+            "tile_urls": "{copernicus_dem_tile_urls}",
+            "bbox": "{aoi_bbox_wgs84}",
+            "resolution_arc_seconds": 10
+          },
+          "requires_account": false,
+          "terms_url": "https://copernicus-dem-30m.s3.amazonaws.com/readme.html",
+          "notes": "Downloads only AO-intersecting 1-degree COG tiles. Missing ocean or unreleased tiles are recorded in the DEM index."
+        }
+      ],
+      "jetson_query_formats": [
+        {
+          "artifact_type": "copernicus_dem_cog_index",
+          "local_path_template": "offline_packages/{package_id}/rasters/copernicus_dem/copernicus_dem_index.json",
+          "query_interfaces": [
+            "sample_dem(lat, lon)",
+            "read_window(west, south, east, north)",
+            "derive_slope_aspect_roughness(bounds)"
+          ],
+          "feeds_algorithms": [
+            "terrain_derivatives",
+            "flow_accumulation_d8",
+            "raster_cost_distance",
+            "viewshed"
+          ],
+          "notes": "COG tiles are local raster inputs for deterministic terrain algorithms."
+        }
+      ],
+      "notes": "Use as the default no-login terrain source; add DTED when an EarthExplorer DTED package is staged."
+    },
+    {
+      "id": "dted_earth_explorer",
+      "name": "DTED from USGS EarthExplorer",
+      "provider": "USGS EarthExplorer",
+      "category": "terrain",
+      "purpose": "Operator-staged DTED-2/DTED cells from EarthExplorer imported to the Jetson package and converted to GeoTIFF when GDAL is installed.",
+      "stream_status": "not-streamed",
+      "download_status": "manual-stage-import",
+      "stream_layer": null,
+      "analysis_role": "EarthExplorer requires account login, so the web app imports a local staging directory of downloaded .dt0/.dt1/.dt2 files. It then converts each file with gdal_translate when available and registers both raw DTED and GeoTIFF artifacts.",
+      "derived_layers": [
+        "dted_cells",
+        "geotiff_dem",
+        "slope_degrees",
+        "viewshed_surfaces"
+      ],
+      "source_url": "https://earthexplorer.usgs.gov",
+      "license_or_terms": "Use under USGS EarthExplorer dataset terms for the downloaded DTED product.",
+      "download_methods": [
+        {
+          "id": "dted_earthexplorer_import_convert",
+          "label": "Import staged EarthExplorer DTED and convert with GDAL",
+          "endpoint": "${DTED_SOURCE_DIR}",
+          "method": "GET",
+          "output_format": "DTED cells and GeoTIFF DEMs",
+          "local_artifact_template": "offline_packages/{package_id}/rasters/dted/dted_index.json",
+          "params": {
+            "source_dir": "${DTED_SOURCE_DIR}",
+            "bbox": "{aoi_bbox_wgs84}",
+            "convert_to_geotiff": true
+          },
+          "requires_account": true,
+          "terms_url": "https://www.usgs.gov/tools/earthexplorer",
+          "notes": "Set DTED_SOURCE_DIR to the folder containing EarthExplorer .dt2 downloads. gdal_translate input.dt2 output.tif is used when present."
+        }
+      ],
+      "jetson_query_formats": [
+        {
+          "artifact_type": "dted_geotiff_index",
+          "local_path_template": "offline_packages/{package_id}/rasters/dted/dted_index.json",
+          "query_interfaces": [
+            "sample_dem(lat, lon)",
+            "read_window(west, south, east, north)",
+            "gdalinfo"
+          ],
+          "feeds_algorithms": [
+            "terrain_derivatives",
+            "raster_cost_distance",
+            "viewshed"
+          ],
+          "notes": "Converted GeoTIFFs are preferred; raw DTED remains available for GDAL readers."
+        }
+      ],
+      "notes": "Use when the operator has already pulled DTED from EarthExplorer; otherwise prefer Copernicus GLO-30."
+    }
+  ],
+  "download_operations": [
+    {
+      "id": "naip_aws_public_prefix",
+      "source_id": "naip",
+      "source_name": "NAIP Aerial Imagery",
+      "label": "NAIP AWS public S3 prefix download",
+      "method": "GET",
+      "endpoint": "https://naip-analytic.s3.amazonaws.com",
+      "params": {
+        "bucket": "naip-analytic",
+        "prefix": "nv/2022/60cm/rgbir/",
+        "state": "nv",
+        "year": "2022",
+        "resolution": "60cm",
+        "bandset": "rgbir",
+        "max_files": 50,
+        "request_payer": "requester"
+      },
+      "output_format": "NAIP MRF/GeoTIFF/COG files",
+      "local_artifact": "offline_packages/4e891c235d82/imagery/naip/aws/naip_index.json",
+      "requires_token_env": null,
+      "requires_account": false,
+      "terms_url": "https://registry.opendata.aws/naip/",
+      "notes": "Mirrors the operator workflow `aws s3 cp s3://naip-analytic/<state>/<year>/<resolution>/rgbir/ ... --recursive`. Limit max files and confirm storage before pulling large state prefixes."
+    },
+    {
+      "id": "osm_geofabrik_pbf",
+      "source_id": "osm_extract",
+      "source_name": "OpenStreetMap PBF Extract",
+      "label": "Geofabrik regional PBF download and AOI clip",
+      "method": "GET",
+      "endpoint": "https://download.geofabrik.de/north-america/us/nevada-latest.osm.pbf",
+      "params": {
+        "region_url": "https://download.geofabrik.de/north-america/us/nevada-latest.osm.pbf",
+        "region_slug": "north-america/us/nevada",
+        "clip_bbox": "-117.5,36.0,-114.0,38.5",
+        "clip_with_osmium": true
+      },
+      "output_format": "OSM PBF",
+      "local_artifact": "offline_packages/4e891c235d82/vectors/osm/aoi.osm.pbf",
+      "requires_token_env": null,
+      "requires_account": false,
+      "terms_url": "https://www.geofabrik.de/en/data/download.html",
+      "notes": "Downloads the AO's Geofabrik state/region extract. If osmium is installed on the Jetson, it clips to AOI; otherwise it registers the regional PBF and marks clipping as pending."
+    },
+    {
+      "id": "copernicus_dem_glo30_cog",
+      "source_id": "copernicus_dem",
+      "source_name": "Copernicus DEM GLO-30 COG",
+      "label": "Copernicus GLO-30 public S3 COG tiles",
+      "method": "GET",
+      "endpoint": "https://copernicus-dem-30m.s3.amazonaws.com",
+      "params": {
+        "tile_urls": [
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N36_00_W118_00_DEM",
+            "lat_floor": 36,
+            "lon_floor": -118,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_W118_00_DEM/Copernicus_DSM_COG_10_N36_00_W118_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N36_00_W117_00_DEM",
+            "lat_floor": 36,
+            "lon_floor": -117,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_W117_00_DEM/Copernicus_DSM_COG_10_N36_00_W117_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N36_00_W116_00_DEM",
+            "lat_floor": 36,
+            "lon_floor": -116,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_W116_00_DEM/Copernicus_DSM_COG_10_N36_00_W116_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N36_00_W115_00_DEM",
+            "lat_floor": 36,
+            "lon_floor": -115,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_W115_00_DEM/Copernicus_DSM_COG_10_N36_00_W115_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N37_00_W118_00_DEM",
+            "lat_floor": 37,
+            "lon_floor": -118,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N37_00_W118_00_DEM/Copernicus_DSM_COG_10_N37_00_W118_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N37_00_W117_00_DEM",
+            "lat_floor": 37,
+            "lon_floor": -117,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N37_00_W117_00_DEM/Copernicus_DSM_COG_10_N37_00_W117_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N37_00_W116_00_DEM",
+            "lat_floor": 37,
+            "lon_floor": -116,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N37_00_W116_00_DEM/Copernicus_DSM_COG_10_N37_00_W116_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N37_00_W115_00_DEM",
+            "lat_floor": 37,
+            "lon_floor": -115,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N37_00_W115_00_DEM/Copernicus_DSM_COG_10_N37_00_W115_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N38_00_W118_00_DEM",
+            "lat_floor": 38,
+            "lon_floor": -118,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N38_00_W118_00_DEM/Copernicus_DSM_COG_10_N38_00_W118_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N38_00_W117_00_DEM",
+            "lat_floor": 38,
+            "lon_floor": -117,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N38_00_W117_00_DEM/Copernicus_DSM_COG_10_N38_00_W117_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N38_00_W116_00_DEM",
+            "lat_floor": 38,
+            "lon_floor": -116,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N38_00_W116_00_DEM/Copernicus_DSM_COG_10_N38_00_W116_00_DEM.tif"
+          },
+          {
+            "tile_id": "Copernicus_DSM_COG_10_N38_00_W115_00_DEM",
+            "lat_floor": 38,
+            "lon_floor": -115,
+            "url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N38_00_W115_00_DEM/Copernicus_DSM_COG_10_N38_00_W115_00_DEM.tif"
+          }
+        ],
+        "bbox": "-117.5,36.0,-114.0,38.5",
+        "resolution_arc_seconds": 10
+      },
+      "output_format": "Cloud Optimized GeoTIFF DEM tiles",
+      "local_artifact": "offline_packages/4e891c235d82/rasters/copernicus_dem/{tile_id}.tif",
+      "requires_token_env": null,
+      "requires_account": false,
+      "terms_url": "https://copernicus-dem-30m.s3.amazonaws.com/readme.html",
+      "notes": "Downloads only AO-intersecting 1-degree COG tiles. Missing ocean or unreleased tiles are recorded in the DEM index."
+    }
+  ],
+  "jetson_query_contracts": [
+    {
+      "source_id": "naip",
+      "source_name": "NAIP Aerial Imagery",
+      "artifact_type": "naip_imagery_index",
+      "local_path": "offline_packages/4e891c235d82/imagery/naip/**/naip*_index.json",
+      "query_interfaces": [
+        "imagery_file(relative_path)",
+        "rasterio.open()",
+        "read_window(west, south, east, north)",
+        "visual_chip(west, south, east, north)"
+      ],
+      "feeds_algorithms": [
+        "operator_route_review",
+        "feature_extraction_review",
+        "sar_probability_context"
+      ],
+      "notes": "Local NAIP files are served to the planner/TERA plugin and can be read by GDAL/rasterio."
+    },
+    {
+      "source_id": "osm_extract",
+      "source_name": "OpenStreetMap PBF Extract",
+      "artifact_type": "osm_pbf_extract",
+      "local_path": "offline_packages/4e891c235d82/vectors/osm/aoi.osm.pbf",
+      "query_interfaces": [
+        "osmium tags-filter",
+        "pyosmium scan",
+        "valhalla_build_tiles",
+        "find_pois(osm_tags, bbox)"
+      ],
+      "feeds_algorithms": [
+        "routable_graph",
+        "nearest_feature",
+        "water_source_lookup",
+        "evacuation_route"
+      ],
+      "notes": "Main vector artifact for deterministic route and POI algorithms."
+    },
+    {
+      "source_id": "copernicus_dem",
+      "source_name": "Copernicus DEM GLO-30 COG",
+      "artifact_type": "copernicus_dem_cog_index",
+      "local_path": "offline_packages/4e891c235d82/rasters/copernicus_dem/copernicus_dem_index.json",
+      "query_interfaces": [
+        "sample_dem(lat, lon)",
+        "read_window(west, south, east, north)",
+        "derive_slope_aspect_roughness(bounds)"
+      ],
+      "feeds_algorithms": [
+        "terrain_derivatives",
+        "flow_accumulation_d8",
+        "raster_cost_distance",
+        "viewshed"
+      ],
+      "notes": "COG tiles are local raster inputs for deterministic terrain algorithms."
+    },
+    {
+      "source_id": "dted_earth_explorer",
+      "source_name": "DTED from USGS EarthExplorer",
+      "artifact_type": "dted_geotiff_index",
+      "local_path": "offline_packages/4e891c235d82/rasters/dted/dted_index.json",
+      "query_interfaces": [
+        "sample_dem(lat, lon)",
+        "read_window(west, south, east, north)",
+        "gdalinfo"
+      ],
+      "feeds_algorithms": [
+        "terrain_derivatives",
+        "raster_cost_distance",
+        "viewshed"
+      ],
+      "notes": "Converted GeoTIFFs are preferred; raw DTED remains available for GDAL readers."
+    }
+  ],
+  "deterministic_algorithms": [
+    {
+      "id": "graph_dijkstra",
+      "purpose": "Default shortest path on local road/trail graph.",
+      "inputs": [
+        "GeoPackage/SQLite graph edges",
+        "edge_cost"
+      ],
+      "outputs": [
+        "least_cost_path",
+        "distance_or_time"
+      ]
+    },
+    {
+      "id": "graph_astar",
+      "purpose": "Goal-directed graph routing with admissible distance heuristic.",
+      "inputs": [
+        "graph edges",
+        "node coordinates",
+        "heuristic"
+      ],
+      "outputs": [
+        "least_cost_path",
+        "route_cost"
+      ]
+    },
+    {
+      "id": "multi_source_dijkstra",
+      "purpose": "Nearest target among water, shelter, road, trail, or signal candidates.",
+      "inputs": [
+        "graph edges",
+        "candidate node set"
+      ],
+      "outputs": [
+        "nearest_candidate",
+        "access_path"
+      ]
+    },
+    {
+      "id": "yen_k_shortest_paths",
+      "purpose": "Fastest, safest, and easiest alternatives when graph routes differ.",
+      "inputs": [
+        "graph edges",
+        "source/destination",
+        "k"
+      ],
+      "outputs": [
+        "ranked_route_alternatives"
+      ]
+    },
+    {
+      "id": "raster_cost_distance",
+      "purpose": "Off-road and hybrid movement over slope/landcover/hazard cost rasters.",
+      "inputs": [
+        "COG cost raster",
+        "start cells"
+      ],
+      "outputs": [
+        "cumulative_cost_raster",
+        "predecessor_grid"
+      ]
+    },
+    {
+      "id": "least_cost_backtrack",
+      "purpose": "Recover least-cost route geometry from cumulative raster output.",
+      "inputs": [
+        "cumulative_cost_raster",
+        "predecessor_grid",
+        "target cell"
+      ],
+      "outputs": [
+        "least_cost_cell_path"
+      ]
+    },
+    {
+      "id": "terrain_derivatives",
+      "purpose": "Generate slope, aspect, roughness, and TPI from Esri/DEM COGs.",
+      "inputs": [
+        "DEM COG"
+      ],
+      "outputs": [
+        "slope_degrees",
+        "aspect_degrees",
+        "roughness",
+        "tpi",
+        "curvature"
+      ]
+    },
+    {
+      "id": "flow_accumulation_d8",
+      "purpose": "Drainage and likely water reasoning from DEM cells.",
+      "inputs": [
+        "DEM COG"
+      ],
+      "outputs": [
+        "flow_direction",
+        "flow_accumulation"
+      ]
+    },
+    {
+      "id": "viewshed",
+      "purpose": "Line-of-sight, signal, open-sky, and observation checks.",
+      "inputs": [
+        "DEM COG",
+        "observer cell",
+        "antenna heights"
+      ],
+      "outputs": [
+        "visible_cell_mask"
+      ]
+    },
+    {
+      "id": "isochrone_masks",
+      "purpose": "Reachable area masks from travel-time or cost surfaces.",
+      "inputs": [
+        "cumulative_cost_raster",
+        "thresholds"
+      ],
+      "outputs": [
+        "reachable_area_masks"
+      ]
+    },
+    {
+      "id": "sar_sector_partition",
+      "purpose": "Radial SAR sectors for hasty search planning.",
+      "inputs": [
+        "center",
+        "radius",
+        "sector_count"
+      ],
+      "outputs": [
+        "GeoJSON sector polygons"
+      ]
+    },
+    {
+      "id": "sar_probability_surface",
+      "purpose": "Normalized probability-of-area grid from last known position and travel cost.",
+      "inputs": [
+        "last_known_cell",
+        "sigma",
+        "travel_cost",
+        "attraction_points"
+      ],
+      "outputs": [
+        "probability_grid"
+      ]
+    },
+    {
+      "id": "route_score",
+      "purpose": "Separate time, energy, risk, uncertainty, resource, and rescue visibility scoring.",
+      "inputs": [
+        "route metrics",
+        "mission weights"
+      ],
+      "outputs": [
+        "comparable route score"
+      ]
+    }
+  ],
+  "server_ingest_plan": {
+    "store_raw_sources": [
+      "naip",
+      "osm_extract",
+      "copernicus_dem",
+      "dted_earth_explorer"
+    ],
+    "cache_display_tiles": [],
+    "generate_derived_layers": [
+      "aspect",
+      "barrier_index",
+      "dem_cog",
+      "dted_cells",
+      "feature_extraction_review",
+      "flow_accumulation",
+      "geotiff_dem",
+      "high_detail_aerial_reference",
+      "naip_local_imagery",
+      "poi_index",
+      "roughness",
+      "routable_graph",
+      "slope_degrees",
+      "viewshed_surfaces",
+      "walking_cost_surface",
+      "waterway_index"
+    ],
+    "load_vector_indexes": [
+      "osm_extract"
+    ],
+    "load_raster_indexes": [
+      "naip",
+      "copernicus_dem",
+      "dted_earth_explorer"
+    ],
+    "jetson_queryable_artifacts": [
+      "offline_packages/4e891c235d82/imagery/naip/**/naip*_index.json",
+      "offline_packages/4e891c235d82/vectors/osm/aoi.osm.pbf",
+      "offline_packages/4e891c235d82/rasters/copernicus_dem/copernicus_dem_index.json",
+      "offline_packages/4e891c235d82/rasters/dted/dted_index.json"
+    ]
+  },
+  "offline_metadata_required": [
+    "source_dataset_id",
+    "source_version_or_acquired_at",
+    "license_or_usage_constraint",
+    "aoi_bbox",
+    "native_resolution",
+    "processing_steps",
+    "sha256"
+  ]
+}

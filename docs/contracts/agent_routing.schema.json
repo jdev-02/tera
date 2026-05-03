@@ -176,10 +176,42 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["freshwater", "shelter", "high_ground", "road", "trail", "bridge", "named_feature"]
+          "enum": [
+            "any",
+            "freshwater",
+            "water",
+            "shelter",
+            "medical",
+            "road",
+            "trail",
+            "trailhead",
+            "settlement",
+            "building",
+            "signal",
+            "high_ground",
+            "clearing",
+            "lz",
+            "campsite",
+            "bridge",
+            "ford",
+            "barrier",
+            "hazard",
+            "land_access",
+            "named_feature"
+          ]
         },
         "from": { "$ref": "#/definitions/Coord" },
-        "radius_m": { "type": "number", "minimum": 1, "maximum": 50000 }
+        "radius_m": { "type": "number", "minimum": 1, "maximum": 50000 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "filters": {
+          "type": "object",
+          "description": "Optional deterministic OSM tag filters; never raw SQL.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -189,7 +221,14 @@
       "properties": {
         "profile": {
           "type": "string",
-          "enum": ["foot", "foot_covered", "vehicle_mrap", "vehicle_truck"]
+          "enum": [
+            "foot",
+            "foot_covered",
+            "foot_trails",
+            "foot_covered_trails",
+            "vehicle_mrap",
+            "vehicle_truck"
+          ]
         },
         "from": { "$ref": "#/definitions/Coord" },
         "to": { "$ref": "#/definitions/Coord" },

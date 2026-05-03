@@ -16,6 +16,16 @@ ALLOWED_OBJECTIVES = {
     "fastest_covered_route",
     "nearest_water",
     "priority_search_area",
+    "nearest",
+    "fastest",
+    "safest",
+    "easiest",
+    "least_elevation",
+    "survival_balanced",
+    "multi_stop",
+    "reachable_area",
+    "sar_probability",
+    "stay_or_move",
 }
 
 ALLOWED_CONSTRAINTS = {
@@ -24,6 +34,23 @@ ALLOWED_CONSTRAINTS = {
     "avoid_high_comms_risk",
     "avoid_steep_terrain",
     "stay_on_trails",
+    "avoid_cliffs",
+    "avoid_water_crossings",
+    "avoid_private_land",
+    "avoid_restricted_areas",
+    "avoid_dense_brush",
+    "avoid_wetlands",
+    "avoid_flood_zones",
+    "avoid_fire_areas",
+    "avoid_avalanche_terrain",
+    "avoid_darkness",
+    "prefer_roads",
+    "prefer_trails",
+    "prefer_open_ground",
+    "prefer_lower_elevation",
+    "prefer_high_ground",
+    "prefer_shelter",
+    "prefer_signal",
 }
 
 ALLOWED_DATA_LAYERS = {
@@ -33,6 +60,17 @@ ALLOWED_DATA_LAYERS = {
     "roads",
     "safe_zones",
     "comms_risk",
+    "osm_features",
+    "shelters",
+    "medical",
+    "settlements",
+    "buildings",
+    "landcover",
+    "hazards",
+    "restricted_areas",
+    "signal",
+    "weather",
+    "imagery",
 }
 
 ALLOWED_MISSION_TYPES = {
