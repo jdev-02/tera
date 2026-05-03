@@ -47,10 +47,10 @@ fi
 
 if command -v make >/dev/null 2>&1; then
   make catchup
-else
-  git fetch --all --prune --quiet
-  git pull --ff-only "$REMOTE" "$BRANCH"
 fi
+
+git fetch --quiet "$REMOTE" "$BRANCH"
+git pull --ff-only "$REMOTE" "$BRANCH"
 
 head_short="$(git rev-parse --short HEAD)"
 echo "[jetson-refresh] now at $head_short"
