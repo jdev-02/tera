@@ -8,6 +8,7 @@ Map-centric local LLM workspace kept entirely inside `llm_dev_kmh`.
 - exposes an operator sidebar tailored for TERA map and source-planning workflows
 - lists locally installed Ollama models
 - sends prompt requests through `/api/prompt` with Claude-first, Ollama-second fallback
+- switches into Jetson ATAK local-agent mode with Ollama `gemma3:4b` and a browser mirror of ATAK-profile prompt traffic
 - lets the operator draw and resize an AO rectangle for source package coverage
 
 ## Run it directly
@@ -22,7 +23,7 @@ Example on Windows PowerShell:
 ```powershell
 $env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
 $env:OLLAMA_MODEL="gemma3:4b"
-$env:CLAUDE_MODEL="Claude Sonnet 4.6"
+$env:CLAUDE_MODEL="claude-sonnet-4-6"
 $env:CESIUM_ION_TOKEN="YOUR_TOKEN_HERE"
 uvicorn llm_dev_kmh.app:app --host 0.0.0.0 --port 8080
 ```
@@ -42,11 +43,15 @@ docker compose up --build
 ## Environment variables
 
 - `ANTHROPIC_API_KEY`: primary Claude API key loaded from repo root `.env` or environment
-- `CLAUDE_MODEL`: primary Claude model, default `Claude Sonnet 4.6` (normalized to Anthropic's supported Sonnet 4 API snapshot)
+- `CLAUDE_MODEL`: primary Claude model, default `claude-sonnet-4-6`
 - `ANTHROPIC_API_URL`: Claude Messages endpoint, default `https://api.anthropic.com/v1/messages`
 - `ANTHROPIC_MODELS_URL`: Claude model discovery endpoint, default `https://api.anthropic.com/v1/models`
 - `OLLAMA_BASE_URL`: defaults to `http://127.0.0.1:11434`
-- `OLLAMA_MODEL`: local fallback default; if unavailable, the app autodetects an installed Ollama model
+- `OLLAMA_MODEL`: local fallback default, `gemma3:4b`; if unavailable, the app autodetects an installed Ollama model
+- `TERA_ATAK_MODEL`: model used by the ATAK Local button, default `gemma3:4b`
+- `TERA_ATAK_AGENT_COMMAND`: optional command launched by the ATAK Local button, for example a tmux/systemd wrapper on the Jetson
+- `TERA_ATAK_DEVICE_URL`: optional ATAK plugin/device target shown in activation status
+- `TERA_ATAK_MIRROR_LOG`: optional JSONL mirror path; defaults under `OFFLINE_PACKAGE_ROOT/runtime/`
 - `REQUEST_TIMEOUT_S`: prompt timeout in seconds, default `120`
 - `CESIUM_ION_TOKEN`: required for Cesium World Terrain and Cesium satellite imagery
 - `CESIUM_ION_ARCHIVE_ID`: optional completed Cesium ion archive id to download into the Jetson package root.
@@ -69,6 +74,7 @@ docker compose up --build
 
 - Without `CESIUM_ION_TOKEN`, the workspace falls back to OpenStreetMap imagery and ellipsoid terrain.
 - Provider order defaults to Claude first when `ANTHROPIC_API_KEY` is configured, then detected local Ollama, then the deterministic browser planner.
+- Pressing `ATAK Local` forces auto prompt traffic to local Ollama `gemma3:4b`, sets the UI provider/profile for the TERA ATAK link, and opens a mirror panel for ATAK plugin conversations.
 - On Docker Desktop, `host.docker.internal` should resolve automatically.
 - On Linux, `extra_hosts` maps `host.docker.internal` to the Docker host gateway.
 - If Ollama is running somewhere else on your LAN, set `OLLAMA_BASE_URL` to that reachable address before starting the container.

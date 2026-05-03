@@ -77,7 +77,7 @@ class _ClaudeResponse:
 
 class _ModelsResponse:
     status_code = 200
-    text = '{"data":[{"id":"claude-sonnet-4-20250514","type":"model"}]}'
+    text = '{"data":[{"id":"claude-sonnet-4-6","type":"model"}]}'
 
     def raise_for_status(self) -> None:
         return None
@@ -86,7 +86,7 @@ class _ModelsResponse:
         return {
             "data": [
                 {
-                    "id": "claude-sonnet-4-20250514",
+                    "id": "claude-sonnet-4-6",
                     "type": "model",
                 }
             ]
@@ -267,20 +267,25 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
     for token in [
         'id="modelProviderBtn"',
         'id="modelProviderMenu"',
+        'id="atakAgentBtn"',
+        'id="atakMirrorPanel"',
         'id="providerSelect"',
         'id="topModelSelect"',
         'id="claudeModelSelect"',
         'id="claudeApiKeyInput"',
         "Auto: Claude -> Local",
         "Claude API",
-        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-6",
         "Claude Sonnet 4.6",
+        "TERA ATAK Link",
         "claude-opus-4-1-20250805",
     ]:
         assert token in html
 
     for token in [
         ".top-provider-shell",
+        ".atak-mirror-panel",
+        ".atak-mirror-event",
         ".chip-button",
         ".provider-menu",
         ".provider-actions",
@@ -289,6 +294,11 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
 
     for token in [
         "teraLlmProvider",
+        "activateAtakLocalAgent",
+        "atakMirrorPanel",
+        "/api/jetson/atak-agent/activate",
+        "/api/jetson/atak-agent/mirror",
+        "gemma3:4b",
         "teraClaudeApiKey",
         "serverClaudeKeyAvailable",
         "hasClaudeProviderCredential",
@@ -312,6 +322,13 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "CLAUDE_MODEL",
         "CLAUDE_MODEL_ALIASES",
         "CLAUDE_MODEL_FALLBACKS",
+        "JetsonAtakActivateRequest",
+        "JetsonAtakModeResponse",
+        "TERA_ATAK_MODEL",
+        "JETSON_ATAK_MODE",
+        "activate_jetson_atak_agent",
+        "jetson_atak_agent_mirror",
+        "_append_atak_mirror_event",
         "default_provider",
         "claude_default_model",
         "anthropic_api_key_configured",
@@ -328,8 +345,9 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
 
 
 def test_claude_model_labels_normalize_to_current_sonnet() -> None:
-    assert kmh_app._normalize_claude_model("Claude Sonnet 4.6") == "claude-sonnet-4-20250514"
-    assert kmh_app._normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-20250514"
+    assert kmh_app._normalize_claude_model("Claude Sonnet 4.6") == "claude-sonnet-4-6"
+    assert kmh_app._normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-6"
+    assert kmh_app._normalize_claude_model("claude-sonnet-4-6") == "claude-sonnet-4-6"
     assert kmh_app._normalize_claude_model("claude-sonnet-4-20250514") == "claude-sonnet-4-20250514"
     assert kmh_app._normalize_claude_model("Claude Opus 4.1") == "claude-opus-4-1-20250805"
     assert kmh_app._normalize_claude_model("Claude Opus 4.7") == "claude-opus-4-1-20250805"
@@ -343,7 +361,7 @@ def test_local_model_detection_prefers_installed_gemma_alias() -> None:
         "gemma3:4b",
     ]
 
-    assert kmh_app._select_ollama_default_model(models) == "gemma4:e4b"
+    assert kmh_app._select_ollama_default_model(models) == "gemma3:4b"
 
 
 def test_location_search_prefers_curated_cascades_match() -> None:
@@ -522,6 +540,44 @@ def test_backend_provider_sequence_is_claude_then_ollama() -> None:
     assert kmh_app._provider_sequence(
         kmh_app.PromptRequest(prompt="x", llm_provider="claude")
     ) == ["claude", "ollama"]
+
+
+@pytest.mark.asyncio
+async def test_atak_activation_forces_auto_prompts_to_local_gemma(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    original_mode = kmh_app.JETSON_ATAK_MODE.copy()
+    original_active_model = kmh_app.ACTIVE_OLLAMA_MODEL
+    original_active_base_url = kmh_app.ACTIVE_OLLAMA_BASE_URL
+
+    async def fake_fetch_models(_base_url: str) -> list[str]:
+        return ["gemma3:4b"]
+
+    monkeypatch.setenv("TERA_ATAK_MIRROR_LOG", str(tmp_path / "atak-mirror.jsonl"))
+    monkeypatch.setattr(kmh_app, "TERA_ATAK_ACTIVATE_COMMAND", "")
+    monkeypatch.setattr(kmh_app, "_fetch_ollama_models_from", fake_fetch_models)
+
+    try:
+        response = await kmh_app.activate_jetson_atak_agent(
+            kmh_app.JetsonAtakActivateRequest()
+        )
+
+        assert response.active is True
+        assert response.model == "gemma3:4b"
+        assert response.provider == "ollama"
+        assert response.events
+        assert kmh_app._provider_sequence(
+            kmh_app.PromptRequest(prompt="x", llm_provider="auto")
+        ) == ["ollama"]
+        assert await kmh_app._resolve_ollama_model(
+            kmh_app.PromptRequest(prompt="x")
+        ) == "gemma3:4b"
+    finally:
+        kmh_app.JETSON_ATAK_MODE.clear()
+        kmh_app.JETSON_ATAK_MODE.update(original_mode)
+        kmh_app.ACTIVE_OLLAMA_MODEL = original_active_model
+        kmh_app.ACTIVE_OLLAMA_BASE_URL = original_active_base_url
 
 
 class _ClaudeInvalidModelResponse:
