@@ -232,80 +232,81 @@
                 <button id="settingsToggleBtn" class="ghost-button icon-button" type="button" aria-expanded="false" aria-label="Open advisor settings">
                   <span aria-hidden="true">&#9881;</span>
                 </button>
-                <div id="settingsMenu" class="settings-menu hidden">
-                  <div class="settings-menu-header">
-                    <strong>Advisor Settings</strong>
-                    <span id="chatMeta" class="section-meta">0 messages</span>
-                  </div>
-                  <div class="settings-grid">
-                    <label>
-                      Agent profile
-                      <select id="agentProfileSelect">
-                        <option value="imagery-sourcing" selected>Imagery Sourcing</option>
-                        <option value="tera-atak-live">TERA ATAK Link</option>
-                        <option value="terrain-route">Terrain Route</option>
-                        <option value="map-analysis">Map Analysis</option>
-                        <option value="survival-sar">Survival / SAR</option>
-                      </select>
-                    </label>
-                    <label>
-                      Installed model
-                      <select id="modelSelect" name="model">
-                        <option value="">Loading models...</option>
-                      </select>
-                    </label>
-                    <label>
-                      Imagery stream
-                      <select id="imagerySelect">
-                        <option value="ion-satellite">Cesium World Imagery</option>
-                        <option value="usgs-imagery">USGS Imagery Only</option>
-                        <option value="osm">OpenStreetMap</option>
-                        <option value="esri">Esri World Imagery</option>
-                      </select>
-                    </label>
-                    <label>
-                      Terrain stream
-                      <select id="terrainSelect">
-                        <option value="cesium-world">Cesium World Terrain</option>
-                        <option value="ellipsoid">Ellipsoid Only</option>
-                      </select>
-                    </label>
-                    <label class="span-2">
-                      Sourcing policy
-                      <textarea id="systemInput" name="system" class="short-input" placeholder="Optional planner instruction, e.g. favor open global sources or keep package size minimal."></textarea>
-                    </label>
-                    <label class="checkbox-row span-2">
-                      <input id="includeMapContext" type="checkbox" checked />
-                      <span>Include current map/AOI context</span>
-                    </label>
-                  </div>
-                  <div class="settings-subsection">
-                    <div class="section-subtitle">Installed Models</div>
-                    <div id="modelsStatus" class="section-meta">Checking Ollama...</div>
-                    <ul id="modelsList" class="bullet-list compact-list">
-                      <li>Loading models...</li>
-                    </ul>
-                  </div>
-                  <div class="settings-subsection">
-                    <div class="section-subtitle">Map Context</div>
-                    <div id="terrainStatus" class="section-meta">Terrain: loading</div>
-                    <dl class="info-grid compact-info-grid">
-                      <div>
-                        <dt>Camera</dt>
-                        <dd id="cameraPosition">Initializing</dd>
-                      </div>
-                      <div>
-                        <dt>Imagery source</dt>
-                        <dd id="imageryStatus">Loading</dd>
-                      </div>
-                    </dl>
-                  </div>
-                  <div class="button-row settings-actions">
-                    <button id="resetViewBtn" class="ghost-button" type="button">Reset View</button>
-                    <button id="clearChatBtn" class="ghost-button" type="button">Clear Chat</button>
-                  </div>
-                </div>
               </div>
+            </div>
+          </div>
+
+          <div id="settingsMenu" class="settings-menu hidden">
+            <div class="settings-menu-header">
+              <strong>Advisor Settings</strong>
+              <span id="chatMeta" class="section-meta">0 messages</span>
+            </div>
+            <div class="settings-grid">
+              <label>
+                Agent profile
+                <select id="agentProfileSelect">
+                  <option value="imagery-sourcing" selected>Imagery Sourcing</option>
+                  <option value="tera-atak-live">TERA ATAK Link</option>
+                  <option value="terrain-route">Terrain Route</option>
+                  <option value="map-analysis">Map Analysis</option>
+                  <option value="survival-sar">Survival / SAR</option>
+                </select>
+              </label>
+              <label>
+                Installed model
+                <select id="modelSelect" name="model">
+                  <option value="">Loading models...</option>
+                </select>
+              </label>
+              <label>
+                Imagery stream
+                <select id="imagerySelect">
+                  <option value="ion-satellite">Cesium World Imagery</option>
+                  <option value="usgs-imagery">USGS Imagery Only</option>
+                  <option value="osm">OpenStreetMap</option>
+                  <option value="esri">Esri World Imagery</option>
+                </select>
+              </label>
+              <label>
+                Terrain stream
+                <select id="terrainSelect">
+                  <option value="cesium-world">Cesium World Terrain</option>
+                  <option value="ellipsoid">Ellipsoid Only</option>
+                </select>
+              </label>
+              <label class="span-2">
+                Sourcing policy
+                <textarea id="systemInput" name="system" class="short-input" placeholder="Optional planner instruction, e.g. favor open global sources or keep package size minimal."></textarea>
+              </label>
+              <label class="checkbox-row span-2">
+                <input id="includeMapContext" type="checkbox" checked />
+                <span>Include current map/AOI context</span>
+              </label>
+            </div>
+            <div class="settings-subsection">
+              <div class="section-subtitle">Installed Models</div>
+              <div id="modelsStatus" class="section-meta">Checking Ollama...</div>
+              <ul id="modelsList" class="bullet-list compact-list">
+                <li>Loading models...</li>
+              </ul>
+            </div>
+            <div class="settings-subsection">
+              <div class="section-subtitle">Map Context</div>
+              <div id="terrainStatus" class="section-meta">Terrain: loading</div>
+              <dl class="info-grid compact-info-grid">
+                <div>
+                  <dt>Camera</dt>
+                  <dd id="cameraPosition">Initializing</dd>
+                </div>
+                <div>
+                  <dt>Imagery source</dt>
+                  <dd id="imageryStatus">Loading</dd>
+                </div>
+              </dl>
+            </div>
+            <div class="button-row settings-actions">
+              <button id="resetViewBtn" class="ghost-button" type="button">Reset View</button>
+              <button id="clearChatBtn" class="ghost-button" type="button">Clear Chat</button>
             </div>
           </div>
 
