@@ -2917,7 +2917,13 @@ function applyAtakAgentStatus(data) {
   state.atakAgentActive = Boolean(data.active);
   els.atakMirrorPanel.classList.toggle("hidden", !state.atakAgentActive);
   if (state.atakAgentActive) {
-    setAtakAgentButton("ATAK Local: active", data.status === "active" ? "good" : "warn");
+    const label = data.status === "active"
+      ? "ATAK Local: ready"
+      : data.status === "error"
+        ? "ATAK Local: error"
+        : "ATAK Local: starting";
+    const tone = data.status === "active" ? "good" : data.status === "error" ? "bad" : "warn";
+    setAtakAgentButton(label, tone);
     els.atakMirrorStatus.textContent = data.detail || `Mirroring ${data.model || "local model"}`;
     renderAtakMirror(data.events || []);
   } else {

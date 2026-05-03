@@ -69,7 +69,7 @@ final class TeraPlanClient {
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setDoOutput(true);
 
-                String payload = buildPromptPayload(prompt.trim(), mapContext);
+                String payload = buildPlanPayload(prompt.trim(), mapContext);
                 byte[] body = payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(body.length);
 
@@ -172,10 +172,6 @@ final class TeraPlanClient {
         if (planPath >= 0) {
             return endpoint.substring(0, planPath) + "/plan/verify";
         }
-        int promptPath = endpoint.indexOf("/api/prompt");
-        if (promptPath >= 0) {
-            return endpoint.substring(0, promptPath) + "/plan/verify";
-        }
         int lastSlash = endpoint.indexOf("/", endpoint.indexOf("://") + 3);
         if (lastSlash >= 0) {
             return endpoint.substring(0, lastSlash) + "/plan/verify";
@@ -209,9 +205,9 @@ final class TeraPlanClient {
     }
 
     private static String healthEndpoint(String endpoint) {
-        int promptPath = endpoint.indexOf("/api/prompt");
-        if (promptPath >= 0) {
-            return endpoint.substring(0, promptPath) + "/health";
+        int planPath = endpoint.indexOf("/plan");
+        if (planPath >= 0) {
+            return endpoint.substring(0, planPath) + "/health";
         }
         int lastSlash = endpoint.indexOf("/", endpoint.indexOf("://") + 3);
         if (lastSlash >= 0) {
@@ -220,39 +216,67 @@ final class TeraPlanClient {
         return endpoint + "/health";
     }
 
-    private static String buildPromptPayload(String prompt, JSONObject mapContext)
+    private static String buildPlanPayload(String prompt, JSONObject mapContext)
             throws JSONException {
         JSONObject payload = new JSONObject();
         payload.put("prompt", prompt);
-        payload.put("model", "gemma3:4b");
-        payload.put("llm_provider", "ollama");
-        payload.put("agent_profile", "tera-atak-link-test");
+
+        // Extract operator GPS position for the /plan PlanRequest `current` field.
+        // Prefer the self-marker (operator's real GPS) over the map centre.
         if (mapContext != null) {
-            payload.put("map_context", mapContext);
+            JSONObject current = null;
+            JSONObject selectedArea = mapContext.optJSONObject("selected_area");
+            if (selectedArea != null
+                    && selectedArea.has("center_lat")
+                    && selectedArea.has("center_lon")) {
+                current = new JSONObject();
+                current.put("lat", selectedArea.getDouble("center_lat"));
+                current.put("lon", selectedArea.getDouble("center_lon"));
+            } else {
+                JSONObject camera = mapContext.optJSONObject("camera");
+                if (camera != null && camera.has("lat") && camera.has("lon")) {
+                    current = new JSONObject();
+                    current.put("lat", camera.getDouble("lat"));
+                    current.put("lon", camera.getDouble("lon"));
+                }
+            }
+            if (current != null) {
+                payload.put("current", current);
+            }
         }
+
         return payload.toString();
     }
 
     private static PromptResult parsePromptResult(int code, String body) {
+        // Parse PlanResponse: {route, waypoints, rationale, signature, request_id}
         try {
             JSONObject json = new JSONObject(body);
-            String response = json.optString("response", "");
-            if (!response.trim().isEmpty()) {
-                return new PromptResult(code >= 200 && code < 300, response.trim());
-            }
-            String rationale = json.optString("rationale", "");
-            if (code >= 200 && code < 300 && !rationale.trim().isEmpty()) {
-                return new PromptResult(true, "Signature verified\n" + rationale.trim());
-            }
             if (code >= 200 && code < 300 && json.has("route")) {
-                return new PromptResult(true, "Signature verified\n" + truncate(body));
+                StringBuilder summary = new StringBuilder();
+                summary.append("[ROUTE ACCEPTED]");
+                String rationale = json.optString("rationale", "");
+                if (!rationale.trim().isEmpty()) {
+                    summary.append("\n").append(rationale.trim());
+                }
+                if (json.has("waypoints")) {
+                    int count = json.getJSONArray("waypoints").length();
+                    summary.append("\nWaypoints: ").append(count);
+                }
+                if (json.has("signature")) {
+                    summary.append("\nSignature: verified");
+                }
+                return new PromptResult(true, summary.toString());
             }
+            String detail = json.optString("detail", json.optString("message", ""));
             if (code >= 200 && code < 300) {
                 return new PromptResult(false,
-                        "Jetson returned HTTP " + code + " but no response field.");
+                        "Jetson returned HTTP " + code + " but no route in response.");
             }
+            return new PromptResult(false,
+                    "HTTP " + code + (detail.isEmpty() ? "" : "\n" + detail));
         } catch (JSONException ignored) {
-            // Fall back to the raw body if the server returns non-JSON.
+            // Non-JSON response — show raw body truncated.
         }
         return new PromptResult(false, "HTTP " + code + "\n" + truncate(body));
     }
