@@ -6,11 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY llm_dev_kmh/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . ./
+COPY . .
 
 EXPOSE 8080
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "llm_dev_kmh.app:app", "--host", "0.0.0.0", "--port", "8080"]
