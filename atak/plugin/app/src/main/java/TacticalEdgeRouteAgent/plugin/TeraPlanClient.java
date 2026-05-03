@@ -83,7 +83,8 @@ final class TeraPlanClient {
 
                 int code = connection.getResponseCode();
                 String responseBody = readResponse(connection, code);
-                if (code >= 200 && code < 300 && shouldVerifyPlanResponse(responseBody)) {
+                if (code >= 200 && code < 300 && endpoint.trim().contains("/plan")
+                        && shouldVerifyPlanResponse(responseBody)) {
                     VerifyResult verify = verifyPlanResponse(endpoint, responseBody);
                     if (!verify.ok) {
                         callback.onComplete(false, REJECTED_SIGNATURE + "\n" + verify.message, null);
@@ -93,7 +94,10 @@ final class TeraPlanClient {
 
                 JSONObject planJson = null;
                 try {
-                    planJson = new JSONObject(responseBody);
+                    JSONObject json = new JSONObject(responseBody);
+                    if (hasRenderableMapContent(json)) {
+                        planJson = json;
+                    }
                 } catch (JSONException ignored) {
                 }
 
@@ -163,7 +167,7 @@ final class TeraPlanClient {
     private static boolean shouldVerifyPlanResponse(String body) {
         try {
             JSONObject json = new JSONObject(body);
-            return json.has("route") || json.has("signature");
+            return json.has("route");
         } catch (JSONException ignored) {
             return false;
         }
@@ -230,10 +234,15 @@ final class TeraPlanClient {
             throws JSONException {
         JSONObject payload = new JSONObject();
         payload.put("prompt", prompt);
+        payload.put("model", "gemma3:4b");
+        payload.put("llm_provider", "ollama");
+        payload.put("agent_profile", "tera-atak-live");
 
         // Extract operator GPS position for the /plan PlanRequest `current` field.
         // Prefer the self-marker (operator's real GPS) over the map centre.
         if (mapContext != null) {
+            payload.put("map_context", mapContext);
+
             JSONObject current = null;
             JSONObject selectedArea = mapContext.optJSONObject("selected_area");
             if (selectedArea != null
@@ -253,13 +262,39 @@ final class TeraPlanClient {
             if (current != null) {
                 payload.put("current", current);
             }
+
+            JSONObject viewBounds = mapContext.optJSONObject("view_bounds");
+            if (viewBounds != null) {
+                payload.put("bbox", buildBoundingBox(viewBounds));
+                payload.put("display_bounds", buildDisplayBounds(viewBounds));
+            }
         }
 
         return payload.toString();
     }
 
+    private static JSONObject buildBoundingBox(JSONObject viewBounds) throws JSONException {
+        JSONObject bbox = new JSONObject();
+        bbox.put("west_lon", viewBounds.getDouble("west"));
+        bbox.put("south_lat", viewBounds.getDouble("south"));
+        bbox.put("east_lon", viewBounds.getDouble("east"));
+        bbox.put("north_lat", viewBounds.getDouble("north"));
+        return bbox;
+    }
+
+    private static JSONObject buildDisplayBounds(JSONObject viewBounds) throws JSONException {
+        JSONObject displayBounds = new JSONObject();
+        displayBounds.put("west", viewBounds.getDouble("west"));
+        displayBounds.put("south", viewBounds.getDouble("south"));
+        displayBounds.put("east", viewBounds.getDouble("east"));
+        displayBounds.put("north", viewBounds.getDouble("north"));
+        return displayBounds;
+    }
+
     private static PromptResult parsePromptResult(int code, String body) {
         // Parse PlanResponse: {route, waypoints, rationale, signature, request_id}
+        // Also accept point-only map responses so ATAK can drop CoT-style markers
+        // without requiring a route geometry.
         try {
             JSONObject json = new JSONObject(body);
             if (code >= 200 && code < 300 && json.has("route")) {
@@ -275,6 +310,19 @@ final class TeraPlanClient {
                 }
                 if (json.has("signature")) {
                     summary.append("\nSignature: verified");
+                }
+                return new PromptResult(true, summary.toString());
+            }
+            if (code >= 200 && code < 300 && hasRenderablePoints(json)) {
+                StringBuilder summary = new StringBuilder();
+                summary.append("[POINTS ACCEPTED]");
+                String rationale = json.optString("rationale", "");
+                if (!rationale.trim().isEmpty()) {
+                    summary.append("\n").append(rationale.trim());
+                }
+                int count = renderablePointCount(json);
+                if (count > 0) {
+                    summary.append("\nPoints: ").append(count);
                 }
                 return new PromptResult(true, summary.toString());
             }
@@ -296,6 +344,46 @@ final class TeraPlanClient {
             // Non-JSON response — show raw body truncated.
         }
         return new PromptResult(false, "HTTP " + code + "\n" + truncate(body));
+    }
+
+    private static boolean hasRenderableMapContent(JSONObject json) {
+        return json.has("route") || hasRenderablePoints(json);
+    }
+
+    private static boolean hasRenderablePoints(JSONObject json) {
+        return renderablePointCount(json) > 0;
+    }
+
+    private static int renderablePointCount(JSONObject json) {
+        int count = 0;
+        count += json.optJSONArray("waypoints") == null ? 0 : json.optJSONArray("waypoints").length();
+        count += json.optJSONArray("points") == null ? 0 : json.optJSONArray("points").length();
+        count += json.optJSONArray("markers") == null ? 0 : json.optJSONArray("markers").length();
+        count += json.optJSONArray("cot_events") == null ? 0 : json.optJSONArray("cot_events").length();
+        count += json.optJSONArray("events") == null ? 0 : json.optJSONArray("events").length();
+        JSONObject point = json.optJSONObject("point");
+        if (point != null) {
+            count += 1;
+        }
+        JSONObject feature = json.optJSONObject("feature");
+        if (feature != null && isPointFeature(feature)) {
+            count += 1;
+        }
+        org.json.JSONArray features = json.optJSONArray("features");
+        if (features != null) {
+            for (int i = 0; i < features.length(); i++) {
+                JSONObject item = features.optJSONObject(i);
+                if (item != null && isPointFeature(item)) {
+                    count += 1;
+                }
+            }
+        }
+        return count;
+    }
+
+    private static boolean isPointFeature(JSONObject feature) {
+        JSONObject geometry = feature.optJSONObject("geometry");
+        return geometry != null && "Point".equalsIgnoreCase(geometry.optString("type"));
     }
 
     private static String friendlyException(Exception e) {

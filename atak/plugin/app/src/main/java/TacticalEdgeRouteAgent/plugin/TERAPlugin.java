@@ -39,6 +39,8 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import gov.tak.api.plugin.IPlugin;
 import gov.tak.api.plugin.IServiceController;
@@ -201,7 +203,7 @@ public class TERAPlugin implements IPlugin {
                                 appendChatMessage(transcript, chatScroll, hasMessages,
                                         "TERA", msg, false);
                                 if (ok && planJson != null) {
-                                    drawRoute(planJson);
+                                    drawMapResponse(planJson);
                                 }
                             });
                         }
@@ -478,19 +480,27 @@ public class TERAPlugin implements IPlugin {
         activeWaypointMarkers.clear();
     }
 
-    private void drawRoute(JSONObject planJson) {
+    private void drawMapResponse(JSONObject planJson) {
         MapView mapView = MapView.getMapView();
         if (mapView == null) return;
 
         clearActiveRoute();
 
+        boolean routeDrawn = drawRoute(mapView, planJson);
+        int pointCount = drawPointMarkers(mapView, planJson, !routeDrawn);
+
+        if (!routeDrawn && pointCount == 0) {
+            Toast.makeText(pluginContext, "No route or points in response", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean drawRoute(MapView mapView, JSONObject planJson) {
         try {
             // Extract LineString coordinates from route.geometry.coordinates
             // GeoJSON format: [[lon, lat], [lon, lat], ...]
             JSONObject route = planJson.optJSONObject("route");
             if (route == null) {
-                Toast.makeText(pluginContext, "No route in response", Toast.LENGTH_SHORT).show();
-                return;
+                return false;
             }
             JSONObject geometry = route.optJSONObject("geometry");
             if (geometry == null) {
@@ -498,8 +508,7 @@ public class TERAPlugin implements IPlugin {
             }
             JSONArray coords = geometry.optJSONArray("coordinates");
             if (coords == null || coords.length() < 2) {
-                Toast.makeText(pluginContext, "Route has no coordinates", Toast.LENGTH_SHORT).show();
-                return;
+                return false;
             }
 
             GeoPoint[] points = new GeoPoint[coords.length()];
@@ -541,11 +550,206 @@ public class TERAPlugin implements IPlugin {
             double centerLat = sumLat / coords.length();
             double centerLon = sumLon / coords.length();
             mapView.getMapController().panTo(new GeoPoint(centerLat, centerLon), true);
+            return true;
 
         } catch (JSONException e) {
             Toast.makeText(pluginContext, "Route parse error: " + e.getMessage(),
                     Toast.LENGTH_SHORT).show();
+            return false;
         }
+    }
+
+    private int drawPointMarkers(MapView mapView, JSONObject response, boolean includeWaypoints) {
+        List<PointMarkerSpec> specs = new ArrayList<>();
+        if (includeWaypoints) {
+            collectPointSpecs(specs, response.optJSONArray("waypoints"), "WP");
+        }
+        collectPointSpecs(specs, response.optJSONArray("points"), "Point");
+        collectPointSpecs(specs, response.optJSONArray("markers"), "Marker");
+        collectPointSpecs(specs, response.optJSONArray("cot_events"), "CoT");
+        collectPointSpecs(specs, response.optJSONArray("events"), "CoT");
+        collectPointSpec(specs, response.optJSONObject("point"), "Point");
+        collectPointSpec(specs, response.optJSONObject("marker"), "Marker");
+        collectPointSpec(specs, response.optJSONObject("cot_event"), "CoT");
+        collectFeatureSpecs(specs, response.optJSONObject("feature"));
+        collectFeatureArraySpecs(specs, response.optJSONArray("features"));
+
+        GeoPoint first = null;
+        int rendered = 0;
+        for (PointMarkerSpec spec : specs) {
+            GeoPoint point = new GeoPoint(spec.lat, spec.lon);
+            if (!point.isValid()) {
+                continue;
+            }
+            Marker marker = new Marker(point, spec.uid);
+            marker.setTitle(spec.label);
+            marker.setType(spec.type);
+            mapView.getRootGroup().addItem(marker);
+            activeWaypointMarkers.add(marker);
+            rendered += 1;
+            if (first == null) {
+                first = point;
+            }
+        }
+        if (first != null) {
+            mapView.getMapController().panTo(first, true);
+        }
+        return rendered;
+    }
+
+    private void collectPointSpecs(List<PointMarkerSpec> specs, JSONArray points,
+                                   String defaultLabel) {
+        if (points == null) {
+            return;
+        }
+        for (int i = 0; i < points.length(); i++) {
+            collectPointSpec(specs, points.optJSONObject(i), defaultLabel + "-" + (i + 1));
+        }
+    }
+
+    private void collectFeatureArraySpecs(List<PointMarkerSpec> specs, JSONArray features) {
+        if (features == null) {
+            return;
+        }
+        for (int i = 0; i < features.length(); i++) {
+            collectFeatureSpecs(specs, features.optJSONObject(i));
+        }
+    }
+
+    private void collectFeatureSpecs(List<PointMarkerSpec> specs, JSONObject feature) {
+        if (feature == null) {
+            return;
+        }
+        JSONObject geometry = feature.optJSONObject("geometry");
+        if (geometry == null || !"Point".equalsIgnoreCase(geometry.optString("type"))) {
+            return;
+        }
+        JSONArray coords = geometry.optJSONArray("coordinates");
+        if (coords == null || coords.length() < 2) {
+            return;
+        }
+        JSONObject properties = feature.optJSONObject("properties");
+        String label = labelFrom(properties, "Point");
+        specs.add(new PointMarkerSpec(coords.optDouble(1, Double.NaN),
+                coords.optDouble(0, Double.NaN), label, cotTypeFrom(properties),
+                uidFrom(properties)));
+    }
+
+    private void collectPointSpec(List<PointMarkerSpec> specs, JSONObject point,
+                                  String defaultLabel) {
+        if (point == null) {
+            return;
+        }
+
+        JSONObject geometry = point.optJSONObject("geometry");
+        if (geometry != null && "Point".equalsIgnoreCase(geometry.optString("type"))) {
+            JSONArray coords = geometry.optJSONArray("coordinates");
+            if (coords != null && coords.length() >= 2) {
+                specs.add(new PointMarkerSpec(coords.optDouble(1, Double.NaN),
+                        coords.optDouble(0, Double.NaN), labelFrom(point, defaultLabel),
+                        cotTypeFrom(point), uidFrom(point)));
+                return;
+            }
+        }
+
+        JSONObject nestedPoint = point.optJSONObject("point");
+        if (nestedPoint != null) {
+            collectPointSpec(specs, nestedPoint, labelFrom(point, defaultLabel));
+            return;
+        }
+
+        String cotXml = point.optString("cot_xml", point.optString("xml", ""));
+        PointMarkerSpec cotSpec = pointFromCotXml(cotXml, labelFrom(point, defaultLabel),
+                cotTypeFrom(point), uidFrom(point));
+        if (cotSpec != null) {
+            specs.add(cotSpec);
+            return;
+        }
+
+        double lat = firstFinite(
+                point.optDouble("lat", Double.NaN),
+                point.optDouble("latitude", Double.NaN),
+                point.optDouble("center_lat", Double.NaN));
+        double lon = firstFinite(
+                point.optDouble("lon", Double.NaN),
+                point.optDouble("longitude", Double.NaN),
+                point.optDouble("center_lon", Double.NaN));
+        if (Double.isNaN(lat) || Double.isNaN(lon)) {
+            return;
+        }
+        specs.add(new PointMarkerSpec(lat, lon, labelFrom(point, defaultLabel),
+                cotTypeFrom(point), uidFrom(point)));
+    }
+
+    private PointMarkerSpec pointFromCotXml(String xml, String defaultLabel,
+                                            String defaultType, String defaultUid) {
+        if (xml == null || xml.trim().isEmpty()) {
+            return null;
+        }
+        double lat = xmlDoubleAttribute(xml, "lat");
+        double lon = xmlDoubleAttribute(xml, "lon");
+        if (Double.isNaN(lat) || Double.isNaN(lon)) {
+            return null;
+        }
+        String callsign = xmlAttribute(xml, "callsign");
+        String uid = xmlAttribute(xml, "uid");
+        String type = xmlAttribute(xml, "type");
+        return new PointMarkerSpec(lat, lon,
+                callsign.isEmpty() ? defaultLabel : callsign,
+                type.isEmpty() ? defaultType : type,
+                uid.isEmpty() ? defaultUid : uid);
+    }
+
+    private double xmlDoubleAttribute(String xml, String name) {
+        String value = xmlAttribute(xml, name);
+        if (value.isEmpty()) {
+            return Double.NaN;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ignored) {
+            return Double.NaN;
+        }
+    }
+
+    private String xmlAttribute(String xml, String name) {
+        Matcher matcher = Pattern.compile(name + "=\"([^\"]+)\"").matcher(xml);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private double firstFinite(double first, double second, double third) {
+        if (!Double.isNaN(first)) return first;
+        if (!Double.isNaN(second)) return second;
+        return third;
+    }
+
+    private String labelFrom(JSONObject json, String fallback) {
+        if (json == null) {
+            return fallback;
+        }
+        String label = json.optString("label", "");
+        if (label.trim().isEmpty()) label = json.optString("name", "");
+        if (label.trim().isEmpty()) label = json.optString("title", "");
+        if (label.trim().isEmpty()) label = json.optString("callsign", "");
+        return label.trim().isEmpty() ? fallback : label;
+    }
+
+    private String cotTypeFrom(JSONObject json) {
+        if (json == null) {
+            return "a-f-G-U-C";
+        }
+        String type = json.optString("cot_type", "");
+        if (type.trim().isEmpty()) type = json.optString("type", "");
+        return type.trim().isEmpty() ? "a-f-G-U-C" : type;
+    }
+
+    private String uidFrom(JSONObject json) {
+        if (json == null) {
+            return UUID.randomUUID().toString();
+        }
+        String uid = json.optString("uid", "");
+        if (uid.trim().isEmpty()) uid = json.optString("id", "");
+        return uid.trim().isEmpty() ? UUID.randomUUID().toString() : uid;
     }
 
     private String statusForPlanResult(boolean ok, String message) {
@@ -728,5 +932,21 @@ public class TERAPlugin implements IPlugin {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         scrollChatToBottom(chatScroll);
+    }
+
+    private static final class PointMarkerSpec {
+        final double lat;
+        final double lon;
+        final String label;
+        final String type;
+        final String uid;
+
+        PointMarkerSpec(double lat, double lon, String label, String type, String uid) {
+            this.lat = lat;
+            this.lon = lon;
+            this.label = label;
+            this.type = type;
+            this.uid = uid;
+        }
     }
 }
