@@ -52,6 +52,7 @@ docker compose up --build
 - `TERA_ATAK_AGENT_COMMAND`: optional command launched by the ATAK Local button, for example a tmux/systemd wrapper on the Jetson
 - `TERA_ATAK_DEVICE_URL`: optional ATAK plugin/device target shown in activation status
 - `TERA_ATAK_OLLAMA_KEEP_ALIVE`: Ollama keep-alive used after ATAK activation, default `30m`
+- `TERA_ATAK_WARMUP_TIMEOUT_S`: maximum synchronous web warmup wait, default `20`; Jetson compose warmup runs in the background
 - `TERA_PUBLIC_BASE_URL`: optional public Jetson web URL shown to the Samsung ATAK plugin, for example `http://10.1.63.96:8080`
 - `TERA_JETSON_IP`: optional Jetson IP fallback for ATAK plugin endpoint display
 - `TERA_ATAK_MIRROR_LOG`: optional JSONL mirror path; defaults under `OFFLINE_PACKAGE_ROOT/runtime/`
