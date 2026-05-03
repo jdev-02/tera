@@ -2,3 +2,6 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
 structlog>=24.1
+rasterio>=1.3
+cryptography>=43.0
+defusedxml>=0.7
