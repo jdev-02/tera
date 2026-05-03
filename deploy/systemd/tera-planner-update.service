@@ -1,0 +1,12 @@
+[Unit]
+Description=TERA planner auto-update (git pull + restart)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=REPO_DIR=__REPO_DIR__
+Environment=REMOTE=origin
+Environment=BRANCH=main
+Environment=SERVICE_NAME=tera-planner.service
+ExecStart=/usr/bin/env bash __REPO_DIR__/deploy/scripts/jetson_update_and_restart.sh
