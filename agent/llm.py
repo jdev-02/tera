@@ -316,7 +316,7 @@ class OllamaClient:
                 f"OllamaClient host must be loopback, got: {self.host}. "
                 "Refusing to start to prevent accidental network egress."
             )
-        self.model = model or os.environ.get("OLLAMA_MODEL", "gemma2:2b")
+        self.model = model or os.environ.get("OLLAMA_MODEL", "gemma3:4b")
         self.client = OllamaLib(host=self.host)
 
     def _to_messages(self, messages: list[Message]) -> list[dict[str, str]]:

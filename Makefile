@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert atak-link-server atak-link-test tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install jetson-compose-refresh
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -122,6 +122,13 @@ firewall-remove: ## Remove the TERA port 8000 firewall block
 firewall-status: ## Check if port 8000 firewall rule is active
 	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 status
 
+atak-link-server: install ## Start Jetson Gemma proof server for ATAK plugin link tests
+	bash atak/scripts/run_jetson_gemma_server.sh
+
+atak-link-test: ## Test Samsung/ATAK-device LAN reachability to Jetson. Pass JETSON_IP=...
+	@test -n "$(JETSON_IP)" || (echo "Usage: make atak-link-test JETSON_IP=<jetson-wifi-ip> [PORT=8080]" >&2; exit 2)
+	bash atak/scripts/test_jetson_link.sh "$(JETSON_IP)" "$(if $(PORT),$(PORT),8080)"
+
 tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
 	@bash infra/security_demo_monitors.sh
 
@@ -149,6 +156,12 @@ demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
 
 eval: install ## Run the 20-prompt regression set
 	$(PYTHON) -m eval.runner
+
+jetson-autoupdate-install: ## Install systemd services on Jetson to auto-pull origin/main and restart planner
+	@bash deploy/scripts/install_jetson_autoupdate.sh
+
+jetson-compose-refresh: ## On Jetson: pull main and rebuild/restart the planner with Docker Compose
+	@bash deploy/scripts/jetson_compose_refresh.sh
 
 clean: ## Remove venv and caches
 	rm -rf $(VENV) .pytest_cache .ruff_cache .mypy_cache __pycache__
