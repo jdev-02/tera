@@ -178,6 +178,10 @@ TERA_ATAK_DEVICE_URL = os.getenv("TERA_ATAK_DEVICE_URL", "").strip()
 TERA_ATAK_ACTIVATE_COMMAND = os.getenv("TERA_ATAK_AGENT_COMMAND", "").strip()
 TERA_ATAK_OLLAMA_KEEP_ALIVE = os.getenv("TERA_ATAK_OLLAMA_KEEP_ALIVE", "30m")
 TERA_ATAK_WARMUP_TIMEOUT_S = float(os.getenv("TERA_ATAK_WARMUP_TIMEOUT_S", "20"))
+TERA_ATAK_READY_MESSAGE = os.getenv(
+    "TERA_ATAK_READY_MESSAGE",
+    "TERA Agent ready. Send your traffic.",
+).strip() or "TERA Agent ready. Send your traffic."
 TERA_PUBLIC_BASE_URL = os.getenv("TERA_PUBLIC_BASE_URL", "").strip().rstrip("/")
 TERA_JETSON_IP = os.getenv("TERA_JETSON_IP", "").strip()
 ACTIVE_OLLAMA_BASE_URL: str | None = None
@@ -6248,7 +6252,7 @@ async def _pull_ollama_model(base_url: str, model: str) -> str:
 
 async def _warm_ollama_atak_model(base_url: str, model: str, agent_profile: str) -> str:
     warm_request = PromptRequest(
-        prompt="TERA ATAK readiness check. Reply READY in one short sentence.",
+        prompt=f'Readiness check. Reply exactly: "{TERA_ATAK_READY_MESSAGE}"',
         model=model,
         llm_provider="ollama",
         agent_profile=agent_profile,
@@ -6263,6 +6267,9 @@ async def _warm_ollama_atak_model(base_url: str, model: str, agent_profile: str)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{base_url}/api/generate", json=payload)
         response.raise_for_status()
+    warm_text = str(response.json().get("response", "")).strip()
+    if not warm_text:
+        raise RuntimeError(f"Ollama warmup returned an empty response for {model}.")
     return f"Warmed {model} with TERA ATAK profile; keep_alive={TERA_ATAK_OLLAMA_KEEP_ALIVE}."
 
 
@@ -6320,10 +6327,10 @@ async def _prepare_ollama_for_atak(model: str, agent_profile: str) -> dict[str, 
 
     try:
         details.append(await _warm_ollama_atak_model(selected_base_url, model, agent_profile))
-    except httpx.HTTPError as exc:
+    except (RuntimeError, httpx.HTTPError) as exc:
         details.append(f"Ollama warmup failed for {model}: {exc}")
         return {
-            "ready": True,
+            "ready": False,
             "base_url": selected_base_url,
             "detail": " ".join(details[-4:]),
         }
@@ -6986,19 +6993,27 @@ async def activate_jetson_atak_agent(
             "ollama_ready": bool(ollama_ready.get("ready")),
         }
     )
-    _append_atak_mirror_event(
-        source="jetson",
-        role="system",
-        text=(
-            f"Local TERA ATAK agent {'ready' if ollama_ready.get('ready') else 'not ready'} "
-            f"on Ollama {model}. "
-            "Configure Samsung ATAK endpoint "
-            f"{plugin_endpoint or 'http://<JETSON_IP>:8080/api/prompt'}."
-        ),
-        model=model,
-        provider="ollama",
-        direction="mode-switch",
-    )
+    if ollama_ready.get("ready"):
+        _append_atak_mirror_event(
+            source="jetson",
+            role="assistant",
+            text=TERA_ATAK_READY_MESSAGE,
+            model=model,
+            provider="ollama",
+            direction="ready",
+        )
+    else:
+        _append_atak_mirror_event(
+            source="jetson",
+            role="system",
+            text=(
+                f"Local TERA ATAK agent not ready on Ollama {model}. "
+                "Hold traffic and retry ATAK Local activation."
+            ),
+            model=model,
+            provider="ollama",
+            direction="mode-switch",
+        )
     return _jetson_atak_response(detail)
 
 

@@ -636,6 +636,9 @@ async def test_atak_activation_forces_auto_prompts_to_local_gemma(
         assert response.model == "gemma3:4b"
         assert response.provider == "ollama"
         assert response.events
+        assert response.events[-1].role == "assistant"
+        assert response.events[-1].text == "TERA Agent ready. Send your traffic."
+        assert response.events[-1].direction == "ready"
         assert kmh_app._provider_sequence(
             kmh_app.PromptRequest(prompt="x", llm_provider="auto")
         ) == ["ollama"]
@@ -693,6 +696,32 @@ def test_atak_activation_normalizes_gemma3_4_alias() -> None:
     assert kmh_app._normalize_ollama_model_name("gemma3:4b") == "gemma3:4b"
 
 
+@pytest.mark.asyncio
+async def test_prepare_ollama_for_atak_requires_successful_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch(_: str) -> list[str]:
+        return ["gemma3:4b"]
+
+    async def fake_warmup(_: str, model: str, __: str) -> str:
+        raise RuntimeError(f"{model} did not answer readiness prompt")
+
+    monkeypatch.setattr(kmh_app, "ACTIVE_OLLAMA_BASE_URL", None)
+    monkeypatch.setattr(
+        kmh_app,
+        "_ollama_base_url_candidates",
+        lambda: ["http://127.0.0.1:11434"],
+    )
+    monkeypatch.setattr(kmh_app, "_fetch_ollama_models_from", fake_fetch)
+    monkeypatch.setattr(kmh_app, "_warm_ollama_atak_model", fake_warmup)
+
+    result = await kmh_app._prepare_ollama_for_atak("gemma3:4b", "tera-atak-live")
+
+    assert result["ready"] is False
+    assert result["base_url"] == "http://127.0.0.1:11434"
+    assert "Ollama warmup failed" in str(result["detail"])
+
+
 def test_jetson_refresh_prepares_ollama_for_atak_mode() -> None:
     script_path = (
         Path(__file__).resolve().parents[1]
@@ -706,6 +735,7 @@ def test_jetson_refresh_prepares_ollama_for_atak_mode() -> None:
     assert "ollama pull \"$model\"" in script
     assert "ollama run \"$model\"" in script
     assert "ollama-warmup.log" in script
+    assert "TERA Agent ready. Send your traffic." in script
     assert "continuing with web app restart" in script
 
 

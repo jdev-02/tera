@@ -27,6 +27,7 @@ final class TeraPlanClient {
     private static final int CONNECT_TIMEOUT_MS = 5000;
     private static final int READ_TIMEOUT_MS = 180000;
     private static final String REJECTED_SIGNATURE = "Route signature invalid - REJECTED";
+    private static final String TERA_READY_MESSAGE = "TERA Agent ready. Send your traffic.";
 
     private TeraPlanClient() {
     }
@@ -39,9 +40,15 @@ final class TeraPlanClient {
             }
 
             String healthError = checkHealth(endpoint.trim());
-            callback.onComplete(healthError == null, healthError == null
-                    ? "Jetson health check passed."
-                    : healthError);
+            if (healthError != null) {
+                callback.onComplete(false, healthError);
+                return;
+            }
+
+            String readyError = ensureTeraReady(endpoint.trim());
+            callback.onComplete(readyError == null, readyError == null
+                    ? TERA_READY_MESSAGE
+                    : readyError);
         });
     }
 
@@ -62,6 +69,11 @@ final class TeraPlanClient {
                 String healthError = checkHealth(endpoint.trim());
                 if (healthError != null) {
                     callback.onComplete(false, healthError, null);
+                    return;
+                }
+                String readyError = ensureTeraReady(endpoint.trim());
+                if (readyError != null) {
+                    callback.onComplete(false, readyError, null);
                     return;
                 }
 
@@ -214,26 +226,116 @@ final class TeraPlanClient {
         }
     }
 
+    private static String ensureTeraReady(String endpoint) {
+        Boolean ready = readAtakReadyStatus(endpoint);
+        if (Boolean.TRUE.equals(ready)) {
+            return null;
+        }
+        if (ready == null) {
+            return null;
+        }
+        return activateAtakAgent(endpoint);
+    }
+
+    private static Boolean readAtakReadyStatus(String endpoint) {
+        HttpURLConnection connection = null;
+        try {
+            URL statusUrl = new URL(serviceBaseUrl(endpoint) + "/api/jetson/atak-agent/status");
+            connection = (HttpURLConnection) statusUrl.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(CONNECT_TIMEOUT_MS);
+
+            int code = connection.getResponseCode();
+            if (code == 404) {
+                return null;
+            }
+            String body = readResponse(connection, code);
+            if (code < 200 || code >= 300) {
+                return null;
+            }
+            JSONObject json = new JSONObject(body);
+            if (!json.optBoolean("active", false)) {
+                return false;
+            }
+            return json.optBoolean("ollama_ready", false);
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static String activateAtakAgent(String endpoint) {
+        HttpURLConnection connection = null;
+        try {
+            URL activateUrl = new URL(serviceBaseUrl(endpoint) + "/api/jetson/atak-agent/activate");
+            connection = (HttpURLConnection) activateUrl.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+
+            byte[] body = "{\"model\":\"gemma3:4b\",\"agent_profile\":\"tera-atak-live\"}"
+                    .getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+
+            int code = connection.getResponseCode();
+            String responseBody = readResponse(connection, code);
+            if (code == 404) {
+                return null;
+            }
+            if (code < 200 || code >= 300) {
+                return "TERA Agent is still starting. Hold traffic. HTTP " + code
+                        + "\n" + truncate(responseBody);
+            }
+            JSONObject json = new JSONObject(responseBody);
+            if (json.optBoolean("ollama_ready", false)) {
+                return null;
+            }
+            String detail = json.optString("detail", "Ollama is still warming.");
+            return "TERA Agent is still starting. Hold traffic.\n" + detail;
+        } catch (SocketTimeoutException e) {
+            return "TERA Agent is still starting. Hold traffic until Ollama finishes loading Gemma.";
+        } catch (Exception e) {
+            return "TERA Agent readiness check failed. " + friendlyException(e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
     private static String healthEndpoint(String endpoint) {
-        int planPath = endpoint.indexOf("/plan");
-        if (planPath >= 0) {
-            return endpoint.substring(0, planPath) + "/health";
+        return serviceBaseUrl(endpoint) + "/health";
+    }
+
+    private static String serviceBaseUrl(String endpoint) {
+        int firstPathSlash = endpoint.indexOf("/", endpoint.indexOf("://") + 3);
+        if (firstPathSlash >= 0) {
+            return endpoint.substring(0, firstPathSlash);
         }
-        int lastSlash = endpoint.indexOf("/", endpoint.indexOf("://") + 3);
-        if (lastSlash >= 0) {
-            return endpoint.substring(0, lastSlash) + "/health";
-        }
-        return endpoint + "/health";
+        return endpoint;
     }
 
     private static String buildPlanPayload(String prompt, JSONObject mapContext)
             throws JSONException {
         JSONObject payload = new JSONObject();
         payload.put("prompt", prompt);
+        payload.put("llm_provider", "ollama");
+        payload.put("model", "gemma3:4b");
+        payload.put("agent_profile", "tera-atak-live");
 
         // Extract operator GPS position for the /plan PlanRequest `current` field.
         // Prefer the self-marker (operator's real GPS) over the map centre.
         if (mapContext != null) {
+            payload.put("map_context", mapContext);
             JSONObject current = null;
             JSONObject selectedArea = mapContext.optJSONObject("selected_area");
             if (selectedArea != null

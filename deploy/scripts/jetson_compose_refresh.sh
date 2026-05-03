@@ -78,8 +78,9 @@ start_ollama_for_atak() {
   fi
 
   echo "[jetson-refresh] warming $model with TERA ATAK prompt in background"
+  local ready_message="${TERA_ATAK_READY_MESSAGE:-TERA Agent ready. Send your traffic.}"
   (
-    ollama run "$model" "TERA ATAK readiness check. Reply READY in one short sentence." &
+    ollama run "$model" "Readiness check. Reply exactly: \"$ready_message\"" &
     warm_pid="$!"
     (
       sleep "$warm_timeout"

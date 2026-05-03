@@ -465,7 +465,14 @@ public class TERAPlugin implements IPlugin {
             }
             endpoint = "http://" + endpoint;
         }
-        if (!endpoint.endsWith(pluginContext.getString(R.string.endpoint_path))) {
+        int schemeIndex = endpoint.indexOf("://");
+        int pathStart = schemeIndex >= 0
+                ? endpoint.indexOf("/", schemeIndex + 3)
+                : endpoint.indexOf("/");
+        if (pathStart < 0 || pathStart == endpoint.length() - 1) {
+            if (endpoint.endsWith("/")) {
+                endpoint = endpoint.substring(0, endpoint.length() - 1);
+            }
             endpoint = endpoint + pluginContext.getString(R.string.endpoint_path);
         }
         return endpoint;
