@@ -129,7 +129,7 @@ def test_synthesize_rationale_returns_none_when_piper_unavailable() -> None:
     """If Piper isn't available, return None and let the orchestrator fall back."""
     fake_client = MagicMock()
     fake_client.is_available.return_value = False
-    with patch("voice.tts.get_piper", return_value=fake_client):
+    with patch("voice.tts._client_for_profile", return_value=fake_client):
         result = tts.synthesize_rationale_b64("Routed to Lobos Creek, 2.1 km.")
     assert result is None
     fake_client.synthesize_wav.assert_not_called()
@@ -142,7 +142,7 @@ def test_synthesize_rationale_b64_calls_piper_with_cadence(tmp_path: Path) -> No
     fake_client.is_available.return_value = True
     fake_client.synthesize_wav.return_value = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    with patch("voice.tts.get_piper", return_value=fake_client):
+    with patch("voice.tts._client_for_profile", return_value=fake_client):
         result = tts.synthesize_rationale_b64(
             "Routed to Lobos Creek, distance 2.1 km, ETA 38 minutes."
         )
@@ -168,6 +168,6 @@ def test_synthesize_rationale_swallows_synth_errors() -> None:
     fake_client.is_available.return_value = True
     fake_client.synthesize_wav.side_effect = RuntimeError("synth boom")
 
-    with patch("voice.tts.get_piper", return_value=fake_client):
+    with patch("voice.tts._client_for_profile", return_value=fake_client):
         result = tts.synthesize_rationale_b64("anything")
     assert result is None
