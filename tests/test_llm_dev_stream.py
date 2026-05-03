@@ -902,7 +902,7 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
     assert payload.package is not None
     assert payload.package.file_name == f"{payload.collection_uid}.kmz"
     assert payload.package.format == "kmz"
-    assert payload.package.target_path == f"Internal storage/fromTERA/{payload.package.file_name}"
+    assert payload.package.target_path == f"/sdcard/fromTERA/{payload.package.file_name}"
     package_bytes = base64.b64decode(payload.package.content_b64)
     assert payload.package.size_bytes == len(package_bytes)
     with zipfile.ZipFile(BytesIO(package_bytes)) as package:
@@ -1072,7 +1072,12 @@ def test_atak_plugin_understands_prompt_tak_cot_payload() -> None:
 
     assert "applyTakCot" in plugin_source
     assert "saveTakPackage" in plugin_source
+    assert 'TERA_SHARED_PACKAGE_DIR = "/sdcard/fromTERA"' in plugin_source
+    assert "takPackageDirectories" in plugin_source
+    assert "uniqueTakPackageFile" in plugin_source
+    assert "sha256Hex" in plugin_source
     assert "Environment.getExternalStorageDirectory()" in plugin_source
+    assert 'getExternalFilesDir("fromTERA")' in plugin_source
     assert '"fromTERA"' in plugin_source
     assert "content_b64" in plugin_source
     assert "activeTeraItemUids" in plugin_source
@@ -1081,7 +1086,7 @@ def test_atak_plugin_understands_prompt_tak_cot_payload() -> None:
     assert "client_location" in client_source
     assert "tera_active_items" in plugin_source
     assert "tak_cot" in client_source
-    assert "Internal storage/fromTERA" in client_source
+    assert "/sdcard/fromTERA" in client_source
     assert "/api/prompt" in strings
     assert "MANAGE_EXTERNAL_STORAGE" in manifest
 

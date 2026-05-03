@@ -363,7 +363,7 @@ class TakCotFilePackage(BaseModel):
     content_b64: str
     size_bytes: int
     sha256: str
-    target_folder: str = "Internal storage/fromTERA"
+    target_folder: str = "/sdcard/fromTERA"
     target_path: str
     kml_entry: str = "doc.kml"
     item_count: int = 0
@@ -5271,7 +5271,7 @@ def _tak_cot_file_package(tak_cot: TakCotPayload) -> TakCotFilePackage | None:
         content_b64=base64.b64encode(content).decode("ascii"),
         size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
-        target_path=f"Internal storage/fromTERA/{file_name}",
+        target_path=f"/sdcard/fromTERA/{file_name}",
         item_count=len(tak_cot.items),
     )
 
