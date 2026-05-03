@@ -57,3 +57,44 @@ deploy/secrets/
 
 valhalla_tiles/
 *.gph
+certs/
+
+# ---------------------------------------------------------------------------
+# ATAK SDK is a developer prerequisite, NOT source.
+# Never commit the vendored SDK tree. See atak/REBASE_RUNBOOK.md for layout.
+# Download SDK separately from PAR Government / TAK Product Center.
+# ---------------------------------------------------------------------------
+atak/ATAK-CIV-*-SDK/
+atak/**/atak-gradle-takdev.jar
+atak/**/atak-javadoc.jar
+atak/**/main.jar
+atak/**/mapping.txt
+
+# Android signing keys NEVER in git (public repo = world-readable).
+*.keystore
+*.jks
+**/android_keystore
+local.properties
+
+# Android / gradle build output
+**/app/build/
+**/.gradle/
+**/.takdev/
+*.apk
+*.aab
+
+# ---------------------------------------------------------------------------
+# Demo / video / audio recordings should NEVER live in the repo.
+# Save to ~/Desktop/tera-demo-clips/ (gitignored at home dir level)
+# or share via the team Drive folder. See docs/demo-recording-plan.md.
+# ---------------------------------------------------------------------------
+*.mov
+*.mp4
+*.webm
+*.mkv
+*.m4a
+*.mp3
+*.flac
+*.wav
+!tests/**/*.wav
+!models/piper/*.onnx.json
