@@ -727,15 +727,8 @@ public class TERAPlugin implements IPlugin {
 
             Marker self = mapView.getSelfMarker();
             if (self != null && self.getPoint() != null && self.getPoint().isValid()) {
-                JSONObject selectedArea = new JSONObject();
                 GeoPoint selfPoint = self.getPoint();
-                selectedArea.put("west", selfPoint.getLongitude());
-                selectedArea.put("south", selfPoint.getLatitude());
-                selectedArea.put("east", selfPoint.getLongitude());
-                selectedArea.put("north", selfPoint.getLatitude());
-                selectedArea.put("center_lat", selfPoint.getLatitude());
-                selectedArea.put("center_lon", selfPoint.getLongitude());
-                context.put("selected_area", selectedArea);
+                context.put("client_location", pointToJson(selfPoint));
             }
 
             JSONArray activeItems = new JSONArray();

@@ -229,6 +229,33 @@ def test_imagery_sourcing_prompt_uses_socratic_dialogue() -> None:
     assert "Socratic questions to ask next" in system_prompt
 
 
+def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
+    request = kmh_app.PromptRequest(
+        prompt="Route me to nearest freshwater.",
+        llm_provider="ollama",
+        agent_profile="tera-atak-live",
+        map_context=kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(lat=37.79, lon=-122.4),
+            camera=kmh_app.MapPoint(lat=37.791, lon=-122.399),
+            view_bounds=kmh_app.ViewBounds(
+                west=-122.405,
+                south=37.785,
+                east=-122.390,
+                north=37.800,
+                center_lat=37.7925,
+                center_lon=-122.3975,
+            ),
+        ),
+    )
+
+    system_prompt = kmh_app._build_system_prompt(request)
+
+    assert "TAK client location (route origin): lat 37.790000, lon -122.400000" in system_prompt
+    assert "Displayed ATAK map bounds:" in system_prompt
+    assert "displayed ATAK map view via plugin" in system_prompt
+    assert "Use the displayed ATAK map bounds as the visible operating area" in system_prompt
+
+
 def test_source_recommendation_questions_prioritize_source_scope() -> None:
     recommendation = kmh_app._infer_source_recommendation(
         "Build an offline package for a patrol to find reliable water while avoiding steep exposed terrain.",
@@ -717,6 +744,7 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
         llm_provider="ollama",
         agent_profile="tera-atak-live",
         map_context=kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(lat=37.79, lon=-122.4),
             selected_area=kmh_app.ViewBounds(
                 west=-122.4,
                 south=37.79,
@@ -747,6 +775,53 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
     assert item.metadata["target"]["source_layer"] == "waterways"
 
 
+def test_tak_cot_payload_prefers_client_location_and_visible_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routing import osm_sqlite_features
+
+    def fake_query_osm_features(**kwargs: object) -> list[dict[str, object]]:
+        assert kwargs["origin"] == {"lat": 37.79, "lon": -122.4}
+        assert kwargs["limit"] == 20
+        return [
+            {
+                "name": "Offscreen Creek",
+                "lat": 37.81,
+                "lon": -122.42,
+                "distance_m": 80.0,
+            },
+            {
+                "name": "Visible Creek",
+                "lat": 37.794,
+                "lon": -122.397,
+                "distance_m": 420.0,
+            },
+        ]
+
+    monkeypatch.setattr(osm_sqlite_features, "query_osm_features", fake_query_osm_features)
+    request = kmh_app.PromptRequest(
+        prompt="Route me to nearest freshwater.",
+        llm_provider="ollama",
+        agent_profile="tera-atak-live",
+        map_context=kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(lat=37.79, lon=-122.4),
+            view_bounds=kmh_app.ViewBounds(
+                west=-122.405,
+                south=37.785,
+                east=-122.390,
+                north=37.800,
+            ),
+        ),
+    )
+
+    payload = kmh_app._build_tak_cot_payload(request, "Routing to visible water.")
+    item = payload.items[0]
+
+    assert item.title == "TERA route to Visible Creek"
+    assert item.coordinates[0] == [-122.4, 37.79]
+    assert item.metadata["target"]["inside_view_bounds"] is True
+
+
 def test_tak_cot_payload_uses_second_target_for_reroute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -764,6 +839,7 @@ def test_tak_cot_payload_uses_second_target_for_reroute(
         llm_provider="ollama",
         agent_profile="tera-atak-live",
         map_context=kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(lat=37.79, lon=-122.4),
             selected_area=kmh_app.ViewBounds(
                 west=-122.4,
                 south=37.79,
@@ -828,6 +904,8 @@ def test_atak_plugin_understands_prompt_tak_cot_payload() -> None:
     assert "applyTakCot" in plugin_source
     assert "activeTeraItemUids" in plugin_source
     assert "activeTeraItems" in plugin_source
+    assert "client_location" in plugin_source
+    assert "client_location" in client_source
     assert "tera_active_items" in plugin_source
     assert "tak_cot" in client_source
     assert "/api/prompt" in strings
