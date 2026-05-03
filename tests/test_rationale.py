@@ -23,7 +23,7 @@ _CASES: list[tuple[str, str, str]] = [
     ("12.345", "one two point three four five", "multi-digit decimal"),
 
     # Plain integer expansion (digit-by-digit)
-    ("ETA 38 minutes", "ETA three eight minutes", "two-digit count"),
+    ("ETA 38 minutes", "E T A three eight minutes", "two-digit count + acronym"),
     ("over 4 kilometers per hour", "over four kilometers per hour", "single digit"),
 
     # Unit expansion
@@ -31,11 +31,11 @@ _CASES: list[tuple[str, str, str]] = [
     ("4 kph", "four kilometers per hour", "kph -> kilometers per hour"),
     ("500 m", "five zero zero meters", "m -> meters"),
 
-    # MGRS grid -- single 8-digit precision pair (phonetics are lowercase
-    # because Piper synthesizes the same regardless of case).
+    # MGRS grid -- single 8-digit precision pair. Phonetic letters comma-
+    # separated so 'sierra mike sierra' doesn't slur (op note 17:03 #4).
     (
         "Grid 11SMS1234 5678",
-        "Grid one one sierra mike sierra one two three four, five six seven eight",
+        "Grid one one sierra, mike, sierra one two three four, five six seven eight",
         "MGRS with two 4-digit halves",
     ),
 
@@ -43,31 +43,75 @@ _CASES: list[tuple[str, str, str]] = [
     # The standard read inserts a beat between easting and northing.
     (
         "Hill at 11SMS1234",
-        "Hill at one one sierra mike sierra one two, three four",
+        "Hill at one one sierra, mike, sierra one two, three four",
         "MGRS no-space 4-digit precision (split 2+2)",
     ),
 
     # MGRS grid -- 8-digit no-space form (10m precision, 4+4 split).
     (
         "Hill at 11SMS12345678.",
-        "Hill at one one sierra mike sierra one two three four, five six seven eight.",
+        "Hill at one one sierra, mike, sierra one two three four, five six seven eight.",
         "MGRS no-space 8-digit precision",
     ),
 
-    # The flagship rationale from PRD §6 (hero scenario A)
+    # Acronym expansion -- spelled letter-by-letter.
+    (
+        "ETA 5 minutes.",
+        "E T A five minutes.",
+        "ETA -> 'E T A'",
+    ),
+    (
+        "HLZ at grid 11SMS1234.",
+        "H L Z at grid one one sierra, mike, sierra one two, three four.",
+        "HLZ -> 'H L Z'",
+    ),
+    (
+        "Identify CP and TOC.",
+        "Identify C P and T O C.",
+        "multiple acronyms in one line",
+    ),
+
+    # Acronym expansion -- read as a word with hyphen hint.
+    (
+        "CASEVAC inbound.",
+        "case-vac inbound.",
+        "CASEVAC -> 'case-vac'",
+    ),
+    (
+        "MEDEVAC requested.",
+        "med-evac requested.",
+        "MEDEVAC -> 'med-evac'",
+    ),
+
+    # Clause-comma promotion -- ', ETA' -> '. ETA' for radio cadence.
+    (
+        "Distance 2.1 km, ETA 38 minutes.",
+        "Distance two point one kilometers. E T A three eight minutes.",
+        "comma before ETA promoted to period",
+    ),
+    (
+        "Hold position, bearing 270, range 800 meters.",
+        "Hold position. bearing two seven zero. range eight zero zero meters.",
+        "commas before bearing/range promoted",
+    ),
+
+    # The flagship rationale from PRD §6 (hero scenario A). Note: ', distance'
+    # is also promoted to '. distance' (clause-comma rule), and ', ETA' to
+    # '. ETA'. Result: three full-sentence beats between the elements.
     (
         "Routed to Lobos Creek, distance 2.1 kilometers, ETA 38 minutes on foot covered.",
         (
-            "Routed to Lobos Creek, distance two point one kilometers, "
-            "ETA three eight minutes on foot covered."
+            "Routed to Lobos Creek. distance two point one kilometers. "
+            "E T A three eight minutes on foot covered."
         ),
         "PRD scenario A canonical rationale",
     ),
 
-    # Combined: cardinal + decimal + integer
+    # Combined: cardinal + decimal + integer + acronym. Note '; ETA' is
+    # not promoted -- the rule only promotes ', ' (comma+space) before cues.
     (
         "Selected creek 2.1 km NE; ETA 38 min.",
-        "Selected creek two point one kilometers northeast; ETA three eight min.",
+        "Selected creek two point one kilometers northeast; E T A three eight min.",
         "multiple transforms in one string",
     ),
 ]
