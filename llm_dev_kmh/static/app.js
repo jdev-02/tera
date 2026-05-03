@@ -345,6 +345,8 @@ const LOCATION_GAZETTEER = [
 
 const LOCATION_SEARCH_LIMIT = 6;
 const UTM_LATITUDE_BANDS = "CDEFGHJKLMNPQRSTUVWXX";
+const MGRS_COLUMN_LETTER_SETS = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"];
+const MGRS_ROW_LETTER_SETS = ["ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE"];
 const KEYWORD_EXPANSIONS = {
   route: ["routing", "navigate", "navigation", "path", "corridor", "approach"],
   patrol: ["movement", "move", "walk", "team", "operator"],
@@ -1074,6 +1076,24 @@ function latLonToUtm(lat, lon) {
   };
 }
 
+function utmToMgrs(utm) {
+  const columnSet = MGRS_COLUMN_LETTER_SETS[(utm.zone - 1) % MGRS_COLUMN_LETTER_SETS.length];
+  const rowSet = MGRS_ROW_LETTER_SETS[(utm.zone - 1) % MGRS_ROW_LETTER_SETS.length];
+  const columnIndex = clampNumber(Math.floor(utm.easting / 100000) - 1, 0, columnSet.length - 1);
+  const rowIndex = Math.floor(utm.northing / 100000) % rowSet.length;
+  const square = `${columnSet[columnIndex]}${rowSet[rowIndex]}`;
+  const easting = (utm.easting % 100000).toString().padStart(5, "0");
+  const northing = (utm.northing % 100000).toString().padStart(5, "0");
+  return `${utm.zone}${utm.band} ${square} ${easting} ${northing}`;
+}
+
+function latLonToMgrs(lat, lon) {
+  if (lat < -80 || lat >= 84) {
+    return "MGRS unavailable";
+  }
+  return utmToMgrs(latLonToUtm(lat, lon));
+}
+
 function updateCenterGrid() {
   const center = getMapCenterPoint();
   if (!center) {
@@ -1082,10 +1102,7 @@ function updateCenterGrid() {
     return;
   }
 
-  const utm = latLonToUtm(center.lat, center.lon);
-  els.centerGridValue.textContent = `UTM ${utm.zone}${utm.band} ${utm.easting
-    .toString()
-    .padStart(6, "0")}E ${utm.northing.toString().padStart(7, "0")}N`;
+  els.centerGridValue.textContent = `MGRS ${latLonToMgrs(center.lat, center.lon)}`;
   els.centerGridLatLon.textContent = `${center.lat.toFixed(5)}, ${center.lon.toFixed(5)}`;
 }
 
