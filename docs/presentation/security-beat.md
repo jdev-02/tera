@@ -16,9 +16,10 @@
 
 ## Beat structure (90 seconds)
 
-Two demo cuts, three sentences each. One framing line at the end.
+Two demo cuts (with an optional 10-second Cut 1b on the trust list), three
+sentences each, one framing line at the end.
 
-### Cut 1 — Signed-route tamper-reject (≈40 seconds)
+### Cut 1 — Signed-route tamper-reject (≈30 seconds)
 
 **What's on screen:** terminal split. Left pane: `python security/cot_inject_demo.py`
 output (or replay of clip S1, `docs/demo-clips/2254-security-cot-inject-demo.mp4`).
@@ -36,9 +37,41 @@ Right pane: ATAK MapView with the rejected route highlighted in red.
    destination — so an adversary who flips one byte of the geometry breaks the
    signature. Fail-closed: no signature, no render."
 
-**Code anchor for Q&A:** `agent/orchestrator.py:334` (`verify_plan_response`),
+**Code anchor for Q&A:** `agent/orchestrator.py:365` (`verify_plan_response`),
 `crypto/ml_dsa_signer.py:115` (signer/verifier), `tests/test_orchestrator.py:601`
 (tamper-reject test).
+
+---
+
+### Cut 1b — Spoofed-key_id reject (≈10 seconds, optional but punchier)
+
+**What's on screen:** the same `/plan/verify` payload as Cut 1, but instead of
+mutating the geometry, presenter B mutates `signature.key_id` to
+`attacker-rogue-001` and re-POSTs. Verifier returns
+`{"valid": false, "reason": "Untrusted key_id - REJECTED", ...}` in red.
+
+**What presenter B says (one sentence, no pause):**
+
+> "Even if the attacker has perfectly valid Dilithium output, if the key isn't
+> in the device's trust list, the verifier rejects it before it ever gets to
+> the crypto math."
+
+**Why this beat lands harder than byte-tampering:** byte-tampering proves
+"the signature checks the bytes". Spoofing the `key_id` proves "the system
+checks who you are, not just what you said." Most non-crypto judges find
+the latter more intuitive — it maps to badge-access semantics they already
+have. Cut 1b is the recommended substitution if Cut 1's tamper-reject feels
+too in-the-weeds for the room.
+
+**Code anchor for Q&A:** `agent/orchestrator.py:420` (`load_trust_list` import),
+`agent/orchestrator.py:430` (lookup), `agent/orchestrator.py:438`
+(`Untrusted key_id - REJECTED`), `tests/test_orchestrator.py:626`
+(`test_verify_plan_response_rejects_untrusted_key_id`). The trust list itself
+is auto-bootstrapped at FastAPI startup from the device's own public key
+(`agent/app.py:42` lifespan, `:58` `_bootstrap_device_trust`) so a fresh
+Jetson works zero-friction; the corollary is that the demo trust model is
+"device self-attests" rather than "external CA" — be ready to say so if a
+crypto-savvy judge asks.
 
 ---
 
