@@ -41,11 +41,9 @@ class ModelIntegrityError(RuntimeError):
 
 
 def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    # Normalise CRLF → LF so hashes are identical on Windows and Linux CI.
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def _load_manifest() -> list[dict[str, Any]]:

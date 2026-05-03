@@ -30,22 +30,22 @@ models:
   # Piper TTS voice metadata (JSON — committed, hash pinned)
   # ---------------------------------------------------------------------------
   - path: models/piper/en_GB-alan-low.onnx.json
-    sha256: 517db4ee0780609b8cc143cba5713e9e44786a6571baa5c45e2eb769bbf8dee9
+    sha256: c8164cc04b6ce102c651ce4a1e788e8429fa638501fca0723860718d4b44637e
     required: true
     note: "Piper TTS voice config — Alan (GB, low). Committed to repo."
 
   - path: models/piper/en_US-bryce-medium.onnx.json
-    sha256: 3932505c1aa126d4e7396692a43552008ffc66f4f5359e3801ab977f1d9ecea2
+    sha256: 7ceb1bc4af6d4e41b6d1edbb86c67e91e01eaa71f66db4cd0ae92ac704d415be
     required: true
     note: "Piper TTS voice config — Bryce (US, medium). Committed to repo."
 
   - path: models/piper/en_US-libritts_r-medium.onnx.json
-    sha256: 75dde37ea5254be4c2a3f96804c9f8c35fb317a122813e2935009ed0e81dc977
+    sha256: b471dc60d2d8335e819c393d196d6fbf792817f40051257b269878505bc9afb3
     required: true
     note: "Piper TTS voice config — LibriTTS-R (US, medium). Committed to repo."
 
   - path: models/piper/en_US-ryan-high.onnx.json
-    sha256: 85cd962e2dc4d9969829e26ca4ef8b84ceaa4426b4a57aeda6b61aed2c27d48d
+    sha256: c6d3b98f08315cb4bebf0d49d50fc4ff491b503c64b940cd3d5ca28543b48011
     required: true
     note: "Piper TTS voice config — Ryan (US, high). Committed to repo."
 
