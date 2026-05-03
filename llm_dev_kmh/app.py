@@ -230,13 +230,6 @@ class PromptRequest(BaseModel):
     source_context: SourceContext | None = None
 
 
-class PromptResponse(BaseModel):
-    model: str
-    response: str
-    provider: str | None = None
-    fallbacks: list[str] = Field(default_factory=list)
-
-
 class ModelsResponse(BaseModel):
     default_model: str
     models: list[str]
@@ -331,6 +324,43 @@ class MapContext(BaseModel):
     location_focus_label: str | None = Field(default=None, max_length=200)
     location_focus_source: str | None = Field(default=None, max_length=80)
     location_confirmed: bool = False
+    tera_active_items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TakCotCheckpoint(BaseModel):
+    uid: str
+    label: str
+    lat: float
+    lon: float
+
+
+class TakCotItem(BaseModel):
+    uid: str
+    item_type: Literal["route", "point"]
+    cot_type: str
+    title: str
+    lat: float | None = None
+    lon: float | None = None
+    coordinates: list[list[float]] = Field(default_factory=list)
+    checkpoints: list[TakCotCheckpoint] = Field(default_factory=list)
+    cot_xml: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TakCotPayload(BaseModel):
+    replace_existing: bool = True
+    collection_uid: str | None = None
+    summary: str = ""
+    algorithm: str = ""
+    items: list[TakCotItem] = Field(default_factory=list)
+
+
+class PromptResponse(BaseModel):
+    model: str
+    response: str
+    provider: str | None = None
+    fallbacks: list[str] = Field(default_factory=list)
+    tak_cot: TakCotPayload = Field(default_factory=TakCotPayload)
 
 
 class SourceDownloadMethod(BaseModel):
@@ -4877,6 +4907,390 @@ def _sign_cot_xml(
     return ET.tostring(root, encoding="unicode"), signed
 
 
+def _active_tak_item_count(map_context: MapContext | None) -> int:
+    if map_context is None:
+        return 0
+    return len(map_context.tera_active_items)
+
+
+def _origin_from_map_context(map_context: MapContext | None) -> MapPoint | None:
+    if map_context is None:
+        return None
+    for candidate in (
+        map_context.selected_area,
+        map_context.view_bounds,
+    ):
+        if (
+            candidate is not None
+            and candidate.center_lat is not None
+            and candidate.center_lon is not None
+        ):
+            return MapPoint(lat=candidate.center_lat, lon=candidate.center_lon)
+    if map_context.camera is not None:
+        return map_context.camera
+    return None
+
+
+def _prompt_radius_m(prompt: str) -> float:
+    match = re.search(
+        r"within\s+(\d+(?:\.\d+)?)\s*(km|kilometer|kilometers|mile|miles|mi)\b",
+        prompt.lower(),
+    )
+    if not match:
+        return 5000.0
+    value = float(match.group(1))
+    unit = match.group(2)
+    if unit in {"mile", "miles", "mi"}:
+        return value * 1609.344
+    return value * 1000.0
+
+
+def _tak_target_type_for_prompt(prompt: str) -> str | None:
+    text = prompt.lower()
+    if _text_has_any(text, ("water", "fresh water", "freshwater", "stream", "river", "spring")):
+        return "freshwater"
+    if _text_has_any(text, ("shelter", "cabin", "hut", "camp", "bivy")):
+        return "shelter"
+    if _text_has_any(text, ("hospital", "clinic", "aid station", "medic", "medical")):
+        return "medical"
+    if _text_has_any(text, ("trailhead", "trail head")):
+        return "trailhead"
+    if _text_has_any(text, ("road", "vehicle access", "extraction", "pickup")):
+        return "road"
+    if _text_has_any(text, ("trail", "path")):
+        return "trail"
+    if _text_has_any(text, ("signal", "comms", "communications", "radio", "tower")):
+        return "signal"
+    if _text_has_any(text, ("ridge", "high ground", "peak", "summit", "overlook")):
+        return "high_ground"
+    if _text_has_any(text, ("landing zone", "lz", "clearing", "open area")):
+        return "lz"
+    if _text_has_any(text, ("bridge", "ford", "crossing")):
+        return "bridge"
+    return None
+
+
+def _tak_target_type_from_active_items(map_context: MapContext | None) -> str | None:
+    if map_context is None:
+        return None
+    for item in map_context.tera_active_items:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("target_type"):
+            return str(metadata["target_type"])
+        if item.get("target_type"):
+            return str(item["target_type"])
+    return None
+
+
+def _tak_route_requested(prompt: str) -> bool:
+    text = prompt.lower()
+    return _text_has_any(
+        text,
+        (
+            "route",
+            "navigate",
+            "navigation",
+            "path",
+            "walk",
+            "move",
+            "go to",
+            "get to",
+            "evac",
+            "evacuation",
+            "approach",
+        ),
+    )
+
+
+def _tak_points_requested(prompt: str) -> bool:
+    text = prompt.lower()
+    return _text_has_any(
+        text,
+        (
+            "mark",
+            "show",
+            "plot",
+            "find",
+            "where",
+            "nearest",
+            "points",
+            "symbols",
+        ),
+    )
+
+
+def _tak_alternate_requested(prompt: str, map_context: MapContext | None) -> bool:
+    text = prompt.lower()
+    return _active_tak_item_count(map_context) > 0 and _text_has_any(
+        text,
+        (
+            "doesn't work",
+            "does not work",
+            "can't walk",
+            "cannot walk",
+            "rework",
+            "reroute",
+            "alternate",
+            "different route",
+            "blocked",
+            "avoid that",
+        ),
+    )
+
+
+def _feature_to_poi(feature: Any) -> dict[str, Any]:
+    if hasattr(feature, "to_poi"):
+        poi = feature.to_poi()
+        if isinstance(poi, dict):
+            return poi
+    if isinstance(feature, dict):
+        return feature
+    return {}
+
+
+def _direct_route_coordinates(
+    origin: MapPoint,
+    target_lat: float,
+    target_lon: float,
+) -> list[list[float]]:
+    mid_lat = (origin.lat + target_lat) / 2.0
+    mid_lon = (origin.lon + target_lon) / 2.0
+    return [
+        [origin.lon, origin.lat],
+        [mid_lon, mid_lat],
+        [target_lon, target_lat],
+    ]
+
+
+def _route_checkpoints(
+    *,
+    uid: str,
+    coordinates: list[list[float]],
+    target_label: str,
+) -> list[TakCotCheckpoint]:
+    if len(coordinates) < 2:
+        return []
+    checkpoints = [
+        TakCotCheckpoint(
+            uid=f"{uid}-start",
+            label="Start",
+            lat=float(coordinates[0][1]),
+            lon=float(coordinates[0][0]),
+        )
+    ]
+    if len(coordinates) > 2:
+        checkpoints.append(
+            TakCotCheckpoint(
+                uid=f"{uid}-cp1",
+                label="Checkpoint 1",
+                lat=float(coordinates[1][1]),
+                lon=float(coordinates[1][0]),
+            )
+        )
+    checkpoints.append(
+        TakCotCheckpoint(
+            uid=f"{uid}-target",
+            label=target_label,
+            lat=float(coordinates[-1][1]),
+            lon=float(coordinates[-1][0]),
+        )
+    )
+    return checkpoints
+
+
+def _route_feature_from_coordinates(
+    *, uid: str, coordinates: list[list[float]], profile: str, target_type: str
+) -> dict[str, Any]:
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": coordinates},
+        "properties": {
+            "route_id": uid,
+            "profile": profile,
+            "target_type": target_type,
+            "algorithm": "osm_nearest_feature_direct_route",
+        },
+    }
+
+
+def _tak_item_uid(prompt: str, origin: MapPoint, target_lat: float, target_lon: float) -> str:
+    digest = hashlib.sha256(
+        f"{prompt}|{origin.lat:.6f}|{origin.lon:.6f}|{target_lat:.6f}|{target_lon:.6f}".encode(
+            "utf-8"
+        )
+    ).hexdigest()[:10]
+    return f"TERA-TAK-{digest}"
+
+
+def _query_tak_targets(
+    *, target_type: str, origin: MapPoint, radius_m: float, limit: int
+) -> list[dict[str, Any]]:
+    try:
+        from routing.osm_sqlite_features import query_osm_features
+    except ImportError:
+        return []
+
+    try:
+        features = query_osm_features(
+            target_type=target_type,
+            origin={"lat": origin.lat, "lon": origin.lon},
+            radius_m=radius_m,
+            limit=limit,
+        )
+    except Exception as exc:  # noqa: BLE001 - local database shape should not break chat.
+        log.warning("tak_cot_osm_query_failed", target_type=target_type, error=str(exc))
+        return []
+    targets: list[dict[str, Any]] = []
+    for feature in features:
+        poi = _feature_to_poi(feature)
+        if poi:
+            targets.append(poi)
+    return targets
+
+
+def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCotPayload:
+    profile = (request.agent_profile or "").strip().lower()
+    if "atak" not in profile and not JETSON_ATAK_MODE.get("active"):
+        return TakCotPayload()
+
+    origin = _origin_from_map_context(request.map_context)
+    target_type = _tak_target_type_for_prompt(request.prompt)
+    alternate_requested = _tak_alternate_requested(request.prompt, request.map_context)
+    if target_type is None and alternate_requested:
+        target_type = _tak_target_type_from_active_items(request.map_context)
+    if origin is None or target_type is None:
+        return TakCotPayload()
+
+    route_requested = _tak_route_requested(request.prompt) or alternate_requested
+    points_requested = _tak_points_requested(request.prompt)
+    if not route_requested and not points_requested:
+        return TakCotPayload()
+
+    limit = 5 if points_requested and not route_requested else 3
+    radius_m = _prompt_radius_m(request.prompt)
+    targets = _query_tak_targets(
+        target_type=target_type,
+        origin=origin,
+        radius_m=radius_m,
+        limit=limit,
+    )
+    if not targets:
+        return TakCotPayload(
+            summary=f"No local {target_type} target found within {radius_m:.0f} m.",
+            algorithm="osm_nearest_feature_lookup",
+        )
+
+    target_index = (
+        1
+        if alternate_requested and len(targets) > 1
+        else 0
+    )
+    target = targets[target_index]
+    target_label = str(target.get("name") or target_type.replace("_", " ").title())
+    target_lat = float(target["lat"])
+    target_lon = float(target["lon"])
+    collection_uid = _tak_item_uid(request.prompt, origin, target_lat, target_lon)
+    items: list[TakCotItem] = []
+
+    if route_requested:
+        coordinates = _direct_route_coordinates(origin, target_lat, target_lon)
+        route_uid = f"{collection_uid}-route"
+        route = _route_feature_from_coordinates(
+            uid=route_uid,
+            coordinates=coordinates,
+            profile="foot_covered",
+            target_type=target_type,
+        )
+        cot_xml = _build_cot_xml(
+            uid=route_uid,
+            cot_type="b-m-r",
+            lat=target_lat,
+            lon=target_lon,
+            route=route,
+        )
+        items.append(
+            TakCotItem(
+                uid=route_uid,
+                item_type="route",
+                cot_type="b-m-r",
+                title=f"TERA route to {target_label}",
+                lat=target_lat,
+                lon=target_lon,
+                coordinates=coordinates,
+                checkpoints=_route_checkpoints(
+                    uid=route_uid,
+                    coordinates=coordinates,
+                    target_label=target_label,
+                ),
+                cot_xml=cot_xml,
+                metadata={
+                    "target_type": target_type,
+                    "target": target,
+                    "distance_m": target.get("distance_m"),
+                    "response_excerpt": response_text[:240],
+                },
+            )
+        )
+    else:
+        for index, poi in enumerate(targets[:5], start=1):
+            point_lat = float(poi["lat"])
+            point_lon = float(poi["lon"])
+            point_label = str(poi.get("name") or f"{target_type} {index}")
+            point_uid = f"{collection_uid}-pt-{index:02d}"
+            point_route = _route_feature_from_coordinates(
+                uid=point_uid,
+                coordinates=[[point_lon, point_lat]],
+                profile="point",
+                target_type=target_type,
+            )
+            cot_xml = _build_cot_xml(
+                uid=point_uid,
+                cot_type="a-f-G-U-C",
+                lat=point_lat,
+                lon=point_lon,
+                route=point_route,
+            )
+            items.append(
+                TakCotItem(
+                    uid=point_uid,
+                    item_type="point",
+                    cot_type="a-f-G-U-C",
+                    title=point_label,
+                    lat=point_lat,
+                    lon=point_lon,
+                    cot_xml=cot_xml,
+                    metadata={
+                        "target_type": target_type,
+                        "target": poi,
+                        "distance_m": poi.get("distance_m"),
+                    },
+                )
+            )
+
+    return TakCotPayload(
+        replace_existing=True,
+        collection_uid=collection_uid,
+        summary=(
+            f"Generated {len(items)} TAK item(s) from local {target_type} query "
+            f"within {radius_m:.0f} m."
+        ),
+        algorithm=(
+            "osm_nearest_feature_direct_route"
+            if route_requested
+            else "osm_nearest_feature_points"
+        ),
+        items=items,
+    )
+
+
+def _response_text_with_tak_cot_summary(text: str, tak_cot: TakCotPayload) -> str:
+    if tak_cot.items:
+        return f"{text}\n\nTAK CoT: {tak_cot.summary}"
+    return text
+
+
 def _normalize_for_match(text: str) -> str:
     expanded = text.lower()
     for canonical, aliases in KEYWORD_EXPANSIONS.items():
@@ -5232,11 +5646,17 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
         """
         You are TERA's live ATAK plugin agent running locally on the Jetson.
         Treat the operator prompt as coming from a Samsung ATAK end-user device
-        over the local IP link. Use terse tactical language, prioritize route
-        intent, terrain constraints, CoT/signature readiness, and what the
-        plugin should render or verify next. Never claim that ATAK map objects,
-        CoT tracks, routes, or live device state exist unless they are present
-        in the supplied map context or request payload.
+        over the local IP link. Optimize for the demo path: nearest water,
+        covered foot movement, reroutes when the operator rejects a route,
+        and quick point/route rendering in TAK. Use terse tactical language.
+        Get to a usable map answer in the fewest turns possible. If origin,
+        objective, and target class are inferable from the prompt and map
+        context, do not ask a clarifying question; state the action and let
+        the Jetson attach TAK CoT output. Ask at most one question only when
+        a route or point set cannot be resolved safely. Never claim that ATAK
+        map objects, CoT tracks, routes, or live device state exist unless
+        they are present in the supplied map context, active TERA TAK item
+        list, or request payload.
         """
     ).strip(),
     "tera-atak-link-test": dedent(
@@ -5711,6 +6131,7 @@ def _build_system_prompt(request: PromptRequest) -> str:
         _format_view_bounds(map_context.view_bounds if map_context else None),
         f"- Imagery source: {(map_context.imagery_source if map_context else None) or 'unknown'}",
         f"- Terrain source: {(map_context.terrain_source if map_context else None) or 'unknown'}",
+        f"- Active TERA TAK items on map: {_active_tak_item_count(map_context) if map_context else 0}",
     ]
     normalized_request_lines = [
         f"- Prompt family: {prompt_schema['family']}",
@@ -5774,10 +6195,21 @@ def _build_system_prompt(request: PromptRequest) -> str:
                         "- Do not present a final manifest-style answer until the "
                         "planner has confirmed mission scope and source families."
                     ),
+                    (
+                        "- In ATAK live mode, be decisive: if the prompt names a target "
+                        "class and the map context gives an origin, answer with the "
+                        "recommended action now. The server will attach any deterministic "
+                        "TAK CoT route or points separately."
+                    ),
+                    (
+                        "- For follow-up rejection like 'that route does not work' or "
+                        "'we cannot walk that way', acknowledge and provide a concise "
+                        "reroute intent instead of asking the operator to restate the mission."
+                    ),
                     "- Do not invent exact trails, water, roads, hazards, or route geometry.",
                     (
                         "- For route-like requests, give assessment, recommended action, "
-                        "and future deterministic actions."
+                        "and only the minimum caveat needed for review."
                     ),
                     "- For alternates, compare fastest, safest, and easiest when feasible.",
                     "- If map context or deterministic tools are missing, say what is needed next.",
@@ -7856,11 +8288,16 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
                 direction="error",
             )
         raise
+    result.tak_cot = _build_tak_cot_payload(request, result.response)
     if mirror:
+        outbound_text = _response_text_with_tak_cot_summary(
+            result.response,
+            result.tak_cot,
+        )
         _append_atak_mirror_event(
             source="tera-agent",
             role="assistant",
-            text=result.response,
+            text=outbound_text,
             model=result.model,
             provider=result.provider,
             direction="outbound",
@@ -7930,11 +8367,15 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                         "provider": "claude",
                     }
                 )
+                result.tak_cot = _build_tak_cot_payload(request, result.response)
                 if mirror:
                     _append_atak_mirror_event(
                         source="tera-agent",
                         role="assistant",
-                        text=result.response,
+                        text=_response_text_with_tak_cot_summary(
+                            result.response,
+                            result.tak_cot,
+                        ),
                         model=result.model,
                         provider="claude",
                         direction="outbound",
@@ -7945,6 +8386,7 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                         "model": result.model,
                         "provider": "claude",
                         "fallbacks": failures,
+                        "tak_cot": result.tak_cot.model_dump(),
                     }
                 )
                 return
@@ -8007,11 +8449,18 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                     )
 
                                 if chunk.get("done"):
+                                    tak_cot = _build_tak_cot_payload(
+                                        request,
+                                        streamed_text,
+                                    )
                                     if mirror:
                                         _append_atak_mirror_event(
                                             source="tera-agent",
                                             role="assistant",
-                                            text=streamed_text,
+                                            text=_response_text_with_tak_cot_summary(
+                                                streamed_text,
+                                                tak_cot,
+                                            ),
                                             model=model,
                                             provider="ollama",
                                             direction="outbound",
@@ -8022,6 +8471,7 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                             "model": model,
                                             "provider": "ollama",
                                             "fallbacks": failures,
+                                            "tak_cot": tak_cot.model_dump(),
                                         }
                                     )
                                     return
