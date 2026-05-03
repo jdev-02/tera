@@ -13,7 +13,7 @@ const state = {
   areaStartPoint: null,
   cameraText: "",
   chatCount: 0,
-  imageryMode: "esri",
+  imageryMode: "ion-satellite",
   terrainMode: "cesium-world",
   mapMode: "2d",
   panelWidth: 520,
@@ -45,6 +45,8 @@ const state = {
   claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
   selectedSourceIds: new Set(),
   packagePlan: null,
+  packageStatusTimer: null,
+  jetsonStorage: null,
   sourceInference: null,
   sourceConfirmed: false,
   workflowStageIndex: 0,
@@ -130,6 +132,20 @@ const els = {
   packageStatus: document.getElementById("packageStatus"),
   packageManifest: document.getElementById("packageManifest"),
   downloadManifestLink: document.getElementById("downloadManifestLink"),
+  jetsonStorageCard: document.getElementById("jetsonStorageCard"),
+  storageRoot: document.getElementById("storageRoot"),
+  storageFitChip: document.getElementById("storageFitChip"),
+  storageMeterUsed: document.getElementById("storageMeterUsed"),
+  storageMeterReserve: document.getElementById("storageMeterReserve"),
+  storageFree: document.getElementById("storageFree"),
+  storageUsable: document.getElementById("storageUsable"),
+  storageReserve: document.getElementById("storageReserve"),
+  storageEstimate: document.getElementById("storageEstimate"),
+  packageExecutionActions: document.getElementById("packageExecutionActions"),
+  downloadToJetsonBtn: document.getElementById("downloadToJetsonBtn"),
+  refreshPackageStatusBtn: document.getElementById("refreshPackageStatusBtn"),
+  packageExecutionStatus: document.getElementById("packageExecutionStatus"),
+  packageArtifacts: document.getElementById("packageArtifacts"),
 };
 
 window.__TERA_SOURCE_STATE = state;
@@ -159,6 +175,11 @@ const IMAGERY_FALLBACKS = {
     credit: "Esri World Imagery",
     label: "Esri World Imagery",
   },
+  "usgs-imagery": {
+    url: "https://basemap.nationalmap.gov/ArcGIS/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+    credit: "USGS The National Map",
+    label: "USGS Imagery Only",
+  },
   osm: {
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     credit: "OpenStreetMap contributors",
@@ -167,7 +188,8 @@ const IMAGERY_FALLBACKS = {
 };
 
 const FALLBACK_PRIMARY_STREAM_SOURCE_IDS = [
-  "esri_world_imagery",
+  "cesium_world_imagery",
+  "usgs_imagery_only",
   "cesium_world_terrain",
   "osm_basemap",
 ];
@@ -408,10 +430,57 @@ const FALLBACK_SOURCE_CATALOG = [
     name: "Esri World Imagery",
     provider: "Esri ArcGIS Online",
     category: "imagery",
-    purpose: "Streamable visual basemap for AO inspection and imagery context.",
+    purpose: "Optional licensed imagery stream when an Esri account is available.",
     stream_status: "streamable",
-    download_status: "manifest-only",
+    download_status: "export-tiles-with-account",
     stream_layer: "esri",
+  },
+  {
+    id: "cesium_world_imagery",
+    name: "Cesium World Imagery",
+    provider: "Cesium ion",
+    category: "imagery",
+    purpose: "Token-backed imagery preview stream using the available Cesium token.",
+    stream_status: "streamable-with-token",
+    download_status: "stream-only-no-offline-copy",
+    stream_layer: "ion-satellite",
+  },
+  {
+    id: "cesium_ion_archive",
+    name: "Cesium ion Offline Archive",
+    provider: "Cesium ion",
+    category: "imagery-terrain-archive",
+    purpose: "Licensed Cesium ion archive or AO clip downloaded to the Jetson for local preview and metadata queries.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "usgs_imagery_only",
+    name: "USGS Imagery Only",
+    provider: "USGS The National Map",
+    category: "imagery",
+    purpose: "Free U.S. imagery tile stream and AO tile cache for offline visual context.",
+    stream_status: "streamable",
+    download_status: "cache-tiles",
+    stream_layer: "usgs-imagery",
+  },
+  {
+    id: "nrl_naip_conus",
+    name: "NRL NAIP (CONUS)",
+    provider: "NRL / USDA NAIP",
+    category: "imagery",
+    purpose: "Free CONUS NAIP tile stream from the WinTAK imagery source folder for high-detail visual review.",
+    stream_status: "streamable",
+    download_status: "cache-tiles",
+  },
+  {
+    id: "esri_world_elevation",
+    name: "Esri World Elevation Terrain",
+    provider: "Esri ArcGIS Online / Living Atlas",
+    category: "terrain",
+    purpose: "Primary queryable terrain source for DEM export, slope, hydrology, cost surfaces, and viewshed.",
+    stream_status: "queryable-online",
+    download_status: "download-required",
   },
   {
     id: "cesium_world_terrain",
@@ -420,17 +489,8 @@ const FALLBACK_SOURCE_CATALOG = [
     category: "terrain-display",
     purpose: "Streamable 3D terrain preview for landform awareness.",
     stream_status: "streamable-with-token",
-    download_status: "cache-via-cesium-pipeline",
+    download_status: "stream-only-no-offline-copy",
     stream_layer: "cesium-world",
-  },
-  {
-    id: "esri_world_elevation",
-    name: "Esri World Elevation Terrain",
-    provider: "Esri ArcGIS Online / Living Atlas",
-    category: "terrain",
-    purpose: "Queryable elevation terrain fallback for AO sampling, slope, hillshade, and viewshed preflight.",
-    stream_status: "queryable-online",
-    download_status: "download-required",
   },
   {
     id: "osm_basemap",
@@ -462,12 +522,21 @@ const FALLBACK_SOURCE_CATALOG = [
   },
   {
     id: "copernicus_dem",
-    name: "Copernicus DEM",
+    name: "Copernicus DEM GLO-30 COG",
     provider: "Copernicus",
     category: "terrain",
-    purpose: "Global elevation fallback for slope, viewshed, and terrain-cost analysis.",
+    purpose: "No-account public S3 COG terrain tiles for slope, viewshed, and terrain-cost analysis.",
     stream_status: "not-streamed",
     download_status: "download-required",
+  },
+  {
+    id: "dted_earth_explorer",
+    name: "DTED from USGS EarthExplorer",
+    provider: "USGS EarthExplorer",
+    category: "terrain",
+    purpose: "Operator-staged DTED cells imported to the Jetson and converted to GeoTIFF when GDAL is available.",
+    stream_status: "not-streamed",
+    download_status: "manual-stage-import",
   },
   {
     id: "nlcd",
@@ -517,9 +586,9 @@ const FALLBACK_SOURCE_CATALOG = [
   {
     id: "sentinel_2",
     name: "Sentinel-2 Multispectral",
-    provider: "ESA Copernicus",
+    provider: "ESA Copernicus / Element 84 Earth Search",
     category: "imagery-analysis",
-    purpose: "Analysis imagery for vegetation, water, burn, and surface-condition indices.",
+    purpose: "Free downloadable COG imagery for offline visual context, vegetation, water, burn, and surface-condition indices.",
     stream_status: "not-streamed",
     download_status: "download-required",
   },
@@ -638,6 +707,66 @@ async function fetchJson(url, options) {
     throw new Error(data.detail || `${response.status} ${response.statusText}`);
   }
   return data;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let scaled = Math.max(0, bytes);
+  let index = 0;
+  while (scaled >= 1024 && index < units.length - 1) {
+    scaled /= 1024;
+    index += 1;
+  }
+  const precision = index <= 1 ? 0 : 1;
+  return `${scaled.toFixed(precision)} ${units[index]}`;
+}
+
+function renderJetsonStorage(storage = state.jetsonStorage, estimateBytes = null, storageFit = true, warning = "") {
+  if (!storage) {
+    els.storageRoot.textContent = "Jetson storage unavailable";
+    setChip(els.storageFitChip, "Unknown", "warn");
+    return;
+  }
+  state.jetsonStorage = storage;
+  const total = Number(storage.total_bytes || 0);
+  const used = Number(storage.used_bytes || 0);
+  const reserved = Number(storage.reserved_bytes || 0);
+  const free = Number(storage.free_bytes || 0);
+  const usable = Number(storage.usable_bytes || 0);
+  const estimate = Number(estimateBytes || 0);
+  const usedPct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
+  const reservePct = total > 0 ? Math.min(100, (reserved / total) * 100) : 0;
+
+  els.storageRoot.textContent = storage.package_root || "Jetson package root";
+  els.storageFree.textContent = formatBytes(free);
+  els.storageUsable.textContent = formatBytes(usable);
+  els.storageReserve.textContent = formatBytes(reserved);
+  els.storageEstimate.textContent = estimate ? formatBytes(estimate) : "--";
+  els.storageMeterUsed.style.width = `${usedPct}%`;
+  els.storageMeterReserve.style.left = `${Math.max(0, 100 - reservePct)}%`;
+  els.storageMeterReserve.style.width = `${reservePct}%`;
+
+  if (estimate && !storageFit) {
+    setChip(els.storageFitChip, "No room", "bad");
+    els.storageRoot.textContent = warning || "Package estimate exceeds Jetson usable storage";
+  } else if (estimate) {
+    setChip(els.storageFitChip, "Fits", "good");
+  } else {
+    setChip(els.storageFitChip, "Ready", usable > 0 ? "good" : "warn");
+  }
+}
+
+async function loadJetsonStorage() {
+  try {
+    const storage = await fetchJson("/api/storage");
+    renderJetsonStorage(storage);
+    return storage;
+  } catch (error) {
+    els.storageRoot.textContent = getErrorMessage(error);
+    setChip(els.storageFitChip, "Storage error", "bad");
+    return null;
+  }
 }
 
 function normalizeSearchText(value) {
@@ -1651,9 +1780,13 @@ function syncModelSelects(sourceSelect, targetSelect) {
   });
 }
 
+function hasClaudeProviderCredential() {
+  return Boolean(state.claudeApiKey || state.serverClaudeKeyAvailable);
+}
+
 function applyProviderVisibility() {
   const isClaude = state.llmProvider === "claude";
-  const hasClaudeKey = Boolean(state.claudeApiKey || state.serverClaudeKeyAvailable);
+  const hasClaudeKey = hasClaudeProviderCredential();
   els.providerSelect.value = state.llmProvider;
   els.providerLocalModelRow.classList.toggle("hidden", isClaude);
   els.providerClaudeModelRow.classList.toggle("hidden", !isClaude);
@@ -1681,7 +1814,7 @@ function applyProviderVisibility() {
 function applyProviderSelection() {
   state.llmProvider = els.providerSelect.value;
   state.claudeApiKey = els.claudeApiKeyInput.value.trim();
-  if (state.llmProvider === "claude" && !state.claudeApiKey && !state.serverClaudeKeyAvailable) {
+  if (state.llmProvider === "claude" && !hasClaudeProviderCredential()) {
     applyProviderVisibility();
     els.providerStatus.textContent = "Claude API key required here or ANTHROPIC_API_KEY on the server";
     setModelProviderMenuOpen(true);
@@ -1921,8 +2054,12 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   const questions = [];
   const rationale = [`Planner API unavailable: ${plannerErrorMessage}. Using embedded deterministic source rules.`];
 
-  appendUniqueSourceIds(optionalIds, "esri_world_imagery", "osm_basemap");
-  rationale.push("Esri imagery and OSM basemap stay as lightweight preview/context layers.");
+  appendUniqueSourceIds(requiredIds, isUsContext ? "naip" : "sentinel_2");
+  appendUniqueSourceIds(optionalIds, "cesium_world_imagery", "osm_basemap");
+  if (isUsContext) {
+    appendUniqueSourceIds(optionalIds, "usgs_imagery_only", "nrl_naip_conus");
+  }
+  rationale.push("NAIP is the high-detail U.S. imagery default; Sentinel-2 remains the global free imagery fallback and Cesium imagery stays as the token-backed preview stream.");
 
   const needsRouting = textHasAny(promptText, [
     "route",
@@ -1947,6 +2084,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     "exposed",
     "viewshed",
   ]);
+  const needsDted = textHasAny(promptText, ["dted", "dt2", "earth explorer", "earthexplorer"]);
   const needsWater = textHasAny(promptText, ["water", "stream", "river", "spring", "lake", "potable", "hydrate"]);
   const needsLandcover = needsRouting || textHasAny(promptText, [
     "cover",
@@ -1995,16 +2133,36 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     "changed",
     "cloud",
   ]);
+  const needsCesiumArchive = promptText.includes("cesium") && textHasAny(promptText, [
+    "download",
+    "offline",
+    "archive",
+    "export",
+    "jetson",
+    "local",
+  ]);
 
+  if (needsCesiumArchive) {
+    appendUniqueSourceIds(requiredIds, "cesium_ion_archive");
+    rationale.push("Cesium offline use is handled through ion archive/export downloads to the Jetson, not by scraping World stream tiles.");
+  }
   if (needsRouting) {
     appendUniqueSourceIds(requiredIds, "osm_extract");
     rationale.push("OSM PBF is required for the local routable graph and feature lookup.");
   }
   if (needsTerrain) {
-    appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dep" : "copernicus_dem");
-    appendUniqueSourceIds(requiredIds, "esri_world_elevation");
+    appendUniqueSourceIds(requiredIds, "copernicus_dem");
+    if (isUsContext) {
+      appendUniqueSourceIds(optionalIds, "dted_earth_explorer", "usgs_3dep");
+    } else {
+      appendUniqueSourceIds(optionalIds, "dted_earth_explorer");
+    }
     appendUniqueSourceIds(optionalIds, "cesium_world_terrain");
-    rationale.push("Analysis DEM plus queryable Esri terrain fallback is required for slope, exposure, hydrology, and cost surfaces.");
+    rationale.push("Copernicus GLO-30 COGs are the no-account terrain default; staged EarthExplorer DTED supplements it when available.");
+  }
+  if (needsDted) {
+    appendUniqueSourceIds(requiredIds, "dted_earth_explorer");
+    rationale.push("DTED was explicitly requested, so staged EarthExplorer DTED import is included; set DTED_SOURCE_DIR on the Jetson before executing the package.");
   }
   if (needsLandcover) {
     appendUniqueSourceIds(requiredIds, isUsContext ? "nlcd" : "esa_worldcover");
@@ -2015,7 +2173,6 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     if (isUsContext) {
       appendUniqueSourceIds(optionalIds, "nwis");
     }
-    appendUniqueSourceIds(optionalIds, "sentinel_2");
     rationale.push("Hydrography is required for water-source and drainage queries.");
   }
   if (needsSar) {
@@ -2044,13 +2201,15 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     appendUniqueSourceIds(requiredIds, "viewshed_surfaces");
     appendUniqueSourceIds(optionalIds, isUsContext ? "fcc_towers" : "osm_towers", "osm_towers");
     if (!needsTerrain) {
-      appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dep" : "copernicus_dem");
-      appendUniqueSourceIds(requiredIds, "esri_world_elevation");
+      appendUniqueSourceIds(requiredIds, "copernicus_dem");
+      if (isUsContext) {
+        appendUniqueSourceIds(optionalIds, "dted_earth_explorer", "usgs_3dep");
+      }
     }
     rationale.push("Signal planning requires DEM-derived viewsheds plus tower or high-ground candidates.");
   }
   if (needsCurrentImagery && !needsWater && !needsHazards) {
-    appendUniqueSourceIds(optionalIds, "sentinel_2");
+    appendUniqueSourceIds(optionalIds, "landsat_collection_2");
     if (isUsContext) {
       appendUniqueSourceIds(optionalIds, "naip");
     }
@@ -2089,7 +2248,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   }
 
   const selectedIds = [];
-  const previewIds = optionalIds.filter((sourceId) => ["esri_world_imagery", "osm_basemap"].includes(sourceId));
+  const previewIds = optionalIds.filter((sourceId) => ["cesium_world_imagery", "usgs_imagery_only", "osm_basemap"].includes(sourceId));
   appendUniqueSourceIds(selectedIds, ...requiredIds, ...previewIds);
   const missionSummary = missionText.length > 220 ? `${missionText.slice(0, 217)}...` : missionText;
 
@@ -2262,6 +2421,16 @@ function hidePackageOutput() {
   els.packageManifest.textContent = "";
   els.downloadManifestLink.classList.add("hidden");
   els.downloadManifestLink.removeAttribute("href");
+  els.packageExecutionActions.classList.add("hidden");
+  els.downloadToJetsonBtn.disabled = true;
+  els.packageExecutionStatus.classList.add("hidden");
+  els.packageExecutionStatus.textContent = "";
+  els.packageArtifacts.classList.add("hidden");
+  els.packageArtifacts.textContent = "";
+  if (state.packageStatusTimer) {
+    window.clearInterval(state.packageStatusTimer);
+    state.packageStatusTimer = null;
+  }
 }
 
 async function loadDataSources() {
@@ -2720,16 +2889,97 @@ async function buildSourcePackage() {
     });
     state.packagePlan = data;
     const warningText = data.warnings?.length ? ` Warnings: ${data.warnings.join(" ")}` : "";
-    els.packageStatus.textContent = `Manifest ${data.package_id} ready with ${data.sources.length} sources.${warningText}`;
+    renderJetsonStorage(data.storage, data.estimated_bytes, data.storage_fit, data.storage_warning);
+    const fitText = data.storage_fit ? " Jetson storage check passed." : ` ${data.storage_warning || "Jetson storage check failed."}`;
+    els.packageStatus.textContent = `Manifest ${data.package_id} ready with ${data.sources.length} sources.${fitText}${warningText}`;
     els.packageManifest.textContent = JSON.stringify(data.manifest, null, 2);
     els.packageManifest.classList.remove("hidden");
     els.downloadManifestLink.href = data.download_url;
     els.downloadManifestLink.download = `${data.package_name}.json`;
     els.downloadManifestLink.classList.remove("hidden");
+    els.packageExecutionActions.classList.remove("hidden");
+    els.downloadToJetsonBtn.disabled = !data.storage_fit;
+    els.refreshPackageStatusBtn.disabled = false;
   } catch (error) {
     els.packageStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     updateSourceCount();
+  }
+}
+
+function renderPackageExecutionStatus(status) {
+  const rows = [];
+  rows.push(["State", status.state || "unknown"]);
+  rows.push(["Bytes", formatBytes(status.bytes_written || 0)]);
+  rows.push(["Message", status.message || ""]);
+  for (const operation of status.operations || []) {
+    const label = operation.source_name || operation.id || "source";
+    const value = `${operation.state || "planned"} ${operation.bytes_written ? `(${formatBytes(operation.bytes_written)})` : ""}`;
+    rows.push([label, value]);
+  }
+  els.packageExecutionStatus.innerHTML = "";
+  for (const [label, value] of rows) {
+    const left = document.createElement("span");
+    left.textContent = label;
+    const right = document.createElement("strong");
+    right.textContent = value;
+    els.packageExecutionStatus.append(left, right);
+  }
+  els.packageExecutionStatus.classList.remove("hidden");
+  if (status.storage) {
+    renderJetsonStorage(status.storage, state.packagePlan?.estimated_bytes, state.packagePlan?.storage_fit, state.packagePlan?.storage_warning);
+  }
+}
+
+async function refreshPackageArtifacts() {
+  if (!state.packagePlan?.artifacts_url) {
+    return null;
+  }
+  const artifacts = await fetchJson(state.packagePlan.artifacts_url);
+  els.packageArtifacts.textContent = JSON.stringify(artifacts, null, 2);
+  els.packageArtifacts.classList.remove("hidden");
+  return artifacts;
+}
+
+async function refreshPackageStatus() {
+  if (!state.packagePlan?.status_url) {
+    return null;
+  }
+  const status = await fetchJson(state.packagePlan.status_url);
+  renderPackageExecutionStatus(status);
+  if (status.state === "succeeded" || status.state === "failed") {
+    if (state.packageStatusTimer) {
+      window.clearInterval(state.packageStatusTimer);
+      state.packageStatusTimer = null;
+    }
+    els.downloadToJetsonBtn.disabled = status.state === "succeeded";
+    await refreshPackageArtifacts().catch(() => null);
+  }
+  return status;
+}
+
+async function downloadPackageToJetson() {
+  if (!state.packagePlan?.execute_url) {
+    els.packageStatus.textContent = "Build the manifest before starting a Jetson download.";
+    return;
+  }
+  els.downloadToJetsonBtn.disabled = true;
+  els.packageStatus.textContent = "Starting Jetson download job...";
+  try {
+    const response = await fetchJson(state.packagePlan.execute_url, { method: "POST" });
+    renderPackageExecutionStatus(response);
+    els.packageStatus.textContent = response.message || "Jetson download job started.";
+    await refreshPackageStatus();
+    if (!state.packageStatusTimer) {
+      state.packageStatusTimer = window.setInterval(() => {
+        refreshPackageStatus().catch((error) => {
+          els.packageStatus.textContent = getErrorMessage(error);
+        });
+      }, 2000);
+    }
+  } catch (error) {
+    els.downloadToJetsonBtn.disabled = false;
+    els.packageStatus.textContent = getErrorMessage(error);
   }
 }
 
@@ -2890,7 +3140,7 @@ async function submitPrompt(event) {
     let result = null;
 
     if (provider === "claude") {
-      if (state.claudeApiKey) {
+      if (hasClaudeProviderCredential()) {
         try {
           result = await streamAssistantProvider({
             assistantMessage,
@@ -2905,7 +3155,7 @@ async function submitPrompt(event) {
         } catch (error) {
           claudeError = getErrorMessage(error);
           console.warn("Claude request failed; trying local Ollama fallback.", claudeError);
-          els.providerStatus.textContent = "Claude request failed. Check key, model access, or network.";
+          els.providerStatus.textContent = "Claude request failed; trying detected local Ollama.";
           els.requestStatus.textContent = "Trying local model fallback...";
         }
       } else {
@@ -3017,13 +3267,22 @@ async function resolveImageryProvider() {
     };
   }
 
-  if (!hasCesiumIonToken()) {
-    state.imageryMode = "esri";
-    els.imagerySelect.value = "esri";
+  if (state.imageryMode === "usgs-imagery") {
     return {
-      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
-      label: IMAGERY_FALLBACKS.esri.label,
-      shortLabel: "Esri imagery",
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS["usgs-imagery"]),
+      label: IMAGERY_FALLBACKS["usgs-imagery"].label,
+      shortLabel: "USGS imagery",
+      usingIon: false,
+    };
+  }
+
+  if (!hasCesiumIonToken()) {
+    state.imageryMode = "usgs-imagery";
+    els.imagerySelect.value = "usgs-imagery";
+    return {
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS["usgs-imagery"]),
+      label: IMAGERY_FALLBACKS["usgs-imagery"].label,
+      shortLabel: "USGS imagery",
       usingIon: false,
       fallbackReason: "Cesium ion token is not configured for World Imagery.",
     };
@@ -3039,13 +3298,13 @@ async function resolveImageryProvider() {
       usingIon: true,
     };
   } catch (error) {
-    console.warn("Cesium imagery failed; using Esri fallback.", error);
-    state.imageryMode = "esri";
-    els.imagerySelect.value = "esri";
+    console.warn("Cesium imagery failed; using USGS imagery fallback.", error);
+    state.imageryMode = "usgs-imagery";
+    els.imagerySelect.value = "usgs-imagery";
     return {
-      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
-      label: IMAGERY_FALLBACKS.esri.label,
-      shortLabel: "Esri imagery",
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS["usgs-imagery"]),
+      label: IMAGERY_FALLBACKS["usgs-imagery"].label,
+      shortLabel: "USGS imagery",
       usingIon: false,
       fallbackReason: "Cesium World Imagery request failed.",
     };
@@ -3966,10 +4225,12 @@ function onPromptInputKeyDown(event) {
 }
 
 async function streamSelectedSources() {
-  if (state.selectedSourceIds.has("esri_world_imagery")) {
-    state.imageryMode = "esri";
-  } else if (state.selectedSourceIds.has("cesium_world_imagery") && hasCesiumIonToken()) {
+  if (state.selectedSourceIds.has("cesium_world_imagery") && hasCesiumIonToken()) {
     state.imageryMode = "ion-satellite";
+  } else if (state.selectedSourceIds.has("usgs_imagery_only")) {
+    state.imageryMode = "usgs-imagery";
+  } else if (state.selectedSourceIds.has("esri_world_imagery")) {
+    state.imageryMode = "esri";
   } else if (state.selectedSourceIds.has("osm_basemap")) {
     state.imageryMode = "osm";
   }
@@ -4048,6 +4309,12 @@ async function init() {
     els.clearAreaBtn.addEventListener("click", clearSelectedArea);
     els.streamSelectedBtn.addEventListener("click", streamSelectedSources);
     els.buildPackageBtn.addEventListener("click", buildSourcePackage);
+    els.downloadToJetsonBtn.addEventListener("click", downloadPackageToJetson);
+    els.refreshPackageStatusBtn.addEventListener("click", () => {
+      refreshPackageStatus().catch((error) => {
+        els.packageStatus.textContent = getErrorMessage(error);
+      });
+    });
     els.imagerySelect.addEventListener("change", async (event) => {
       state.imageryMode = event.target.value;
       await buildViewer();
@@ -4073,6 +4340,7 @@ async function init() {
   await loadRuntimeConfig();
   await loadModels();
   await loadDataSources();
+  await loadJetsonStorage();
   await buildViewer();
 }
 

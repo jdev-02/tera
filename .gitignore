@@ -34,6 +34,7 @@ data/runtime/
 data/cache/
 data/extracts/*.osm.pbf
 data/dem/*.tif
+llm_dev_kmh/offline_packages/
 *.zip
 
 .archive/
