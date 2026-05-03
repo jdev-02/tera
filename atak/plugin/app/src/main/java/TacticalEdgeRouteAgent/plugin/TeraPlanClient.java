@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.OutputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -38,6 +39,12 @@ final class TeraPlanClient {
                     return;
                 }
 
+                String healthError = checkHealth(endpoint.trim());
+                if (healthError != null) {
+                    callback.onComplete(false, healthError);
+                    return;
+                }
+
                 URL url = new URL(endpoint.trim());
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("POST");
@@ -55,27 +62,74 @@ final class TeraPlanClient {
                 }
 
                 int code = connection.getResponseCode();
-                BufferedReader reader = new BufferedReader(new InputStreamReader(
-                        code >= 200 && code < 300
-                                ? connection.getInputStream()
-                                : connection.getErrorStream(),
-                        StandardCharsets.UTF_8));
-                StringBuilder result = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    result.append(line).append('\n');
-                }
-
-                callback.onComplete(code >= 200 && code < 300,
-                        responseMessage(code, result.toString()));
+                PromptResult result = parsePromptResult(code, readResponse(connection, code));
+                callback.onComplete(result.ok, result.message);
+            } catch (SocketTimeoutException e) {
+                callback.onComplete(false, "Jetson timed out. Check WiFi, port 8080, and whether Gemma is still generating.");
             } catch (Exception e) {
-                callback.onComplete(false, e.getClass().getSimpleName() + ": " + e.getMessage());
+                callback.onComplete(false, friendlyException(e));
             } finally {
                 if (connection != null) {
                     connection.disconnect();
                 }
             }
         });
+    }
+
+    private static String readResponse(HttpURLConnection connection, int code)
+            throws java.io.IOException {
+        java.io.InputStream stream = code >= 200 && code < 300
+                ? connection.getInputStream()
+                : connection.getErrorStream();
+        if (stream == null) {
+            return "";
+        }
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                stream, StandardCharsets.UTF_8));
+        StringBuilder result = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            result.append(line).append('\n');
+        }
+        return result.toString();
+    }
+
+    private static String checkHealth(String endpoint) {
+        HttpURLConnection connection = null;
+        try {
+            URL healthUrl = new URL(healthEndpoint(endpoint));
+            connection = (HttpURLConnection) healthUrl.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(CONNECT_TIMEOUT_MS);
+
+            int code = connection.getResponseCode();
+            if (code >= 200 && code < 300) {
+                return null;
+            }
+            return "Jetson health check failed: HTTP " + code;
+        } catch (SocketTimeoutException e) {
+            return "Jetson health check timed out. Check same WiFi, Jetson IP, and port 8080.";
+        } catch (Exception e) {
+            return "Cannot reach Jetson health endpoint. " + friendlyException(e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static String healthEndpoint(String endpoint) {
+        int promptPath = endpoint.indexOf("/api/prompt");
+        if (promptPath >= 0) {
+            return endpoint.substring(0, promptPath) + "/health";
+        }
+        int lastSlash = endpoint.indexOf("/", endpoint.indexOf("://") + 3);
+        if (lastSlash >= 0) {
+            return endpoint.substring(0, lastSlash) + "/health";
+        }
+        return endpoint + "/health";
     }
 
     private static String buildPromptPayload(String prompt, JSONObject mapContext)
@@ -91,17 +145,29 @@ final class TeraPlanClient {
         return payload.toString();
     }
 
-    private static String responseMessage(int code, String body) {
+    private static PromptResult parsePromptResult(int code, String body) {
         try {
             JSONObject json = new JSONObject(body);
             String response = json.optString("response", "");
             if (!response.trim().isEmpty()) {
-                return response.trim();
+                return new PromptResult(code >= 200 && code < 300, response.trim());
+            }
+            if (code >= 200 && code < 300) {
+                return new PromptResult(false,
+                        "Jetson returned HTTP " + code + " but no response field.");
             }
         } catch (JSONException ignored) {
             // Fall back to the raw body if the server returns non-JSON.
         }
-        return "HTTP " + code + "\n" + truncate(body);
+        return new PromptResult(false, "HTTP " + code + "\n" + truncate(body));
+    }
+
+    private static String friendlyException(Exception e) {
+        String message = e.getMessage();
+        String suffix = message == null || message.trim().isEmpty()
+                ? ""
+                : ": " + message;
+        return e.getClass().getSimpleName() + suffix;
     }
 
     private static String truncate(String value) {
@@ -109,5 +175,15 @@ final class TeraPlanClient {
             return value;
         }
         return value.substring(0, 1200) + "\n...";
+    }
+
+    private static final class PromptResult {
+        final boolean ok;
+        final String message;
+
+        PromptResult(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
+        }
     }
 }
