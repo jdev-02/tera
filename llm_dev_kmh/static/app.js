@@ -41,7 +41,7 @@ const state = {
   localModelAvailable: false,
   localModelDetail: "",
   serverClaudeKeyAvailable: false,
-  llmProvider: sessionStorage.getItem("teraLlmProvider") || "ollama",
+  llmProvider: sessionStorage.getItem("teraLlmProvider") || "auto",
   claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
   selectedSourceIds: new Set(),
   packagePlan: null,
@@ -1786,15 +1786,29 @@ function hasClaudeProviderCredential() {
 
 function applyProviderVisibility() {
   const isClaude = state.llmProvider === "claude";
+  const isAuto = state.llmProvider === "auto";
   const hasClaudeKey = hasClaudeProviderCredential();
   els.providerSelect.value = state.llmProvider;
   els.providerLocalModelRow.classList.toggle("hidden", isClaude);
-  els.providerClaudeModelRow.classList.toggle("hidden", !isClaude);
-  els.providerClaudeKeyRow.classList.toggle("hidden", !isClaude);
+  els.providerClaudeModelRow.classList.toggle("hidden", !(isClaude || isAuto));
+  els.providerClaudeKeyRow.classList.toggle("hidden", !(isClaude || isAuto));
   if (state.claudeApiKey) {
     els.claudeApiKeyInput.value = state.claudeApiKey;
   }
-  if (isClaude) {
+  if (isAuto) {
+    const localLabel = els.modelSelect.value || els.topModelSelect.value || state.config?.default_model || "local model";
+    const tone = hasClaudeKey || state.localModelAvailable ? "good" : "warn";
+    setModelProviderButton(hasClaudeKey ? "Auto: Claude primary" : "Auto: local fallback", tone);
+    if (hasClaudeKey && state.localModelAvailable) {
+      els.providerStatus.textContent = `Claude primary; local fallback: ${localLabel}`;
+    } else if (hasClaudeKey) {
+      els.providerStatus.textContent = "Claude primary; local model unavailable";
+    } else if (state.localModelAvailable) {
+      els.providerStatus.textContent = `Claude key missing; using local fallback: ${localLabel}`;
+    } else {
+      els.providerStatus.textContent = "Claude key and local model unavailable; deterministic planner remains active";
+    }
+  } else if (isClaude) {
     setModelProviderButton(`Claude: ${els.claudeModelSelect.value}`, hasClaudeKey ? "good" : "warn");
     els.providerStatus.textContent = state.claudeApiKey
       ? "Claude API key loaded for this browser session"
@@ -1829,7 +1843,7 @@ function applyProviderSelection() {
     sessionStorage.removeItem("teraClaudeApiKey");
   }
 
-  if (state.llmProvider === "ollama") {
+  if (state.llmProvider === "ollama" || state.llmProvider === "auto") {
     els.modelSelect.value = els.topModelSelect.value;
   }
   applyProviderVisibility();
@@ -2729,9 +2743,16 @@ async function loadRuntimeConfig() {
   state.config = await fetchJson("/api/config");
   state.cesiumIonTokenAvailable = hasCesiumIonToken();
   state.serverClaudeKeyAvailable = Boolean(state.config.anthropic_api_key_configured);
+  if (!sessionStorage.getItem("teraLlmProvider")) {
+    state.llmProvider = state.config.default_provider || (state.serverClaudeKeyAvailable ? "auto" : "ollama");
+  }
   setChip(els.tokenChip, "Map stream checking");
+  els.providerSelect.value = state.llmProvider;
   els.claudeModelSelect.value = state.config.claude_default_model || els.claudeModelSelect.value;
-  setModelProviderButton(`Default model: ${state.config.default_model}`, "warn");
+  setModelProviderButton(
+    state.llmProvider === "auto" ? "Auto: Claude primary" : `Default model: ${state.config.default_model}`,
+    state.serverClaudeKeyAvailable ? "good" : "warn",
+  );
   state.imageryMode = "esri";
   state.terrainMode = state.cesiumIonTokenAvailable ? "cesium-world" : "ellipsoid";
   els.imagerySelect.value = state.imageryMode;
@@ -2984,6 +3005,9 @@ async function downloadPackageToJetson() {
 }
 
 function providerDisplayName(provider) {
+  if (provider === "auto") {
+    return "auto provider";
+  }
   return provider === "claude" ? "Claude" : "local Ollama";
 }
 
@@ -3001,7 +3025,8 @@ async function resolveLocalModelForFallback() {
 async function streamAssistantProvider({
   assistantMessage,
   provider,
-  model,
+  localModel,
+  cloudModel,
   finalPrompt,
   system,
   agentProfile,
@@ -3012,13 +3037,20 @@ async function streamAssistantProvider({
   const providerLabel = providerDisplayName(provider);
   const baseMeta = metaPrefix ? `${metaPrefix} | ${providerLabel}` : providerLabel;
   let streamedText = "";
-  let resolvedModel = model || "default model";
+  let resolvedModel = provider === "ollama"
+    ? localModel || "auto-detect"
+    : cloudModel || localModel || "default model";
+  let resolvedProvider = provider;
+  const selectedLocalModel = localModel || "";
+  const selectedCloudModel = cloudModel || "";
 
   setMessagePending(assistantMessage, `${providerLabel} is thinking`);
   ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${resolvedModel} | streaming`);
   els.requestStatus.textContent = provider === "claude"
     ? "Streaming Claude response..."
-    : "Streaming local Ollama response...";
+    : provider === "auto"
+      ? "Trying Claude, then local model if needed..."
+      : "Streaming local Ollama response...";
 
   const response = await fetch("/api/prompt/stream", {
     method: "POST",
@@ -3026,10 +3058,10 @@ async function streamAssistantProvider({
     body: JSON.stringify({
       prompt: finalPrompt,
       system: system || null,
-      model: provider === "claude" ? null : model || null,
+      model: provider === "claude" ? null : selectedLocalModel || null,
       llm_provider: provider,
-      cloud_model: provider === "claude" ? model || null : null,
-      cloud_api_key: provider === "claude" ? state.claudeApiKey || null : null,
+      cloud_model: provider === "ollama" ? null : selectedCloudModel || null,
+      cloud_api_key: provider === "ollama" ? null : state.claudeApiKey || null,
       agent_profile: agentProfile,
       map_context: mapContext,
       source_context: sourceContext,
@@ -3044,7 +3076,8 @@ async function streamAssistantProvider({
   await readEventStream(response, (eventData) => {
     if (eventData.type === "start") {
       resolvedModel = eventData.model || resolvedModel;
-      ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${resolvedModel} | streaming`);
+      resolvedProvider = eventData.provider || resolvedProvider;
+      ensureMessageMeta(assistantMessage, `provider: ${providerDisplayName(resolvedProvider)} | model: ${resolvedModel} | streaming`);
       return;
     }
     if (eventData.type === "token") {
@@ -3058,11 +3091,19 @@ async function streamAssistantProvider({
       els.requestStatus.textContent = eventData.detail || `Streaming ${providerLabel} response...`;
       return;
     }
+    if (eventData.type === "fallback") {
+      const reason = eventData.reason ? ` ${eventData.reason}` : "";
+      els.providerStatus.textContent = eventData.detail || "Trying fallback model provider.";
+      els.requestStatus.textContent = eventData.detail || "Trying fallback model provider.";
+      ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | fallback:${reason}`);
+      return;
+    }
     if (eventData.type === "error") {
       throw new Error(eventData.detail || `${providerLabel} request failed.`);
     }
     if (eventData.type === "done") {
-      ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${eventData.model || resolvedModel}`);
+      resolvedProvider = eventData.provider || resolvedProvider;
+      ensureMessageMeta(assistantMessage, `provider: ${providerDisplayName(resolvedProvider)} | model: ${eventData.model || resolvedModel}`);
     }
   });
 
@@ -3072,13 +3113,13 @@ async function streamAssistantProvider({
       : "The local Ollama model returned an empty streamed response.");
   }
 
-  if (provider === "ollama") {
+  if (resolvedProvider === "ollama") {
     state.localModelAvailable = true;
     state.localModelDetail = "";
     applyProviderVisibility();
   }
 
-  return { provider, model: resolvedModel, text: streamedText };
+  return { provider: resolvedProvider, model: resolvedModel, text: streamedText };
 }
 
 async function submitPrompt(event) {
@@ -3093,12 +3134,14 @@ async function submitPrompt(event) {
   }
   const system = els.systemInput.value.trim();
   const provider = state.llmProvider;
-  const model = provider === "claude"
-    ? els.claudeModelSelect.value.trim()
-    : els.modelSelect.value.trim();
+  const localModel = els.modelSelect.value.trim();
+  const cloudModel = els.claudeModelSelect.value.trim();
+  const model = provider === "ollama" ? localModel : cloudModel || localModel;
   els.requestStatus.textContent = provider === "claude"
     ? "Connecting to Claude API..."
-    : "Connecting to local model...";
+    : provider === "auto"
+      ? "Connecting with Claude primary and local fallback..."
+      : "Connecting to local model...";
   const agentProfile = els.agentProfileSelect.value;
   const finalPrompt = `${prompt}${makeMapContextAppendix()}`;
   const mapContext = els.includeMapContext.checked ? buildMapContext() : null;
@@ -3129,59 +3172,25 @@ async function submitPrompt(event) {
   const assistantMessage = appendMessage(
     "assistant",
     "",
-    provider === "claude"
-      ? `provider: Claude | model: ${model || "default"} | queued`
-      : `provider: local Ollama | model: ${model || "auto-detect"} | queued`,
+    provider === "auto"
+      ? `provider: Auto | Claude: ${cloudModel || "default"} | Local: ${localModel || "auto-detect"} | queued`
+      : provider === "claude"
+        ? `provider: Claude | model: ${cloudModel || "default"} | queued`
+        : `provider: local Ollama | model: ${localModel || "auto-detect"} | queued`,
   );
 
   try {
-    let claudeError = null;
-    let localError = null;
-    let result = null;
-
-    if (provider === "claude") {
-      if (hasClaudeProviderCredential()) {
-        try {
-          result = await streamAssistantProvider({
-            assistantMessage,
-            provider: "claude",
-            model,
-            finalPrompt,
-            system,
-            agentProfile,
-            mapContext,
-            sourceContext,
-          });
-        } catch (error) {
-          claudeError = getErrorMessage(error);
-          console.warn("Claude request failed; trying local Ollama fallback.", claudeError);
-          els.providerStatus.textContent = "Claude request failed; trying detected local Ollama.";
-          els.requestStatus.textContent = "Trying local model fallback...";
-        }
-      } else {
-        claudeError = "Claude API key is not set in this browser session or on the server.";
-        els.providerStatus.textContent = "Claude API key missing";
-        els.requestStatus.textContent = "Trying local model fallback...";
-      }
-    }
-
-    if (!result) {
-      const localModel = await resolveLocalModelForFallback();
-      try {
-        result = await streamAssistantProvider({
-          assistantMessage,
-          provider: "ollama",
-          model: localModel,
-          finalPrompt,
-          system,
-          agentProfile,
-          mapContext,
-          sourceContext,
-        });
-      } catch (error) {
-        localError = getErrorMessage(error);
-      }
-    }
+    const result = await streamAssistantProvider({
+      assistantMessage,
+      provider,
+      localModel,
+      cloudModel,
+      finalPrompt,
+      system,
+      agentProfile,
+      mapContext,
+      sourceContext,
+    });
 
     if (result) {
       els.requestStatus.textContent = result.provider === "claude"
@@ -3189,25 +3198,12 @@ async function submitPrompt(event) {
         : `Completed with local Ollama ${result.model}`;
       return;
     }
-
-    if (localError) {
-      state.localModelAvailable = false;
-      state.localModelDetail = localError;
-      applyProviderVisibility();
-    }
-    const failureSummary = [
-      claudeError ? `Claude: ${claudeError}` : "",
-      localError ? `local Ollama: ${localError}` : "",
-    ].filter(Boolean).join(" | ");
-    if (failureSummary) {
-      console.warn("Model providers unavailable; deterministic planner response shown.", failureSummary);
-    }
-    setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
-    ensureMessageMeta(assistantMessage, "deterministic planner response");
-    els.requestStatus.textContent = "Deterministic planner response shown.";
   } catch (error) {
     const message = getErrorMessage(error);
     console.warn("Prompt request failed; deterministic planner response shown.", message);
+    state.localModelAvailable = false;
+    state.localModelDetail = message;
+    applyProviderVisibility();
     setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
     ensureMessageMeta(assistantMessage, "deterministic planner response");
     els.requestStatus.textContent = "Deterministic planner response shown.";
@@ -4267,14 +4263,14 @@ async function init() {
     els.modelProviderBtn.addEventListener("click", () => {
       const shouldOpen = els.modelProviderMenu.classList.contains("hidden");
       setModelProviderMenuOpen(shouldOpen);
-      if (shouldOpen && state.llmProvider === "ollama") {
+      if (shouldOpen && (state.llmProvider === "ollama" || state.llmProvider === "auto")) {
         void loadModels();
       }
     });
     els.providerSelect.addEventListener("change", (event) => {
       state.llmProvider = event.target.value;
       applyProviderVisibility();
-      if (state.llmProvider === "ollama") {
+      if (state.llmProvider === "ollama" || state.llmProvider === "auto") {
         void loadModels();
       }
     });

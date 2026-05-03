@@ -84,8 +84,11 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma2:2b")
 ANTHROPIC_API_URL = os.getenv(
     "ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages"
 )
+ANTHROPIC_MODELS_URL = os.getenv(
+    "ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models"
+)
 ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "Claude Sonnet 4.6")
 CLAUDE_MODEL_ALIASES = {
     "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
     "claude-sonnet-4-0": "claude-sonnet-4-20250514",
@@ -95,16 +98,22 @@ CLAUDE_MODEL_ALIASES = {
     "sonnet 4.6": "claude-sonnet-4-20250514",
     "claude-sonnet-4": "claude-sonnet-4-20250514",
     "claude sonnet 4": "claude-sonnet-4-20250514",
-    "claude-opus-4-7": "claude-opus-4-7",
-    "claude opus 4.7": "claude-opus-4-7",
-    "opus 4.7": "claude-opus-4-7",
+    "claude-opus-4-1": "claude-opus-4-1-20250805",
+    "claude opus 4.1": "claude-opus-4-1-20250805",
+    "opus 4.1": "claude-opus-4-1-20250805",
+    "claude-opus-4-7": "claude-opus-4-1-20250805",
+    "claude opus 4.7": "claude-opus-4-1-20250805",
+    "opus 4.7": "claude-opus-4-1-20250805",
     "claude-opus-4": "claude-opus-4-20250514",
     "claude opus 4": "claude-opus-4-20250514",
     "opus 4": "claude-opus-4-20250514",
     "claude-opus-4-20250514": "claude-opus-4-20250514",
     "claude-opus-4-1-20250805": "claude-opus-4-1-20250805",
-    "claude-haiku-4-5": "claude-haiku-4-5",
-    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5": "claude-3-5-haiku-20241022",
+    "claude-haiku-4.5": "claude-3-5-haiku-20241022",
+    "claude haiku 4.5": "claude-3-5-haiku-20241022",
+    "claude-haiku-4-5-20251001": "claude-3-5-haiku-20241022",
+    "claude-haiku-3-5": "claude-3-5-haiku-20241022",
     "claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
     "claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
 }
@@ -163,6 +172,7 @@ DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
 ACTIVE_OLLAMA_BASE_URL: str | None = None
 ACTIVE_OLLAMA_MODEL: str | None = None
+ACTIVE_CLAUDE_MODELS: list[str] | None = None
 
 app = FastAPI(title="TERA Source Planner", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -183,7 +193,7 @@ class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     system: str | None = Field(default=None, max_length=4000)
     model: str | None = Field(default=None, max_length=200)
-    llm_provider: str | None = Field(default="ollama", max_length=40)
+    llm_provider: str | None = Field(default="auto", max_length=40)
     cloud_model: str | None = Field(default=None, max_length=200)
     cloud_api_key: str | None = Field(default=None, max_length=500)
     agent_profile: str | None = Field(default="imagery-sourcing", max_length=80)
@@ -194,6 +204,8 @@ class PromptRequest(BaseModel):
 class PromptResponse(BaseModel):
     model: str
     response: str
+    provider: str | None = None
+    fallbacks: list[str] = Field(default_factory=list)
 
 
 class ModelsResponse(BaseModel):
@@ -208,6 +220,7 @@ class RuntimeConfigResponse(BaseModel):
     cesium_ion_token: str
     esri_token_configured: bool
     default_model: str
+    default_provider: str
     claude_default_model: str
     anthropic_api_key_configured: bool
     default_lat: float
@@ -5503,8 +5516,9 @@ def _build_system_prompt(request: PromptRequest) -> str:
     return base_prompt
 
 
-def _build_ollama_payload(request: PromptRequest, *, stream: bool) -> tuple[str, dict[str, object]]:
-    model = request.model or ACTIVE_OLLAMA_MODEL or OLLAMA_MODEL
+def _build_ollama_payload_for_model(
+    request: PromptRequest, model: str, *, stream: bool
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "model": model,
         "stream": stream,
@@ -5516,14 +5530,93 @@ def _build_ollama_payload(request: PromptRequest, *, stream: bool) -> tuple[str,
             "num_predict": 512,
         },
     }
-    return model, payload
+    return payload
+
+
+async def _resolve_ollama_model(request: PromptRequest) -> str:
+    global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
+    requested_model = (request.model or "").strip()
+    if requested_model:
+        return requested_model
+    if ACTIVE_OLLAMA_MODEL:
+        return ACTIVE_OLLAMA_MODEL
+
+    for base_url in _ollama_base_url_candidates():
+        try:
+            models = await _fetch_ollama_models_from(base_url)
+        except httpx.HTTPError:
+            continue
+        default_model = _select_ollama_default_model(models)
+        ACTIVE_OLLAMA_BASE_URL = base_url
+        ACTIVE_OLLAMA_MODEL = default_model
+        return default_model
+
+    return OLLAMA_MODEL
+
+
+async def _build_ollama_payload(
+    request: PromptRequest, *, stream: bool
+) -> tuple[str, dict[str, object]]:
+    model = await _resolve_ollama_model(request)
+    return model, _build_ollama_payload_for_model(request, model, stream=stream)
 
 
 def _request_llm_provider(request: PromptRequest) -> str:
-    provider = (request.llm_provider or "ollama").strip().lower()
+    provider = (request.llm_provider or "auto").strip().lower()
+    if provider in {"auto", "default", "primary"}:
+        return "auto"
     if provider in {"claude", "anthropic"}:
         return "claude"
-    return "ollama"
+    if provider in {"ollama", "local", "llama"}:
+        return "ollama"
+    return "auto"
+
+
+def _provider_sequence(request: PromptRequest) -> list[str]:
+    provider = _request_llm_provider(request)
+    if provider == "ollama":
+        return ["ollama"]
+    return ["claude", "ollama"]
+
+
+def _default_provider() -> str:
+    return "auto" if os.getenv("ANTHROPIC_API_KEY", "").strip() else "ollama"
+
+
+def _anthropic_api_key(request: PromptRequest) -> str:
+    return (request.cloud_api_key or os.getenv("ANTHROPIC_API_KEY", "")).strip()
+
+
+def _failure_message(provider: str, exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = str(exc.detail)
+    else:
+        detail = str(exc)
+    return f"{provider}: {detail}"
+
+
+def _score_claude_model_for_default(model: str) -> int:
+    normalized = model.lower()
+    score = 0
+    if model == CLAUDE_MODEL:
+        score += 700
+    if "sonnet-4" in normalized:
+        score += 600
+    elif "opus-4-1" in normalized:
+        score += 450
+    elif "opus-4" in normalized:
+        score += 400
+    elif "3-7-sonnet" in normalized:
+        score += 300
+    elif "3-5-sonnet" in normalized:
+        score += 220
+    elif "3-5-haiku" in normalized:
+        score += 160
+    elif "haiku" in normalized:
+        score += 100
+    if normalized.endswith("-latest"):
+        score -= 50
+    return score
 
 
 def _normalize_claude_model(model: str | None) -> str:
@@ -5536,6 +5629,14 @@ def _normalize_claude_model(model: str | None) -> str:
     return CLAUDE_MODEL_ALIASES.get(compact, CLAUDE_MODEL_ALIASES.get(candidate.lower(), candidate))
 
 
+def _preferred_claude_model(request: PromptRequest) -> str:
+    if request.cloud_model:
+        return request.cloud_model
+    if _request_llm_provider(request) == "claude" and request.model:
+        return request.model
+    return CLAUDE_MODEL
+
+
 def _claude_model_candidates(preferred_model: str | None) -> list[str]:
     candidates = [
         _normalize_claude_model(preferred_model),
@@ -5546,6 +5647,49 @@ def _claude_model_candidates(preferred_model: str | None) -> list[str]:
         if candidate and candidate not in deduped:
             deduped.append(candidate)
     return deduped
+
+
+async def _fetch_anthropic_model_ids(api_key: str) -> list[str]:
+    global ACTIVE_CLAUDE_MODELS
+    if ACTIVE_CLAUDE_MODELS is not None:
+        return ACTIVE_CLAUDE_MODELS
+
+    timeout = httpx.Timeout(8.0, connect=3.0)
+    headers = {
+        "anthropic-version": ANTHROPIC_VERSION,
+        "x-api-key": api_key,
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(ANTHROPIC_MODELS_URL, headers=headers)
+        response.raise_for_status()
+    data = response.json()
+    models = [
+        str(model.get("id", "")).strip()
+        for model in data.get("data", [])
+        if isinstance(model, dict) and str(model.get("id", "")).strip()
+    ]
+    ACTIVE_CLAUDE_MODELS = models
+    return models
+
+
+async def _claude_model_candidates_for_key(
+    preferred_model: str | None, api_key: str
+) -> list[str]:
+    candidates = _claude_model_candidates(preferred_model)
+    try:
+        discovered = await _fetch_anthropic_model_ids(api_key)
+    except httpx.HTTPError as exc:
+        log.warning("claude_model_discovery_unavailable", error=str(exc))
+        discovered = []
+
+    for model in sorted(
+        discovered,
+        key=lambda candidate: (_score_claude_model_for_default(candidate), candidate),
+        reverse=True,
+    ):
+        if model and model not in candidates:
+            candidates.append(model)
+    return candidates
 
 
 def _build_claude_payload_for_model(
@@ -5572,7 +5716,7 @@ def _build_claude_payload_for_model(
 
 
 def _build_claude_payload(request: PromptRequest) -> tuple[str, dict[str, object]]:
-    model = _normalize_claude_model(request.cloud_model or request.model or CLAUDE_MODEL)
+    model = _normalize_claude_model(_preferred_claude_model(request))
     return model, _build_claude_payload_for_model(request, model)
 
 
@@ -5591,19 +5735,17 @@ def _extract_claude_response_text(data: dict[str, object]) -> str:
 
 
 async def _post_claude_message(request: PromptRequest) -> PromptResponse:
-    api_key = (request.cloud_api_key or os.getenv("ANTHROPIC_API_KEY", "")).strip()
+    api_key = _anthropic_api_key(request)
     if not api_key:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Claude API key required. Open Model Provider, choose Claude API, "
-                "and add a key for this browser session."
+                "Claude API key required. Set ANTHROPIC_API_KEY on the Jetson "
+                "or add a key for this browser session."
             ),
         )
 
-    requested_model = _normalize_claude_model(
-        request.cloud_model or request.model or CLAUDE_MODEL
-    )
+    requested_model = _normalize_claude_model(_preferred_claude_model(request))
     timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
     headers = {
         "anthropic-version": ANTHROPIC_VERSION,
@@ -5612,7 +5754,7 @@ async def _post_claude_message(request: PromptRequest) -> PromptResponse:
     }
     model_errors: list[str] = []
 
-    for model in _claude_model_candidates(requested_model):
+    for model in await _claude_model_candidates_for_key(requested_model, api_key):
         payload = _build_claude_payload_for_model(request, model)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -5652,13 +5794,78 @@ async def _post_claude_message(request: PromptRequest) -> PromptResponse:
         text = _extract_claude_response_text(response.json())
         if not text:
             raise HTTPException(status_code=502, detail="Claude returned an empty response.")
-        return PromptResponse(model=model, response=text)
+        return PromptResponse(model=model, response=text, provider="claude")
 
     detail = (
         "Claude API rejected every configured model candidate. "
         + " | ".join(model_errors)
     )
     raise HTTPException(status_code=502, detail=detail)
+
+
+async def _post_ollama_message(request: PromptRequest) -> PromptResponse:
+    global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
+    model, payload = await _build_ollama_payload(request, stream=False)
+
+    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
+
+    errors: list[str] = []
+    for base_url in _ollama_base_url_candidates():
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(f"{base_url}/api/generate", json=payload)
+                response.raise_for_status()
+            ACTIVE_OLLAMA_BASE_URL = base_url
+            ACTIVE_OLLAMA_MODEL = model
+            break
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            errors.append(f"{base_url} returned {exc.response.status_code}: {body}")
+            log.error(
+                "ollama_http_error",
+                status_code=exc.response.status_code,
+                body=body,
+                ollama_base_url=base_url,
+                model=model,
+            )
+        except httpx.HTTPError as exc:
+            errors.append(f"{base_url} unreachable: {exc}")
+            log.error(
+                "ollama_connection_error",
+                error=str(exc),
+                ollama_base_url=base_url,
+                model=model,
+            )
+    else:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach a local Ollama host. " + " | ".join(errors),
+        )
+
+    data = response.json()
+    text = str(data.get("response", "")).strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="Ollama returned an empty response.")
+
+    return PromptResponse(model=model, response=text, provider="ollama")
+
+
+async def _post_prompt_with_fallback(request: PromptRequest) -> PromptResponse:
+    fallbacks: list[str] = []
+    for provider in _provider_sequence(request):
+        try:
+            if provider == "claude":
+                result = await _post_claude_message(request)
+            else:
+                result = await _post_ollama_message(request)
+        except HTTPException as exc:
+            fallbacks.append(_failure_message(provider, exc))
+            continue
+        result.fallbacks = fallbacks
+        return result
+
+    detail = " | ".join(fallbacks) if fallbacks else "No model providers were configured."
+    raise HTTPException(status_code=502, detail=f"All model providers failed. {detail}")
 
 
 def _sse_event(payload: dict[str, object]) -> str:
@@ -6279,6 +6486,7 @@ async def runtime_config() -> RuntimeConfigResponse:
         cesium_ion_token=CESIUM_ION_TOKEN,
         esri_token_configured=ESRI_TOKEN_CONFIGURED,
         default_model=OLLAMA_MODEL,
+        default_provider=_default_provider(),
         claude_default_model=_normalize_claude_model(CLAUDE_MODEL),
         anthropic_api_key_configured=bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
         default_lat=DEFAULT_LAT,
@@ -7087,150 +7295,159 @@ async def create_package_cot(
 
 @app.post("/api/prompt", response_model=PromptResponse)
 async def prompt_ollama(request: PromptRequest) -> PromptResponse:
-    if _request_llm_provider(request) == "claude":
-        return await _post_claude_message(request)
-
-    model, payload = _build_ollama_payload(request, stream=False)
-
-    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
-
-    errors: list[str] = []
-    for base_url in _ollama_base_url_candidates():
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(f"{base_url}/api/generate", json=payload)
-                response.raise_for_status()
-            break
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
-            errors.append(f"{base_url} returned {exc.response.status_code}: {body}")
-            log.error(
-                "ollama_http_error",
-                status_code=exc.response.status_code,
-                body=body,
-                ollama_base_url=base_url,
-            )
-        except httpx.HTTPError as exc:
-            errors.append(f"{base_url} unreachable: {exc}")
-            log.error("ollama_connection_error", error=str(exc), ollama_base_url=base_url)
-    else:
-        raise HTTPException(
-            status_code=502,
-            detail="Could not reach a local Ollama host. " + " | ".join(errors),
-        )
-
-    data = response.json()
-    text = str(data.get("response", "")).strip()
-    if not text:
-        raise HTTPException(status_code=502, detail="Ollama returned an empty response.")
-
-    return PromptResponse(model=model, response=text)
+    return await _post_prompt_with_fallback(request)
 
 
 @app.post("/api/prompt/stream")
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
-    if _request_llm_provider(request) == "claude":
-        model, _payload = _build_claude_payload(request)
-
-        async def claude_event_stream():
-            yield _sse_event({"type": "start", "model": model, "provider": "claude"})
-            yield _sse_event(
-                {
-                    "type": "status",
-                    "detail": "Waiting for Claude API response",
-                    "model": model,
-                }
-            )
-            try:
-                result = await _post_claude_message(request)
-            except HTTPException as exc:
+    async def event_stream():
+        global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
+        failures: list[str] = []
+        sequence = _provider_sequence(request)
+        for provider in sequence:
+            if provider == "claude":
+                model, _payload = _build_claude_payload(request)
+                yield _sse_event({"type": "start", "model": model, "provider": "claude"})
                 yield _sse_event(
                     {
-                        "type": "error",
-                        "detail": str(exc.detail),
+                        "type": "status",
+                        "detail": "Waiting for Claude API response",
                         "model": model,
                         "provider": "claude",
                     }
                 )
+                try:
+                    result = await _post_claude_message(request)
+                except HTTPException as exc:
+                    failure = _failure_message("claude", exc)
+                    failures.append(failure)
+                    if "ollama" in sequence:
+                        yield _sse_event(
+                            {
+                                "type": "fallback",
+                                "detail": "Claude unavailable; trying local Ollama fallback.",
+                                "reason": failure,
+                                "provider": "claude",
+                            }
+                        )
+                        continue
+                    yield _sse_event(
+                        {
+                            "type": "error",
+                            "detail": str(exc.detail),
+                            "model": model,
+                            "provider": "claude",
+                        }
+                    )
+                    return
+                yield _sse_event(
+                    {
+                        "type": "token",
+                        "text": result.response,
+                        "model": result.model,
+                        "provider": "claude",
+                    }
+                )
+                yield _sse_event(
+                    {
+                        "type": "done",
+                        "model": result.model,
+                        "provider": "claude",
+                        "fallbacks": failures,
+                    }
+                )
                 return
+
+            model, payload = await _build_ollama_payload(request, stream=True)
+            timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
+            yield _sse_event({"type": "start", "model": model, "provider": "ollama"})
             yield _sse_event(
                 {
-                    "type": "token",
-                    "text": result.response,
-                    "model": result.model,
-                    "provider": "claude",
+                    "type": "status",
+                    "detail": "Waiting for local model tokens",
+                    "model": model,
+                    "provider": "ollama",
                 }
             )
-            yield _sse_event({"type": "done", "model": result.model, "provider": "claude"})
-
-        return StreamingResponse(
-            claude_event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    model, payload = _build_ollama_payload(request, stream=True)
-    timeout = httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0)
-
-    async def event_stream():
-        yield _sse_event({"type": "start", "model": model})
-        yield _sse_event(
-            {"type": "status", "detail": "Waiting for local model tokens", "model": model}
-        )
-        errors: list[str] = []
-        for base_url in _ollama_base_url_candidates():
-            try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    async with client.stream(
-                        "POST", f"{base_url}/api/generate", json=payload
-                    ) as response:
-                        if response.status_code >= 400:
-                            body = (await response.aread()).decode(
-                                "utf-8", errors="replace"
-                            )[:500]
-                            errors.append(
-                                f"{base_url} returned {response.status_code}: {body}"
-                            )
-                            log.error(
-                                "ollama_stream_http_error",
-                                status_code=response.status_code,
-                                body=body,
-                                ollama_base_url=base_url,
-                            )
-                            continue
-
-                        async for line in response.aiter_lines():
-                            if not line:
-                                continue
-                            try:
-                                chunk = json.loads(line)
-                            except json.JSONDecodeError:
+            errors: list[str] = []
+            for base_url in _ollama_base_url_candidates():
+                try:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        async with client.stream(
+                            "POST", f"{base_url}/api/generate", json=payload
+                        ) as response:
+                            if response.status_code >= 400:
+                                body = (await response.aread()).decode(
+                                    "utf-8", errors="replace"
+                                )[:500]
+                                errors.append(
+                                    f"{base_url} returned {response.status_code}: {body}"
+                                )
+                                log.error(
+                                    "ollama_stream_http_error",
+                                    status_code=response.status_code,
+                                    body=body,
+                                    ollama_base_url=base_url,
+                                    model=model,
+                                )
                                 continue
 
-                            text = str(chunk.get("response", ""))
-                            if text:
-                                yield _sse_event({"type": "token", "text": text, "model": model})
+                            ACTIVE_OLLAMA_BASE_URL = base_url
+                            ACTIVE_OLLAMA_MODEL = model
+                            async for line in response.aiter_lines():
+                                if not line:
+                                    continue
+                                try:
+                                    chunk = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
 
-                            if chunk.get("done"):
-                                yield _sse_event({"type": "done", "model": model})
-                                return
-            except httpx.HTTPError as exc:
-                errors.append(f"{base_url} unreachable: {exc}")
-                log.error(
-                    "ollama_stream_connection_error",
-                    error=str(exc),
-                    ollama_base_url=base_url,
-                )
+                                text = str(chunk.get("response", ""))
+                                if text:
+                                    yield _sse_event(
+                                        {
+                                            "type": "token",
+                                            "text": text,
+                                            "model": model,
+                                            "provider": "ollama",
+                                        }
+                                    )
+
+                                if chunk.get("done"):
+                                    yield _sse_event(
+                                        {
+                                            "type": "done",
+                                            "model": model,
+                                            "provider": "ollama",
+                                            "fallbacks": failures,
+                                        }
+                                    )
+                                    return
+                except httpx.HTTPError as exc:
+                    errors.append(f"{base_url} unreachable: {exc}")
+                    log.error(
+                        "ollama_stream_connection_error",
+                        error=str(exc),
+                        ollama_base_url=base_url,
+                        model=model,
+                    )
+            failures.append("ollama: " + " | ".join(errors))
+            yield _sse_event(
+                {
+                    "type": "error",
+                    "detail": "All model providers failed. " + " | ".join(failures),
+                    "model": model,
+                    "provider": "ollama",
+                    "fallbacks": failures,
+                }
+            )
+            return
 
         yield _sse_event(
             {
                 "type": "error",
-                "detail": "Could not reach a local Ollama host. " + " | ".join(errors),
-                "model": model,
+                "detail": "No model providers were configured.",
+                "fallbacks": failures,
             }
         )
 
