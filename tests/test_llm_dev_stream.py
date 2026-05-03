@@ -315,6 +315,8 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         ".top-provider-shell",
         ".atak-mirror-panel",
         ".atak-mirror-event",
+        "grid-auto-rows: max-content",
+        "align-content: start",
         ".chip-button",
         ".provider-menu",
         ".provider-actions",

@@ -1116,6 +1116,8 @@ textarea {
 .atak-mirror-log {
   display: grid;
   gap: var(--space-2);
+  align-content: start;
+  grid-auto-rows: max-content;
   min-height: 72px;
   overflow-y: auto;
 }
@@ -1128,6 +1130,8 @@ textarea {
 .atak-mirror-event {
   display: grid;
   gap: var(--space-1);
+  align-content: start;
+  align-self: start;
   padding: var(--space-2);
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--color-status-online);
