@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import zipfile
+import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -773,7 +774,55 @@ def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.Monk
         "Demo Creek",
     ]
     assert "<event" in item.cot_xml
+    root = ET.fromstring(item.cot_xml)
+    assert root.attrib["type"] == "b-m-r"
+    assert root.find("detail/route") is None
+    detail = root.find("detail")
+    assert detail is not None
+    links = detail.findall("link")
+    assert len(links) == len(item.coordinates)
+    assert [link.attrib["type"] for link in links] == [
+        "b-m-p-w",
+        "b-m-p-c",
+        "b-m-p-w",
+    ]
+    assert links[0].attrib["callsign"] == "TERA route to Demo Creek SP"
+    assert links[-1].attrib["callsign"] == "TERA route to Demo Creek VDO"
+    assert links[-1].attrib["point"] == "37.7950000,-122.3920000"
+    detail_order = [child.tag for child in list(detail)]
+    assert detail_order == [
+        "link",
+        "link",
+        "link",
+        "link_attr",
+        "strokeColor",
+        "strokeWeight",
+        "__routeinfo",
+        "contact",
+        "remarks",
+        "archive",
+        "labels_on",
+        "color",
+    ]
+    link_attr = detail.find("link_attr")
+    assert link_attr is not None
+    assert link_attr.attrib == {
+        "planningmethod": "Infil",
+        "color": "-1",
+        "method": "Walking",
+        "prefix": "CP",
+        "type": "Foot",
+        "stroke": "3",
+        "direction": "Infil",
+        "routetype": "Primary",
+        "order": "Ascending Check Points",
+    }
+    assert detail.find("strokeColor").attrib["value"] == "-1"  # type: ignore[union-attr]
+    assert detail.find("strokeWeight").attrib["value"] == "3.0"  # type: ignore[union-attr]
+    assert detail.find("contact").attrib["callsign"] == "TERA route to Demo Creek"  # type: ignore[union-attr]
+    assert detail.find("labels_on").attrib["value"] == "false"  # type: ignore[union-attr]
     assert item.metadata["target"]["source_layer"] == "waterways"
+    assert item.metadata["takcot_schema"] == "Route.xsd"
 
 
 def test_tak_cot_payload_prefers_client_location_and_visible_bounds(
@@ -1519,6 +1568,11 @@ async def test_package_terrain_query_algorithm_route_and_cot(
     assert route["route_hash"]
     assert cot["events"][0]["signed"] is True
     assert "<wayfinder>" in cot["events"][0]["cot_xml"]
+    cot_root = ET.fromstring(cot["events"][0]["cot_xml"])
+    assert cot_root.attrib["type"] == "b-m-r"
+    assert len(cot_root.findall("detail/link")) >= 2
+    assert cot_root.find("detail/link_attr") is not None
+    assert cot_root.find("detail/route") is None
 
 
 def test_source_package_manifest_uses_jetson_root_osm_dted_sources(

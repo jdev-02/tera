@@ -4925,7 +4925,19 @@ def _build_cot_xml(
     lat: float,
     lon: float,
     route: dict[str, Any],
+    title: str | None = None,
+    remarks: str | None = None,
 ) -> str:
+    if cot_type == "b-m-r":
+        return _build_takcot_route_xml(
+            uid=uid,
+            lat=lat,
+            lon=lon,
+            route=route,
+            title=title,
+            remarks=remarks,
+        )
+
     now = datetime.now(timezone.utc)
     now_text = now.isoformat().replace("+00:00", "Z")
     stale_text = datetime.fromtimestamp(now.timestamp() + 3600, timezone.utc).isoformat().replace("+00:00", "Z")
@@ -4965,6 +4977,145 @@ def _build_cot_xml(
             },
         )
     return ET.tostring(root, encoding="unicode")
+
+
+def _build_takcot_route_xml(
+    *,
+    uid: str,
+    lat: float,
+    lon: float,
+    route: dict[str, Any],
+    title: str | None,
+    remarks: str | None,
+) -> str:
+    coordinates = _normalized_route_coordinates(route)
+    if len(coordinates) < 2:
+        raise ValueError("TAK route CoT requires at least two route coordinates.")
+
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat().replace("+00:00", "Z")
+    stale_text = (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    route_title = _cot_attr_text(title or _route_title_from_feature(route) or "TERA route")
+    route_method, route_type = _takcot_route_method_and_type(route)
+    root = ET.Element(
+        "event",
+        {
+            "version": "2.0",
+            "uid": uid,
+            "type": "b-m-r",
+            "how": "m-g",
+            "time": now_text,
+            "start": now_text,
+            "stale": stale_text,
+        },
+    )
+    ET.SubElement(
+        root,
+        "point",
+        {
+            "lat": f"{lat:.7f}",
+            "lon": f"{lon:.7f}",
+            "hae": "9999999.0",
+            "ce": "9999999.0",
+            "le": "9999999.0",
+        },
+    )
+    detail = ET.SubElement(root, "detail")
+    for index, (coord_lon, coord_lat) in enumerate(coordinates):
+        callsign = _takcot_link_callsign(route_title, index, len(coordinates))
+        link_type = "b-m-p-w" if index in {0, len(coordinates) - 1} else "b-m-p-c"
+        ET.SubElement(
+            detail,
+            "link",
+            {
+                "uid": f"{uid}-cp-{index:03d}",
+                "callsign": callsign,
+                "type": link_type,
+                "point": f"{coord_lat:.7f},{coord_lon:.7f}",
+                "remarks": "",
+                "relation": "c",
+            },
+        )
+    ET.SubElement(
+        detail,
+        "link_attr",
+        {
+            "planningmethod": "Infil",
+            "color": "-1",
+            "method": route_method,
+            "prefix": "CP",
+            "type": route_type,
+            "stroke": "3",
+            "direction": "Infil",
+            "routetype": "Primary",
+            "order": "Ascending Check Points",
+        },
+    )
+    ET.SubElement(detail, "strokeColor", {"value": "-1"})
+    ET.SubElement(detail, "strokeWeight", {"value": "3.0"})
+    routeinfo = ET.SubElement(detail, "__routeinfo")
+    ET.SubElement(routeinfo, "__navcues")
+    ET.SubElement(detail, "contact", {"callsign": route_title})
+    remarks_el = ET.SubElement(detail, "remarks")
+    remarks_el.text = _cot_text(remarks or "")
+    ET.SubElement(detail, "archive")
+    ET.SubElement(detail, "labels_on", {"value": "false"})
+    ET.SubElement(detail, "color", {"value": "-1"})
+    return ET.tostring(root, encoding="unicode")
+
+
+def _normalized_route_coordinates(route: dict[str, Any]) -> list[tuple[float, float]]:
+    raw_coordinates = route.get("geometry", {}).get("coordinates", [])
+    coordinates: list[tuple[float, float]] = []
+    if not isinstance(raw_coordinates, list):
+        return coordinates
+    for coordinate in raw_coordinates:
+        if not isinstance(coordinate, list | tuple) or len(coordinate) < 2:
+            continue
+        coordinates.append((float(coordinate[0]), float(coordinate[1])))
+    return coordinates
+
+
+def _route_title_from_feature(route: dict[str, Any]) -> str:
+    properties = route.get("properties")
+    if not isinstance(properties, dict):
+        return "TERA route"
+    for key in ("title", "name", "route_id"):
+        value = properties.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "TERA route"
+
+
+def _takcot_route_method_and_type(route: dict[str, Any]) -> tuple[str, str]:
+    properties = route.get("properties")
+    profile = ""
+    if isinstance(properties, dict):
+        profile = str(properties.get("profile") or "").lower()
+    if any(token in profile for token in ("vehicle", "truck", "mrap", "drive")):
+        return "Driving", "Vehicle"
+    if any(token in profile for token in ("water", "boat", "swim")):
+        return "Watercraft", "Watercraft"
+    return "Walking", "Foot"
+
+
+def _takcot_link_callsign(route_title: str, index: int, total: int) -> str:
+    if index == 0:
+        return _cot_attr_text(f"{route_title} SP")
+    if index == total - 1:
+        return _cot_attr_text(f"{route_title} VDO")
+    return _cot_attr_text(f"CP{index}")
+
+
+def _cot_attr_text(text: str, *, max_length: int = 80) -> str:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return "TERA route"
+    return cleaned[:max_length]
+
+
+def _cot_text(text: str, *, max_length: int = 500) -> str:
+    return re.sub(r"\s+", " ", text).strip()[:max_length]
 
 
 def _sign_cot_xml(
@@ -5414,6 +5565,8 @@ def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCot
             lat=target_lat,
             lon=target_lon,
             route=route,
+            title=f"TERA route to {target_label}",
+            remarks=response_text,
         )
         items.append(
             TakCotItem(
@@ -5435,6 +5588,8 @@ def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCot
                     "target": target,
                     "distance_m": target.get("distance_m"),
                     "response_excerpt": response_text[:240],
+                    "takcot_schema": "Route.xsd",
+                    "takcot_type": "b-m-r",
                 },
             )
         )
@@ -5456,6 +5611,8 @@ def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCot
                 lat=point_lat,
                 lon=point_lon,
                 route=point_route,
+                title=point_label,
+                remarks=response_text,
             )
             items.append(
                 TakCotItem(
@@ -8437,12 +8594,19 @@ async def create_package_cot(
         lon = float(coordinate[0])
         lat = float(coordinate[1])
         uid = route_id if request.cot_type == "route" else f"{route_id}-track-{index:03d}"
+        route_properties = route.get("properties")
+        route_title_value = (
+            route_properties.get("route_id") if isinstance(route_properties, dict) else None
+        )
+        route_title = str(route_title_value or route_id)
         cot_xml = _build_cot_xml(
             uid=uid,
             cot_type=cot_type_code,
             lat=lat,
             lon=lon,
             route=route,
+            title=route_title or route_id,
+            remarks=rationale,
         )
         signed_xml, signed = _sign_cot_xml(
             uid=uid,
