@@ -2871,22 +2871,28 @@ function ensureLocalModelOption(model) {
 
 function renderAtakMirror(events = []) {
   els.atakMirrorLog.innerHTML = "";
-  if (!events.length) {
+  const conversationEvents = events.filter((event) => (
+    event.role === "operator" || event.role === "assistant"
+  ));
+
+  if (!conversationEvents.length) {
     const empty = document.createElement("div");
     empty.className = "atak-mirror-empty";
-    empty.textContent = "No ATAK plugin conversation mirrored yet.";
+    empty.textContent = "No ATAK plugin conversation mirrored yet. Send from the Samsung TAK device.";
     els.atakMirrorLog.appendChild(empty);
     return;
   }
 
-  for (const event of events) {
+  for (const event of conversationEvents) {
     const item = document.createElement("article");
     item.className = `atak-mirror-event ${event.role === "operator" ? "inbound" : "outbound"}`;
 
     const header = document.createElement("div");
     header.className = "atak-mirror-event-header";
     const source = document.createElement("span");
-    source.textContent = `${event.source || "jetson"} / ${event.role || "event"}`;
+    source.textContent = event.role === "operator"
+      ? "ATAK device / operator"
+      : "TERA agent / Ollama";
     const stamp = document.createElement("time");
     stamp.dateTime = event.timestamp || "";
     stamp.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "";
@@ -2913,9 +2919,19 @@ function renderAtakMirror(events = []) {
   els.atakMirrorLog.scrollTop = els.atakMirrorLog.scrollHeight;
 }
 
+function applyAtakMonitorMode() {
+  document.body.classList.toggle("atak-monitor-mode", state.atakAgentActive);
+  els.promptInput.disabled = state.atakAgentActive;
+  els.submitBtn.disabled = state.atakAgentActive;
+  if (state.atakAgentActive) {
+    els.requestStatus.textContent = "Read-only ATAK monitor active";
+  }
+}
+
 function applyAtakAgentStatus(data) {
   state.atakAgentActive = Boolean(data.active);
   els.atakMirrorPanel.classList.toggle("hidden", !state.atakAgentActive);
+  applyAtakMonitorMode();
   if (state.atakAgentActive) {
     const label = data.status === "active"
       ? "ATAK Local: ready"
@@ -2924,10 +2940,14 @@ function applyAtakAgentStatus(data) {
         : "ATAK Local: starting";
     const tone = data.status === "active" ? "good" : data.status === "error" ? "bad" : "warn";
     setAtakAgentButton(label, tone);
-    els.atakMirrorStatus.textContent = data.detail || `Mirroring ${data.model || "local model"}`;
+    els.atakMirrorStatus.textContent = data.status === "active"
+      ? `Watching Samsung TAK -> ${data.model || "local Ollama"} -> Samsung TAK`
+      : data.detail || `Mirroring ${data.model || "local model"}`;
     renderAtakMirror(data.events || []);
   } else {
     setAtakAgentButton("ATAK Local", "");
+    els.promptInput.disabled = false;
+    els.submitBtn.disabled = false;
   }
 }
 
@@ -3276,6 +3296,11 @@ async function streamAssistantProvider({
 
 async function submitPrompt(event) {
   event.preventDefault();
+  if (state.atakAgentActive) {
+    els.requestStatus.textContent = "ATAK Local is read-only here. Send prompts from the Samsung TAK device.";
+    await refreshAtakMirror().catch(() => null);
+    return;
+  }
   els.submitBtn.disabled = true;
 
   const prompt = els.promptInput.value.trim();
