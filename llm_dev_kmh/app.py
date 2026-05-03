@@ -32,16 +32,51 @@ ANTHROPIC_API_URL = os.getenv(
     "ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages"
 )
 ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+CLAUDE_MODEL_ALIASES = {
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-sonnet-4.6": "claude-sonnet-4-6",
+    "claude sonnet 4.6": "claude-sonnet-4-6",
+    "sonnet 4.6": "claude-sonnet-4-6",
+    "claude-sonnet-4": "claude-sonnet-4-6",
+    "claude sonnet 4": "claude-sonnet-4-6",
+    "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+    "claude-opus-4-7": "claude-opus-4-7",
+    "claude opus 4.7": "claude-opus-4-7",
+    "opus 4.7": "claude-opus-4-7",
+    "claude-opus-4-1-20250805": "claude-opus-4-1-20250805",
+    "claude-haiku-4-5": "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
+    "claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
+    "claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
+}
 REQUEST_TIMEOUT_S = float(os.getenv("REQUEST_TIMEOUT_S", "120"))
 LOCATION_SEARCH_TIMEOUT_S = float(os.getenv("LOCATION_SEARCH_TIMEOUT_S", "4"))
 LOCATION_SEARCH_URL = os.getenv(
     "LOCATION_SEARCH_URL", "https://nominatim.openstreetmap.org/search"
 )
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+GOOGLE_PLACES_AUTOCOMPLETE_URL = os.getenv(
+    "GOOGLE_PLACES_AUTOCOMPLETE_URL",
+    "https://places.googleapis.com/v1/places:autocomplete",
+)
+GOOGLE_PLACE_DETAILS_URL_BASE = os.getenv(
+    "GOOGLE_PLACE_DETAILS_URL_BASE",
+    "https://places.googleapis.com/v1",
+)
+GOOGLE_PLACES_TEXT_SEARCH_URL = os.getenv(
+    "GOOGLE_PLACES_TEXT_SEARCH_URL",
+    "https://places.googleapis.com/v1/places:searchText",
+)
 LOCATION_INTENT_PREFIX_RE = re.compile(
     r"^(?:go to|goto|navigate to|take me to|move map to|move to|search for|"
     r"find|show me|zoom to|center on|focus on|look up|open)\s+",
     re.IGNORECASE,
+)
+GOOGLE_MAPS_COORD_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"!3d(?P<lat>[+-]?\d+(?:\.\d+)?)!4d(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE),
+    re.compile(r"@(?P<lat>[+-]?\d+(?:\.\d+)?),(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE),
+    re.compile(r"[?&](?:q|ll|center)=(?P<lat>[+-]?\d+(?:\.\d+)?),(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE),
 )
 CESIUM_ION_TOKEN = os.getenv("CESIUM_ION_TOKEN", "")
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
@@ -94,6 +129,7 @@ class RuntimeConfigResponse(BaseModel):
     cesium_ion_token: str
     default_model: str
     claude_default_model: str
+    anthropic_api_key_configured: bool
     default_lat: float
     default_lon: float
     default_height_m: float
@@ -1804,8 +1840,18 @@ def _request_llm_provider(request: PromptRequest) -> str:
     return "ollama"
 
 
+def _normalize_claude_model(model: str | None) -> str:
+    candidate = (model or CLAUDE_MODEL).strip()
+    if not candidate:
+        return CLAUDE_MODEL
+    compact = re.sub(r"[\s_]+", "-", candidate.lower())
+    compact = compact.replace("sonnet-4.6", "sonnet-4-6")
+    compact = compact.replace("opus-4.7", "opus-4-7")
+    return CLAUDE_MODEL_ALIASES.get(compact, CLAUDE_MODEL_ALIASES.get(candidate.lower(), candidate))
+
+
 def _build_claude_payload(request: PromptRequest) -> tuple[str, dict[str, object]]:
-    model = request.cloud_model or request.model or CLAUDE_MODEL
+    model = _normalize_claude_model(request.cloud_model or request.model or CLAUDE_MODEL)
     payload: dict[str, object] = {
         "model": model,
         "max_tokens": 900,
@@ -1872,7 +1918,15 @@ async def _post_claude_message(request: PromptRequest) -> PromptResponse:
             model=model,
         )
         if exc.response.status_code in {401, 403}:
-            detail = "Claude API rejected the key or account access for this model."
+            detail = (
+                f"Claude API rejected the key or account access for {model}. "
+                "Check the key in Model Provider or set ANTHROPIC_API_KEY on the server."
+            )
+        elif exc.response.status_code == 400 and "model" in body.lower():
+            detail = (
+                f"Claude API rejected model {model}. Select Claude Sonnet 4.6 "
+                "or another listed model in Model Provider."
+            )
         else:
             detail = f"Claude API returned {exc.response.status_code}: {body}"
         raise HTTPException(status_code=502, detail=detail) from exc
@@ -1880,7 +1934,10 @@ async def _post_claude_message(request: PromptRequest) -> PromptResponse:
         log.error("claude_connection_error", error=str(exc), model=model)
         raise HTTPException(
             status_code=502,
-            detail=f"Could not reach Claude API. {exc}",
+            detail=(
+                "Could not reach Claude API. Check internet connectivity, proxy/firewall "
+                "settings, and the Anthropic API endpoint."
+            ),
         ) from exc
 
     text = _extract_claude_response_text(response.json())
@@ -1963,6 +2020,53 @@ def _clean_location_query(query: str) -> str:
         previous = cleaned
         cleaned = LOCATION_INTENT_PREFIX_RE.sub("", cleaned).strip()
     return cleaned
+
+
+def _coordinate_location_suggestion(query: str) -> LocationSuggestion | None:
+    for pattern in GOOGLE_MAPS_COORD_PATTERNS:
+        match = pattern.search(query)
+        if not match:
+            continue
+        lat = _safe_float(match.group("lat"), default=float("nan"))
+        lon = _safe_float(match.group("lon"), default=float("nan"))
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            return LocationSuggestion(
+                name=f"Coordinates {lat:.5f}, {lon:.5f}",
+                detail="Parsed from Google Maps link or coordinate query.",
+                lat=lat,
+                lon=lon,
+                height_m=12000,
+                source="coordinate-query",
+                score=1000,
+            )
+
+    numbers = re.findall(r"[+-]?\d+(?:\.\d+)?", query)
+    if len(numbers) < 2 or "http" in query.lower():
+        return None
+    lat = _safe_float(numbers[0], default=float("nan"))
+    lon = _safe_float(numbers[1], default=float("nan"))
+    if abs(lat) > 90 and abs(lon) <= 90:
+        lat, lon = lon, lat
+    upper = query.upper()
+    if re.search(r"\d(?:\.\d+)?\s*S\b", upper):
+        lat = -abs(lat)
+    elif re.search(r"\d(?:\.\d+)?\s*N\b", upper):
+        lat = abs(lat)
+    if re.search(r"\d(?:\.\d+)?\s*W\b", upper) or " W" in upper:
+        lon = -abs(lon)
+    elif re.search(r"\d(?:\.\d+)?\s*E\b", upper) or " E" in upper:
+        lon = abs(lon)
+    if -90 <= lat <= 90 and -180 <= lon <= 180:
+        return LocationSuggestion(
+            name=f"Coordinates {lat:.5f}, {lon:.5f}",
+            detail="Parsed decimal latitude/longitude.",
+            lat=lat,
+            lon=lon,
+            height_m=12000,
+            source="coordinate-query",
+            score=1000,
+        )
+    return None
 
 
 def _distance_km(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float:
@@ -2053,9 +2157,372 @@ def _score_online_location(
 
     if center_lat is not None and center_lon is not None:
         distance = _distance_km(center_lat, center_lon, suggestion.lat, suggestion.lon)
-        score += max(0, 35 - min(distance / 125, 35))
+        score += max(0, 10 - min(distance / 500, 10))
 
     return round(score, 3)
+
+
+def _google_location_bias(
+    *,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    west: float | None = None,
+    south: float | None = None,
+    east: float | None = None,
+    north: float | None = None,
+) -> dict[str, object] | None:
+    if None not in (west, south, east, north):
+        return {
+            "rectangle": {
+                "low": {
+                    "latitude": min(float(south), float(north)),
+                    "longitude": min(float(west), float(east)),
+                },
+                "high": {
+                    "latitude": max(float(south), float(north)),
+                    "longitude": max(float(west), float(east)),
+                },
+            }
+        }
+    if center_lat is not None and center_lon is not None:
+        return {
+            "circle": {
+                "center": {
+                    "latitude": center_lat,
+                    "longitude": center_lon,
+                },
+                "radius": 50000.0,
+            }
+        }
+    return None
+
+
+def _google_text_value(value: object) -> str:
+    if isinstance(value, dict):
+        return str(value.get("text") or "").strip()
+    return str(value or "").strip()
+
+
+def _google_prediction_text(prediction: dict[str, object]) -> str:
+    direct_text = _google_text_value(prediction.get("text"))
+    if direct_text:
+        return direct_text
+    structured = prediction.get("structuredFormat")
+    if not isinstance(structured, dict):
+        return ""
+    main_text = _google_text_value(structured.get("mainText"))
+    secondary_text = _google_text_value(structured.get("secondaryText"))
+    return ", ".join(part for part in (main_text, secondary_text) if part)
+
+
+def _google_place_details_url(place_name: str) -> str:
+    place_path = place_name.strip().strip("/")
+    if not place_path:
+        return ""
+    base_url = GOOGLE_PLACE_DETAILS_URL_BASE.rstrip("/")
+    if place_path.startswith("places/"):
+        return f"{base_url}/{place_path}"
+    return f"{base_url}/places/{place_path}"
+
+
+async def _google_place_details_suggestion(
+    query: str,
+    place_name: str,
+    *,
+    client: httpx.AsyncClient,
+    prediction_text: str = "",
+    rank: int = 0,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+) -> tuple[LocationSuggestion | None, str | None]:
+    url = _google_place_details_url(place_name)
+    if not url:
+        return None, None
+
+    try:
+        response = await client.get(
+            url,
+            headers={
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-FieldMask": (
+                    "id,displayName,formattedAddress,location,"
+                    "googleMapsUri,primaryType,types"
+                ),
+            },
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:300]
+        return None, (
+            f"Google Maps Place Details returned {exc.response.status_code}: {body}"
+        )
+    except httpx.HTTPError as exc:
+        return None, f"Google Maps Place Details unavailable: {exc}"
+
+    place = response.json()
+    if not isinstance(place, dict):
+        return None, "Google Maps Place Details returned an unexpected payload."
+    location = place.get("location")
+    if not isinstance(location, dict):
+        return None, None
+    place_lat = _safe_float(location.get("latitude"), default=float("nan"))
+    place_lon = _safe_float(location.get("longitude"), default=float("nan"))
+    if not (-90 <= place_lat <= 90 and -180 <= place_lon <= 180):
+        return None, None
+
+    display_name = place.get("displayName")
+    name = _google_text_value(display_name) or prediction_text or query
+    formatted_address = str(place.get("formattedAddress") or "").strip()
+    google_maps_uri = str(place.get("googleMapsUri") or "").strip()
+    primary_type = str(place.get("primaryType") or "place").strip()
+    detail_parts = [
+        part for part in [primary_type, formatted_address, google_maps_uri] if part
+    ]
+    suggestion = LocationSuggestion(
+        name=name,
+        detail="Google Maps - " + " | ".join(detail_parts),
+        lat=place_lat,
+        lon=place_lon,
+        height_m=12000,
+        source="google-places",
+        score=900 - (rank * 12),
+    )
+    suggestion.score += _score_online_location(
+        query,
+        suggestion,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        category="google",
+        place_type=primary_type,
+    )
+    return suggestion, None
+
+
+async def _google_places_location_suggestions(
+    query: str,
+    *,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    west: float | None = None,
+    south: float | None = None,
+    east: float | None = None,
+    north: float | None = None,
+    limit: int = 8,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[list[LocationSuggestion], str | None]:
+    if not GOOGLE_MAPS_API_KEY:
+        return [], "Google Maps Places search disabled; set GOOGLE_MAPS_API_KEY."
+
+    payload: dict[str, object] = {
+        "textQuery": query,
+        "pageSize": max(1, min(limit, 20)),
+        "languageCode": "en",
+    }
+    location_bias = _google_location_bias(
+        center_lat=center_lat,
+        center_lon=center_lon,
+        west=west,
+        south=south,
+        east=east,
+        north=north,
+    )
+    if location_bias:
+        payload["locationBias"] = location_bias
+
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+            "X-Goog-FieldMask": (
+                "places.id,places.displayName,places.formattedAddress,"
+                "places.location,places.googleMapsUri,places.primaryType"
+            ),
+        }
+        if client is None:
+            timeout = httpx.Timeout(LOCATION_SEARCH_TIMEOUT_S, connect=2.0)
+            async with httpx.AsyncClient(timeout=timeout) as owned_client:
+                response = await owned_client.post(
+                    GOOGLE_PLACES_TEXT_SEARCH_URL,
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+        else:
+            response = await client.post(
+                GOOGLE_PLACES_TEXT_SEARCH_URL,
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:300]
+        return [], f"Google Maps Places search returned {exc.response.status_code}: {body}"
+    except httpx.HTTPError as exc:
+        return [], f"Google Maps Places search unavailable: {exc}"
+
+    suggestions: list[LocationSuggestion] = []
+    for index, place in enumerate(response.json().get("places", [])):
+        if not isinstance(place, dict):
+            continue
+        location = place.get("location")
+        if not isinstance(location, dict):
+            continue
+        place_lat = _safe_float(location.get("latitude"), default=float("nan"))
+        place_lon = _safe_float(location.get("longitude"), default=float("nan"))
+        if not (-90 <= place_lat <= 90 and -180 <= place_lon <= 180):
+            continue
+        display_name = place.get("displayName")
+        if isinstance(display_name, dict):
+            name = str(display_name.get("text") or "").strip()
+        else:
+            name = ""
+        formatted_address = str(place.get("formattedAddress") or "").strip()
+        google_maps_uri = str(place.get("googleMapsUri") or "").strip()
+        primary_type = str(place.get("primaryType") or "place").strip()
+        detail_parts = [
+            part for part in [primary_type, formatted_address, google_maps_uri] if part
+        ]
+        suggestion = LocationSuggestion(
+            name=name or formatted_address or query,
+            detail="Google Maps - " + " | ".join(detail_parts),
+            lat=place_lat,
+            lon=place_lon,
+            height_m=12000,
+            source="google-places",
+            score=650 - (index * 10),
+        )
+        suggestion.score += _score_online_location(
+            query,
+            suggestion,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            category="google",
+            place_type=primary_type,
+        )
+        suggestions.append(suggestion)
+
+    return suggestions, None
+
+
+async def _google_places_autocomplete_suggestions(
+    query: str,
+    *,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    west: float | None = None,
+    south: float | None = None,
+    east: float | None = None,
+    north: float | None = None,
+) -> tuple[list[LocationSuggestion], str | None]:
+    if not GOOGLE_MAPS_API_KEY:
+        return [], "Google Maps Places autocomplete disabled; set GOOGLE_MAPS_API_KEY."
+
+    payload: dict[str, object] = {
+        "input": query,
+        "includeQueryPredictions": True,
+        "languageCode": "en",
+    }
+    location_bias = _google_location_bias(
+        center_lat=center_lat,
+        center_lon=center_lon,
+        west=west,
+        south=south,
+        east=east,
+        north=north,
+    )
+    if location_bias:
+        payload["locationBias"] = location_bias
+
+    suggestions: list[LocationSuggestion] = []
+    detail_parts: list[str] = []
+    prediction_texts: list[str] = []
+    timeout = httpx.Timeout(LOCATION_SEARCH_TIMEOUT_S, connect=2.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                GOOGLE_PLACES_AUTOCOMPLETE_URL,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                    "X-Goog-FieldMask": (
+                        "suggestions.placePrediction.place,"
+                        "suggestions.placePrediction.placeId,"
+                        "suggestions.placePrediction.text.text,"
+                        "suggestions.placePrediction.structuredFormat.mainText.text,"
+                        "suggestions.placePrediction.structuredFormat.secondaryText.text,"
+                        "suggestions.queryPrediction.text.text"
+                    ),
+                },
+            )
+            response.raise_for_status()
+            for index, raw_suggestion in enumerate(
+                response.json().get("suggestions", [])
+            ):
+                if not isinstance(raw_suggestion, dict):
+                    continue
+                place_prediction = raw_suggestion.get("placePrediction")
+                if isinstance(place_prediction, dict):
+                    prediction_text = _google_prediction_text(place_prediction)
+                    place_name = str(
+                        place_prediction.get("place")
+                        or place_prediction.get("placeId")
+                        or ""
+                    ).strip()
+                    if place_name:
+                        place_suggestion, detail = await _google_place_details_suggestion(
+                            query,
+                            place_name,
+                            client=client,
+                            prediction_text=prediction_text,
+                            rank=index,
+                            center_lat=center_lat,
+                            center_lon=center_lon,
+                        )
+                        if place_suggestion:
+                            suggestions.append(place_suggestion)
+                            continue
+                        if detail:
+                            detail_parts.append(detail)
+                    if prediction_text:
+                        prediction_texts.append(prediction_text)
+                    continue
+
+                query_prediction = raw_suggestion.get("queryPrediction")
+                if isinstance(query_prediction, dict):
+                    query_text = _google_prediction_text(query_prediction)
+                    if query_text:
+                        prediction_texts.append(query_text)
+
+            for prediction_text in prediction_texts[:3]:
+                if len(suggestions) >= 8:
+                    break
+                text_suggestions, text_detail = (
+                    await _google_places_location_suggestions(
+                        prediction_text,
+                        center_lat=center_lat,
+                        center_lon=center_lon,
+                        west=west,
+                        south=south,
+                        east=east,
+                        north=north,
+                        limit=2,
+                        client=client,
+                    )
+                )
+                if text_suggestions:
+                    suggestions.extend(text_suggestions)
+                elif text_detail:
+                    detail_parts.append(text_detail)
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:300]
+        return [], (
+            f"Google Maps Places autocomplete returned {exc.response.status_code}: {body}"
+        )
+    except httpx.HTTPError as exc:
+        return [], f"Google Maps Places autocomplete unavailable: {exc}"
+
+    return suggestions, " | ".join(detail_parts[:3]) if detail_parts else None
 
 
 def _local_location_suggestions(query: str) -> list[LocationSuggestion]:
@@ -2096,7 +2563,8 @@ async def runtime_config() -> RuntimeConfigResponse:
     return RuntimeConfigResponse(
         cesium_ion_token=CESIUM_ION_TOKEN,
         default_model=OLLAMA_MODEL,
-        claude_default_model=CLAUDE_MODEL,
+        claude_default_model=_normalize_claude_model(CLAUDE_MODEL),
+        anthropic_api_key_configured=bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
         default_lat=DEFAULT_LAT,
         default_lon=DEFAULT_LON,
         default_height_m=DEFAULT_HEIGHT_M,
@@ -2143,77 +2611,127 @@ async def list_ollama_models() -> ModelsResponse:
 
 @app.get("/api/location-search", response_model=LocationSearchResponse)
 async def search_locations(
-    q: str = Query(min_length=2, max_length=200),
-    lat: float | None = Query(default=None, ge=-90, le=90),
-    lon: float | None = Query(default=None, ge=-180, le=180),
-    west: float | None = Query(default=None, ge=-180, le=180),
-    south: float | None = Query(default=None, ge=-90, le=90),
-    east: float | None = Query(default=None, ge=-180, le=180),
-    north: float | None = Query(default=None, ge=-90, le=90),
+    q: str = Query(min_length=1, max_length=200),
+    lat: float | None = None,
+    lon: float | None = None,
+    west: float | None = None,
+    south: float | None = None,
+    east: float | None = None,
+    north: float | None = None,
 ) -> LocationSearchResponse:
     query = _clean_location_query(q)
-    if len(query) < 2:
-        raise HTTPException(status_code=422, detail="Location query is too short.")
+    if not query:
+        return LocationSearchResponse(
+            query=query,
+            suggestions=[],
+            online=False,
+            detail="Enter a mission location, coordinates, or a Google Maps link.",
+        )
 
     suggestions = _local_location_suggestions(query)
+    coordinate_suggestion = _coordinate_location_suggestion(query)
+    if coordinate_suggestion:
+        suggestions.insert(0, coordinate_suggestion)
     online = False
-    detail: str | None = None
+    detail_parts: list[str] = []
 
-    try:
-        params: dict[str, object] = {
-            "q": query,
-            "format": "jsonv2",
-            "limit": 10,
-            "addressdetails": 1,
-            "extratags": 1,
-            "namedetails": 1,
-            "dedupe": 1,
-        }
-        if None not in (west, south, east, north):
-            params["viewbox"] = f"{west},{north},{east},{south}"
-
-        timeout = httpx.Timeout(LOCATION_SEARCH_TIMEOUT_S, connect=2.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(
-                LOCATION_SEARCH_URL,
-                params=params,
-                headers={
-                    "Accept-Language": "en",
-                    "User-Agent": "TERA Source Planner local web app; optional online geocode",
-                },
-            )
-            response.raise_for_status()
-        online = True
-        for item in response.json():
-            item_lat = item.get("lat")
-            item_lon = item.get("lon")
-            if item_lat is None or item_lon is None:
-                continue
-            display_name = str(item.get("display_name") or item.get("name") or query)
-            category = str(item.get("category") or "online geocoder")
-            place_type = str(item.get("type") or "place")
-            suggestion = LocationSuggestion(
-                name=display_name.split(",")[0],
-                detail=f"{category}/{place_type} - {display_name}",
-                lat=float(item_lat),
-                lon=float(item_lon),
-                height_m=12000,
-                source="online-geocoder",
-            )
-            suggestion.score = _score_online_location(
+    if GOOGLE_MAPS_API_KEY:
+        autocomplete_suggestions, autocomplete_detail = (
+            await _google_places_autocomplete_suggestions(
                 query,
-                suggestion,
-                center_lat=lat if lat is not None else None,
-                center_lon=lon if lon is not None else None,
-                importance=_safe_float(item.get("importance")),
-                category=category,
-                place_type=place_type,
+                center_lat=lat,
+                center_lon=lon,
+                west=west,
+                south=south,
+                east=east,
+                north=north,
             )
-            suggestions.append(
-                suggestion
-            )
-    except (httpx.HTTPError, ValueError) as exc:
-        detail = f"Online location lookup unavailable: {exc}"
+        )
+        if autocomplete_suggestions:
+            online = True
+            suggestions.extend(autocomplete_suggestions)
+        elif autocomplete_detail:
+            detail_parts.append(autocomplete_detail)
+
+        text_search_suggestions, text_search_detail = await _google_places_location_suggestions(
+            query,
+            center_lat=lat,
+            center_lon=lon,
+            west=west,
+            south=south,
+            east=east,
+            north=north,
+            limit=8,
+        )
+        if text_search_suggestions:
+            online = True
+            suggestions.extend(text_search_suggestions)
+        elif text_search_detail:
+            detail_parts.append(text_search_detail)
+    else:
+        detail_parts.append(
+            "Google Maps Places disabled; set GOOGLE_MAPS_API_KEY for Google-grade autocomplete."
+        )
+
+    should_query_nominatim = len(query) >= 2 or not query.isdigit()
+    if should_query_nominatim:
+        try:
+            params: dict[str, object] = {
+                "q": query,
+                "format": "jsonv2",
+                "limit": 10,
+                "addressdetails": 1,
+                "extratags": 1,
+                "namedetails": 1,
+                "dedupe": 1,
+            }
+            if len(query) <= 2 and None not in (west, south, east, north):
+                params["viewbox"] = f"{west},{north},{east},{south}"
+
+            timeout = httpx.Timeout(LOCATION_SEARCH_TIMEOUT_S, connect=2.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(
+                    LOCATION_SEARCH_URL,
+                    params=params,
+                    headers={
+                        "Accept-Language": "en",
+                        "User-Agent": "TERA Source Planner local web app; optional online geocode",
+                    },
+                )
+                response.raise_for_status()
+            online = True
+            for item in response.json():
+                item_lat = item.get("lat")
+                item_lon = item.get("lon")
+                if item_lat is None or item_lon is None:
+                    continue
+                display_name = str(item.get("display_name") or item.get("name") or query)
+                category = str(item.get("category") or "online geocoder")
+                place_type = str(item.get("type") or "place")
+                suggestion = LocationSuggestion(
+                    name=display_name.split(",")[0],
+                    detail=f"{category}/{place_type} - {display_name}",
+                    lat=float(item_lat),
+                    lon=float(item_lon),
+                    height_m=12000,
+                    source="online-geocoder",
+                )
+                suggestion.score = _score_online_location(
+                    query,
+                    suggestion,
+                    center_lat=lat if lat is not None else None,
+                    center_lon=lon if lon is not None else None,
+                    importance=_safe_float(item.get("importance")),
+                    category=category,
+                    place_type=place_type,
+                )
+                suggestions.append(suggestion)
+        except (httpx.HTTPError, ValueError) as exc:
+            detail_parts.append(f"Nominatim location lookup unavailable: {exc}")
+    else:
+        detail_parts.append(
+            "Numeric location searches need more context unless Google Maps Places is configured."
+        )
 
     deduped: list[LocationSuggestion] = []
     seen: set[tuple[int, int, str]] = set()
@@ -2233,7 +2751,7 @@ async def search_locations(
         query=query,
         suggestions=deduped[:8],
         online=online,
-        detail=detail,
+        detail=" | ".join(detail_parts) if detail_parts else None,
     )
 
 

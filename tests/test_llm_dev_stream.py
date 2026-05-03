@@ -117,7 +117,7 @@ async def test_prompt_stream_can_use_claude_provider(monkeypatch: pytest.MonkeyP
         kmh_app.PromptRequest(
             prompt="Recommend sources.",
             llm_provider="claude",
-            cloud_model="claude-sonnet-4-20250514",
+            cloud_model="Claude Sonnet 4.6",
             cloud_api_key="sk-ant-test",
         )
     )
@@ -136,7 +136,7 @@ async def test_prompt_stream_reports_missing_claude_key() -> None:
         kmh_app.PromptRequest(
             prompt="Recommend sources.",
             llm_provider="claude",
-            cloud_model="claude-sonnet-4-20250514",
+            cloud_model="claude-sonnet-4-6",
         )
     )
 
@@ -210,7 +210,8 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         'id="claudeModelSelect"',
         'id="claudeApiKeyInput"',
         "Claude API",
-        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-6",
+        "Claude Sonnet 4.6",
     ]:
         assert token in html
 
@@ -225,6 +226,8 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
     for token in [
         "teraLlmProvider",
         "teraClaudeApiKey",
+        "serverClaudeKeyAvailable",
+        "anthropic_api_key_configured",
         "applyProviderSelection",
         "void loadModels();",
         "Detected local model:",
@@ -239,13 +242,22 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "ANTHROPIC_API_URL",
         "ANTHROPIC_VERSION",
         "CLAUDE_MODEL",
+        "CLAUDE_MODEL_ALIASES",
         "claude_default_model",
+        "anthropic_api_key_configured",
+        "_normalize_claude_model",
         "_select_ollama_default_model",
         "Auto-detected installed Gemma model",
         "_post_claude_message",
         "_extract_claude_response_text",
     ]:
         assert token in app_source
+
+
+def test_claude_model_labels_normalize_to_current_sonnet() -> None:
+    assert kmh_app._normalize_claude_model("Claude Sonnet 4.6") == "claude-sonnet-4-6"
+    assert kmh_app._normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-6"
+    assert kmh_app._normalize_claude_model("claude-sonnet-4-20250514") == "claude-sonnet-4-6"
 
 
 def test_local_model_detection_prefers_installed_gemma_alias() -> None:
@@ -264,6 +276,17 @@ def test_location_search_prefers_curated_cascades_match() -> None:
     assert suggestions
     assert suggestions[0].name == "Cascade Range, WA/OR/BC"
     assert suggestions[0].score > 0
+
+
+def test_location_search_parses_google_maps_coordinate_links() -> None:
+    suggestion = kmh_app._coordinate_location_suggestion(
+        "https://www.google.com/maps/place/test/data=!3m1!4b1!4m6!3m5!8m2!3d47.8021!4d-123.6044"
+    )
+
+    assert suggestion is not None
+    assert suggestion.source == "coordinate-query"
+    assert suggestion.lat == 47.8021
+    assert suggestion.lon == -123.6044
 
 
 def test_planner_workflow_has_carousel_and_resizable_ao_handles() -> None:
@@ -288,7 +311,7 @@ def test_planner_keeps_scope_questions_in_agent_response_only() -> None:
 
     assert "ensureClarifyingQuestions" in js
     assert "state.workflowStageIndex = 1;" in js
-    assert "Use the advisor response to scope, then confirm sources." in js
+    assert "Confirm sources when ready." in js
     assert "### Scope Check" in js
     assert 'data-workflow-slide="questions"' not in html
     assert 'id="clarifyingQuestions"' not in html
@@ -326,6 +349,17 @@ def test_data_package_empty_state_does_not_repeat_chat_instruction() -> None:
     assert "Describe the mission in chat to begin source planning." not in html
 
 
+def test_chat_panel_hides_advisor_header_and_status_noise() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "<h2>Source Advisor</h2>" not in html
+    assert '<div class="visually-hidden">' in html
+    assert 'id="requestStatus" class="section-meta" aria-live="polite"' in html
+    assert "Use the advisor response" not in js
+    assert "Deterministic advisor response shown (" not in js
+
+
 def test_source_planner_degrades_without_false_inference_failure() -> None:
     html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
@@ -336,7 +370,7 @@ def test_source_planner_degrades_without_false_inference_failure() -> None:
     assert "Source planner unavailable" in js
     assert "Planning source package" in js
     assert "Local model offline; rules active" in js
-    assert "deterministic fallback" in js
+    assert "deterministic planner response" in js
     assert "plan the needed package" in html
 
     for stale_label in [
@@ -358,15 +392,19 @@ def test_prompt_submission_tries_selected_provider_then_local_then_deterministic
 
     assert "streamAssistantProvider" in js
     assert "resolveLocalModelForFallback" in js
-    assert "Claude failed; trying local Ollama fallback" in js
-    assert "Claude key missing; trying local Ollama fallback" in js
-    assert "local fallback after Claude failure" in js
-    assert "Model providers unavailable; deterministic advisor response shown" in js
+    assert "Trying local model fallback" in js
+    assert "Claude request failed. Check key, model access, or network." in js
+    assert "deterministic planner response" in js
+    assert "Model providers unavailable; deterministic planner response shown." in js
     assert 'provider === "ollama" && !state.localModelAvailable' not in js
+    assert "Claude failed; trying local Ollama fallback" not in js
+    assert "Claude key missing; trying local Ollama fallback" not in js
+    assert "local fallback after Claude failure" not in js
+    assert "Model providers unavailable; deterministic advisor response shown (" not in js
 
     claude_attempt = js.index('provider: "claude"')
     local_attempt = js.index('provider: "ollama"')
-    deterministic = js.index("Model providers unavailable; deterministic advisor response shown")
+    deterministic = js.index("deterministic planner response")
 
     assert claude_attempt < local_attempt < deterministic
 
@@ -420,14 +458,26 @@ def test_header_title_precedes_kicker_and_map_imports_kml_overlays() -> None:
     )
     assert 'id="importOverlayBtn"' in html
     assert 'id="overlayFileInput"' in html
+    assert 'id="mapModeToggleBtn"' in html
     assert 'accept=".kml,.kmz' in html
+    assert "jszip@3.10.1" in html
     assert ".file-input" in css
+    assert ".map-mode-toggle" in css
 
     assert "overlayDataSource" in js
     assert "async function importMapOverlay" in js
+    assert "sceneMode: Cesium.SceneMode.SCENE2D" in js
+    assert "function setMapMode" in js
+    assert "Cesium.ScreenSpaceEventType.MIDDLE_DOWN" in js
+    assert "async function readOverlayFileText" in js
+    assert "function parseKmlToGeoJson" in js
+    assert "Cesium.GeoJsonDataSource.load" in js
+    assert "function styleOverlayDataSource" in js
+    assert "function loadNativeOverlayDataSource" in js
     assert "Cesium.KmlDataSource.load" in js
     assert "state.viewer.dataSources.add(dataSource)" in js
     assert "state.viewer.flyTo(state.overlayDataSource" in js
+    assert 'els.mapModeToggleBtn.addEventListener("click", toggleMapMode)' in js
     assert 'els.importOverlayBtn.addEventListener("click", requestOverlayFile)' in js
     assert 'els.overlayFileInput.addEventListener("change", onOverlayFileSelected)' in js
 
@@ -478,6 +528,26 @@ def test_map_location_search_sets_context_and_center_grid() -> None:
     assert "LOCATION_SEARCH_URL" in app_source
     assert "LOCATION_INTENT_PREFIX_RE" in app_source
     assert "_score_online_location" in app_source
+    assert "GOOGLE_MAPS_API_KEY" in app_source
+    assert "GOOGLE_PLACES_AUTOCOMPLETE_URL" in app_source
+    assert "GOOGLE_PLACE_DETAILS_URL_BASE" in app_source
+    assert "GOOGLE_PLACES_TEXT_SEARCH_URL" in app_source
+    assert "_google_places_autocomplete_suggestions" in app_source
+    assert "_google_place_details_suggestion" in app_source
+    assert "_google_places_location_suggestions" in app_source
+    assert "includeQueryPredictions" in app_source
+    assert "suggestions.placePrediction.place" in app_source
+    assert "X-Goog-FieldMask" in app_source
+    assert "google-places" in app_source
+    assert "q: str = Query(min_length=1" in app_source
+    assert "parseGoogleMapsCoordinateQuery" in js
+    assert "!3d" in js
+    assert "!4d" in js
+    assert "locationSearchDetail" in js
+    assert "googleMapsSearchUrl" in js
+    assert "Open Google Maps search" in js
+    assert "cleanedQuery.length < 1" in js
+    assert "cleanedQuery.length < 2" not in js
     assert "Planner-confirmed mission map focus" in app_source
     assert "Move the map to the mission AO" in app_source
     assert "use the map location search" in prompt
