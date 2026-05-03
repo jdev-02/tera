@@ -226,7 +226,7 @@ final class TeraPlanClient {
         payload.put("prompt", prompt);
         payload.put("model", "gemma3:4b");
         payload.put("llm_provider", "ollama");
-        payload.put("agent_profile", "tera-atak-link-test");
+        payload.put("agent_profile", "tera-atak-live");
         if (mapContext != null) {
             payload.put("map_context", mapContext);
         }
