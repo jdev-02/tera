@@ -78,6 +78,16 @@ _PROFILE_FROM_CONSTRAINTS: dict[frozenset[str], str] = {
     frozenset({"prefer_cover", "avoid_ridgelines"}): "foot_covered",
 }
 
+_PROFILE_FROM_MODE: dict[str, str] = {
+    "foot": "foot",
+    "injured_foot": "foot",
+    "litter_team": "foot_trails",
+    "vehicle": "vehicle_truck",
+    "atv": "vehicle_mrap",
+    "snow": "foot",
+    "drone_team": "foot",
+}
+
 
 def _profile_for(constraints: list[str]) -> str:
     cset = frozenset(c for c in constraints if not c.startswith("avoid_"))
@@ -103,7 +113,8 @@ def _dispatch_tools(query: dict[str, Any], origin: Coord) -> dict[str, Any]:
         rationale: operator-cadence explanation string
     """
     constraints = query.get("constraints", [])
-    profile = _profile_for(constraints)
+    mode = query.get("mode")
+    profile = _PROFILE_FROM_MODE.get(mode, _profile_for(constraints))
     avoid = _avoid_for(constraints)
     data_layers = query.get("allowed_data_layers", [])
     radius_m = int(query["max_distance_km"] * 1000)
@@ -112,15 +123,16 @@ def _dispatch_tools(query: dict[str, Any], origin: Coord) -> dict[str, Any]:
     origin_dict = origin.model_dump()
 
     # Step 1: resolve destination.
-    if dest_type in {"freshwater", "safe_zone", "trailhead"}:
+    if dest_type not in {"none", "known_location"}:
         pois = find_pois(type=dest_type, from_=origin_dict, radius_m=radius_m)
         if not pois:
+            readable_dest_type = dest_type.replace("_", " ")
             return {
                 "feature": _empty_feature(origin_dict),
                 "waypoints": [],
                 "cost_breakdown": {"distance_m": 0.0, "time_s": 0.0, "elevation_gain_m": 0.0},
                 "rationale": (
-                    f"No {dest_type.replace('_', ' ')} found within "
+                    f"No {readable_dest_type} found within "
                     f"{query['max_distance_km']} kilometers. Suggest expanding radius."
                 ),
             }
@@ -500,10 +512,22 @@ def _tool_names_for_query(query: dict[str, Any]) -> list[str]:
     dest_type = query.get("destination_type", "none")
     objective = query.get("objective")
     tools: list[str] = []
-    if dest_type in {"freshwater", "safe_zone", "trailhead"}:
+    if dest_type not in {"none", "known_location"}:
         tools.append("find_pois")
     if (
-        objective in {"fastest_route", "fastest_covered_route", "nearest_water"}
+        objective
+        in {
+            "fastest_route",
+            "fastest_covered_route",
+            "nearest_water",
+            "nearest",
+            "fastest",
+            "safest",
+            "easiest",
+            "least_elevation",
+            "survival_balanced",
+            "multi_stop",
+        }
         and dest_type != "none"
     ):
         tools.append("route")

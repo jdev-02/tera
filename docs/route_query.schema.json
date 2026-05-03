@@ -23,12 +23,51 @@
         "fastest_route",
         "fastest_covered_route",
         "nearest_water",
-        "priority_search_area"
+        "priority_search_area",
+        "nearest",
+        "fastest",
+        "safest",
+        "easiest",
+        "least_elevation",
+        "survival_balanced",
+        "multi_stop",
+        "reachable_area",
+        "sar_probability",
+        "stay_or_move"
       ]
     },
     "destination_type": {
       "type": "string",
-      "enum": ["freshwater", "safe_zone", "trailhead", "known_location", "none"]
+      "enum": [
+        "freshwater",
+        "safe_zone",
+        "trailhead",
+        "known_location",
+        "none",
+        "water",
+        "shelter",
+        "medical",
+        "road",
+        "trail",
+        "settlement",
+        "building",
+        "signal",
+        "high_ground",
+        "clearing",
+        "lz",
+        "campsite",
+        "bridge",
+        "ford",
+        "barrier",
+        "hazard",
+        "land_access",
+        "named_feature",
+        "any"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["foot", "injured_foot", "litter_team", "vehicle", "atv", "snow", "drone_team"]
     },
     "max_distance_km": {
       "type": "number",
@@ -44,7 +83,24 @@
           "prefer_cover",
           "avoid_high_comms_risk",
           "avoid_steep_terrain",
-          "stay_on_trails"
+          "stay_on_trails",
+          "avoid_cliffs",
+          "avoid_water_crossings",
+          "avoid_private_land",
+          "avoid_restricted_areas",
+          "avoid_dense_brush",
+          "avoid_wetlands",
+          "avoid_flood_zones",
+          "avoid_fire_areas",
+          "avoid_avalanche_terrain",
+          "avoid_darkness",
+          "prefer_roads",
+          "prefer_trails",
+          "prefer_open_ground",
+          "prefer_lower_elevation",
+          "prefer_high_ground",
+          "prefer_shelter",
+          "prefer_signal"
         ]
       }
     },
@@ -58,7 +114,18 @@
           "hydrography",
           "roads",
           "safe_zones",
-          "comms_risk"
+          "comms_risk",
+          "osm_features",
+          "shelters",
+          "medical",
+          "settlements",
+          "buildings",
+          "landcover",
+          "hazards",
+          "restricted_areas",
+          "signal",
+          "weather",
+          "imagery"
         ]
       }
     },

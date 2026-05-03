@@ -36,11 +36,11 @@ what:
       operator_question: "What kind of operation is this?"
     - name: objective
       schema_field: objective
-      type: "fastest_route | fastest_covered_route | nearest_water | priority_search_area"
+      type: "fastest_route | fastest_covered_route | nearest_water | priority_search_area | nearest | fastest | safest | easiest | least_elevation | survival_balanced | multi_stop | reachable_area | sar_probability | stay_or_move"
       operator_question: "What is the route trying to optimize?"
     - name: destination_type
       schema_field: destination_type
-      type: "freshwater | safe_zone | trailhead | known_location | none"
+      type: "freshwater | safe_zone | trailhead | known_location | none | water | shelter | medical | road | trail | settlement | building | signal | high_ground | clearing | lz | campsite | bridge | ford | barrier | hazard | land_access | named_feature | any"
       operator_question: "What kind of place am I going to?"
       default: none
     - name: max_distance_km
@@ -54,12 +54,17 @@ how:
   fields:
     - name: constraints
       schema_field: constraints
-      type: "array of: avoid_ridgelines | prefer_cover | avoid_high_comms_risk | avoid_steep_terrain | stay_on_trails"
+      type: "array of: avoid_ridgelines | prefer_cover | avoid_high_comms_risk | avoid_steep_terrain | stay_on_trails | avoid_cliffs | avoid_water_crossings | avoid_private_land | avoid_restricted_areas | avoid_dense_brush | avoid_wetlands | avoid_flood_zones | avoid_fire_areas | avoid_avalanche_terrain | avoid_darkness | prefer_roads | prefer_trails | prefer_open_ground | prefer_lower_elevation | prefer_high_ground | prefer_shelter | prefer_signal"
       operator_question: "What must I avoid or prefer along the way?"
     - name: allowed_data_layers
       schema_field: allowed_data_layers
-      type: "array of: terrain | trails | hydrography | roads | safe_zones | comms_risk"
+      type: "array of: terrain | trails | hydrography | roads | safe_zones | comms_risk | osm_features | shelters | medical | settlements | buildings | landcover | hazards | restricted_areas | signal | weather | imagery"
       operator_question: "What data may I consult? (Defense in depth — the LLM cannot ask for layers it shouldn't.)"
+    - name: mode
+      schema_field: mode
+      type: "foot | injured_foot | litter_team | vehicle | atv | snow | drone_team"
+      operator_question: "What movement mode or team profile is being routed?"
+      default: foot
     - name: requires_approval
       schema_field: authority_context.requires_approval
       type: boolean
@@ -116,6 +121,58 @@ examples:
       authority_context:
         user_role: team_lead
         requires_approval: true
+
+  - utterance: "Find the fastest route to the nearest hospital, clinic, or aid station."
+    route_query:
+      mission_type: evacuation_route
+      objective: fastest
+      destination_type: medical
+      mode: foot
+      max_distance_km: 10
+      constraints: [prefer_roads, prefer_trails]
+      allowed_data_layers: [osm_features, roads, trails, medical]
+      authority_context:
+        user_role: operator
+        requires_approval: false
+
+  - utterance: "Find a route to a helicopter landing zone or open clearing."
+    route_query:
+      mission_type: search_and_rescue
+      objective: safest
+      destination_type: lz
+      mode: litter_team
+      max_distance_km: 5
+      constraints: [avoid_steep_terrain, prefer_open_ground]
+      allowed_data_layers: [osm_features, terrain, landcover]
+      authority_context:
+        user_role: team_lead
+        requires_approval: true
+
+  - utterance: "Route me to the nearest high point likely to have cell signal."
+    route_query:
+      mission_type: search_and_rescue
+      objective: nearest
+      destination_type: high_ground
+      mode: foot
+      max_distance_km: 5
+      constraints: [prefer_high_ground, prefer_signal, avoid_steep_terrain]
+      allowed_data_layers: [osm_features, terrain, signal]
+      authority_context:
+        user_role: operator
+        requires_approval: false
+
+  - utterance: "Find a route that avoids private land and river crossings."
+    route_query:
+      mission_type: search_and_rescue
+      objective: safest
+      destination_type: trailhead
+      mode: foot
+      max_distance_km: 5
+      constraints: [avoid_private_land, avoid_water_crossings, prefer_trails]
+      allowed_data_layers: [osm_features, trails, hydrography, restricted_areas]
+      authority_context:
+        user_role: operator
+        requires_approval: false
 
 # Forbidden translations -- the LLM should NEVER produce these even if asked.
 # The structured_query_validator's forbidden-terms list also guards this; the
