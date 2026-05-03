@@ -258,6 +258,28 @@ def test_atak_prompt_uses_client_location_and_display_bounds() -> None:
     assert "OSM vectors from /WINTAK Imagery and DTED terrain from /DTED" in system_prompt
 
 
+def test_atak_prompt_source_catalog_is_limited_to_root_osm_and_dted() -> None:
+    request = kmh_app.PromptRequest(
+        prompt="Need slope analysis and viewshed for a route.",
+        llm_provider="ollama",
+        agent_profile="tera-atak-live",
+        map_context=kmh_app.MapContext(
+            client_location=kmh_app.MapPoint(lat=37.79, lon=-122.4),
+        ),
+    )
+
+    system_prompt = kmh_app._build_system_prompt(request)
+
+    assert "local OSM vectors from /WINTAK Imagery" in system_prompt
+    assert "local DTED terrain from /DTED" in system_prompt
+    assert "Root DTED Terrain" in system_prompt
+    assert "Root-staged OSM vector data" in system_prompt
+    assert "USGS 3DEP" not in system_prompt
+    assert "Cesium World Terrain" not in system_prompt
+    assert "Copernicus DEM" not in system_prompt
+    assert "Sentinel" not in system_prompt
+
+
 def test_atak_mirror_event_records_client_location_and_query_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1221,8 +1243,9 @@ def test_free_imagery_sources_use_wintak_osm_naip_and_dted() -> None:
     assert "basemap.nationalmap.gov" in usgs.source_url
     assert nrl.download_methods[0].id == "nrl_naip_tile_cache"
     assert "geoint.nrlssc.navy.mil" in nrl.source_url
-    assert "Jetson demo file selection is fixed to root-staged data" in js
-    assert "NAIP and OSM imagery under `/WINTAK Imagery`" in prompt
+    assert "Jetson analytical source selection is fixed to OSM vectors" in js
+    assert "local OSM vectors under `/WINTAK Imagery` and local DTED terrain under" in prompt
+    assert dted.name == "Root DTED Terrain"
 
 
 def test_naip_osm_and_copernicus_download_params_are_aoi_scoped() -> None:

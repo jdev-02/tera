@@ -1205,19 +1205,18 @@ SOURCE_CATALOG: list[SourceOption] = [
     ),
     SourceOption(
         id="dted_earth_explorer",
-        name="DTED from USGS EarthExplorer",
-        provider="USGS EarthExplorer",
+        name="Root DTED Terrain",
+        provider="Local Jetson /DTED folder",
         category="terrain",
         purpose=(
-            "Operator-staged DTED-2/DTED cells from EarthExplorer imported to the "
-            "Jetson package and converted to GeoTIFF when GDAL is installed."
+            "Operator-staged DTED cells from the Jetson root /DTED folder for "
+            "slope, terrain cost, elevation, and viewshed analysis."
         ),
-        useful_for=["DTED-2 30 m terrain", "military terrain interchange", "offline DEM fallback"],
+        useful_for=["local DTED terrain", "slope analysis", "viewshed", "offline terrain cost"],
         analysis_role=(
-            "EarthExplorer requires account login, so the web app imports a local "
-            "staging directory of downloaded .dt0/.dt1/.dt2 files. It then converts "
-            "each file with gdal_translate when available and registers both raw "
-            "DTED and GeoTIFF artifacts."
+            "The Jetson imports the root-staged local .dt0/.dt1/.dt2 files. "
+            "It converts each file with gdal_translate when available and "
+            "registers both raw DTED and GeoTIFF artifacts."
         ),
         stream_status="not-streamed",
         download_status="manual-stage-import",
@@ -1228,7 +1227,7 @@ SOURCE_CATALOG: list[SourceOption] = [
         download_methods=[
             SourceDownloadMethod(
                 id="dted_earthexplorer_import_convert",
-                label="Import staged EarthExplorer DTED and convert with GDAL",
+                label="Import root-staged Jetson DTED and convert with GDAL",
                 endpoint="${DTED_SOURCE_DIR}",
                 output_format="DTED cells and GeoTIFF DEMs",
                 local_artifact_template=(
@@ -1239,11 +1238,10 @@ SOURCE_CATALOG: list[SourceOption] = [
                     "bbox": "{aoi_bbox_wgs84}",
                     "convert_to_geotiff": True,
                 },
-                requires_account=True,
-                terms_url="https://www.usgs.gov/tools/earthexplorer",
+                requires_account=False,
                 notes=(
-                    "Set DTED_SOURCE_DIR to the folder containing EarthExplorer .dt2 "
-                    "downloads. gdal_translate input.dt2 output.tif is used when present."
+                    "Defaults to /DTED on the Jetson. gdal_translate input.dt2 "
+                    "output.tif is used when present."
                 ),
             )
         ],
@@ -1256,7 +1254,7 @@ SOURCE_CATALOG: list[SourceOption] = [
                 notes="Converted GeoTIFFs are preferred; raw DTED remains available for GDAL readers.",
             )
         ],
-        notes="Use when the operator has already pulled DTED from EarthExplorer; otherwise prefer Copernicus GLO-30.",
+        notes="Only DTED under /DTED is valid terrain for the Jetson demo; do not substitute another terrain source.",
     ),
     SourceOption(
         id="srtm",
@@ -1846,9 +1844,18 @@ def _get_source_options_by_ids(source_ids: list[str]) -> list[SourceOption]:
     return sources
 
 
+JETSON_ANALYTIC_SOURCE_IDS = ("osm_extract", "dted_earth_explorer")
+
+
 def _format_source_catalog_brief() -> str:
     lines = []
-    for source in SOURCE_CATALOG:
+    lines.append(
+        "Jetson analytical source allowlist: use only local OSM vectors from "
+        "/WINTAK Imagery and local DTED terrain from /DTED. Do not recommend "
+        "or require any source outside that allowlist for agentic TAK output."
+    )
+    for source_id in JETSON_ANALYTIC_SOURCE_IDS:
+        source = SOURCE_BY_ID[source_id]
         lines.append(
             "- "
             f"{source.id}: {source.name} ({source.category}); "
@@ -5819,11 +5826,11 @@ def _infer_source_recommendation(
     questions: list[str] = []
     rationale: list[str] = []
 
-    _append_unique(optional_ids, "naip", "osm_basemap")
     rationale.append(
-        "Jetson demo file selection is fixed to root-staged data: OSM and NAIP "
-        "imagery under /WINTAK Imagery for display context, with model actions "
-        "derived only from OSM vector queries and DTED terrain."
+        "Jetson demo file selection is fixed to root-staged analytical data: "
+        "OSM vectors under /WINTAK Imagery and DTED terrain under /DTED. "
+        "Do not select any source outside that allowlist for agentic answers "
+        "or TAK actions."
     )
 
     needs_routing = _text_has_any(
@@ -5875,8 +5882,8 @@ def _infer_source_recommendation(
 
     if needs_cesium_archive:
         rationale.append(
-            "Cesium archive requests are out of scope for this Jetson demo; use "
-            "the staged WinTAK imagery folder instead."
+            "External archive requests are out of scope for this Jetson demo; "
+            "use the root-staged OSM and DTED allowlist instead."
         )
 
     if needs_routing:
@@ -5915,10 +5922,9 @@ def _infer_source_recommendation(
 
     if needs_sar:
         _append_unique(required_ids, "osm_extract")
-        _append_unique(optional_ids, "naip")
         rationale.append(
-            "SAR planning uses OSM access/feature data for action and NAIP only as "
-            "operator display context."
+            "SAR planning uses OSM access/feature data for action and DTED for "
+            "terrain constraints; no separate imagery or hazard source is selected."
         )
 
     if needs_hazards:
@@ -5944,10 +5950,9 @@ def _infer_source_recommendation(
         )
 
     if needs_current_imagery and not needs_water and not needs_hazards:
-        _append_unique(optional_ids, "naip")
         rationale.append(
-            "Current imagery feeds are not selected; the Jetson demo uses root-staged "
-            "NAIP/OSM imagery for display only."
+            "Current imagery feeds are not selected. The Jetson agentic path ignores "
+            "imagery sources and answers from local OSM vectors plus DTED terrain only."
         )
 
     if map_context is None or not (map_context.location_confirmed or map_context.selected_area):
@@ -6010,12 +6015,7 @@ def _infer_source_recommendation(
         )
 
     selected_ids = []
-    preview_ids = [
-        source_id
-        for source_id in ("naip", "osm_basemap")
-        if source_id in optional_ids
-    ]
-    _append_unique(selected_ids, *required_ids, *preview_ids)
+    _append_unique(selected_ids, *required_ids)
     sources = _get_source_options_by_ids(selected_ids)
     mission_summary = mission_text.strip()
     if len(mission_summary) > 220:
@@ -6063,7 +6063,10 @@ AGENT_PROFILE_PROMPTS: dict[str, str] = {
         objective, and target class are inferable from the prompt and map
         context, do not ask a clarifying question; state the action and let
         the Jetson attach TAK CoT output. Ask at most one question only when
-        a route or point set cannot be resolved safely. Never claim that ATAK
+        a route or point set cannot be resolved safely. Your only analytical
+        data sources are local OSM vectors under /WINTAK Imagery and local
+        DTED terrain under /DTED. Never recommend, require, or cite any source
+        outside that allowlist for the Jetson action path. Never claim that ATAK
         map objects, CoT tracks, routes, or live device state exist unless
         they are present in the supplied map context, active TERA TAK item
         list, or request payload.
@@ -6642,6 +6645,13 @@ def _build_system_prompt(request: PromptRequest) -> str:
                         "vectors from the WinTAK imagery folder and DTED terrain from the "
                         "Jetson DTED folder. Treat NAIP and OSM imagery as display context, "
                         "not as model evidence for generated CoT."
+                    ),
+                    (
+                        "- Never recommend or require any source outside root /DTED "
+                        "and root /WINTAK Imagery OSM for the Jetson agentic path. "
+                        "If the operator asks for slope, viewshed, route, water, "
+                        "access, or points, answer with the best result possible "
+                        "from those two local sources only."
                     ),
                     (
                         "- For follow-up rejection like 'that route does not work' or "
