@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from llm_dev_kmh import app as kmh_app
@@ -26,6 +27,7 @@ class _FakeStreamContext:
 
 class _FakeAsyncClient:
     response: object
+    models_response: object | None = None
 
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         pass
@@ -38,6 +40,9 @@ class _FakeAsyncClient:
 
     def stream(self, *_args: object, **_kwargs: Any) -> _FakeStreamContext:
         return _FakeStreamContext(self.response)
+
+    async def get(self, *_args: object, **_kwargs: Any) -> object:
+        return self.models_response or _ModelsResponse()
 
     async def post(self, *_args: object, **_kwargs: Any) -> object:
         return self.response
@@ -70,6 +75,24 @@ class _ClaudeResponse:
         return {"content": [{"type": "text", "text": "Claude source recommendation."}]}
 
 
+class _ModelsResponse:
+    status_code = 200
+    text = '{"data":[{"id":"claude-sonnet-4-20250514","type":"model"}]}'
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "data": [
+                {
+                    "id": "claude-sonnet-4-20250514",
+                    "type": "model",
+                }
+            ]
+        }
+
+
 async def _collect_stream(response: object) -> str:
     body_iterator = response.body_iterator
     chunks: list[str] = []
@@ -84,7 +107,11 @@ async def test_prompt_stream_yields_sse_tokens(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(kmh_app.httpx, "AsyncClient", _FakeAsyncClient)
 
     response = await kmh_app.prompt_ollama_stream(
-        kmh_app.PromptRequest(prompt="What can you do?", model="gemma4:e4b")
+        kmh_app.PromptRequest(
+            prompt="What can you do?",
+            model="gemma4:e4b",
+            llm_provider="ollama",
+        )
     )
 
     body = await _collect_stream(response)
@@ -102,7 +129,11 @@ async def test_prompt_stream_reports_ollama_http_errors(monkeypatch: pytest.Monk
     monkeypatch.setattr(kmh_app.httpx, "AsyncClient", _FakeAsyncClient)
 
     response = await kmh_app.prompt_ollama_stream(
-        kmh_app.PromptRequest(prompt="What can you do?", model="missing")
+        kmh_app.PromptRequest(
+            prompt="What can you do?",
+            model="missing",
+            llm_provider="ollama",
+        )
     )
 
     body = await _collect_stream(response)
@@ -135,7 +166,9 @@ async def test_prompt_stream_can_use_claude_provider(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_prompt_stream_reports_missing_claude_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeAsyncClient.response = _ErrorResponse()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(kmh_app.httpx, "AsyncClient", _FakeAsyncClient)
     response = await kmh_app.prompt_ollama_stream(
         kmh_app.PromptRequest(
             prompt="Recommend sources.",
@@ -146,8 +179,10 @@ async def test_prompt_stream_reports_missing_claude_key(monkeypatch: pytest.Monk
 
     body = await _collect_stream(response)
 
+    assert '"type": "fallback"' in body
     assert '"type": "error"' in body
     assert "Claude API key required" in body
+    assert "model missing" in body
 
 
 @pytest.mark.asyncio
@@ -236,9 +271,11 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         'id="topModelSelect"',
         'id="claudeModelSelect"',
         'id="claudeApiKeyInput"',
+        "Auto: Claude -> Local",
         "Claude API",
         "claude-sonnet-4-20250514",
-        "Claude Sonnet 4",
+        "Claude Sonnet 4.6",
+        "claude-opus-4-1-20250805",
     ]:
         assert token in html
 
@@ -256,26 +293,32 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "serverClaudeKeyAvailable",
         "hasClaudeProviderCredential",
         "anthropic_api_key_configured",
+        "default_provider",
         "applyProviderSelection",
         "void loadModels();",
         "Detected local model:",
         "llm_provider",
         "cloud_model",
         "cloud_api_key",
+        "Trying Claude, then local model if needed",
         "Claude API key required",
     ]:
         assert token in js
 
     for token in [
         "ANTHROPIC_API_URL",
+        "ANTHROPIC_MODELS_URL",
         "ANTHROPIC_VERSION",
         "CLAUDE_MODEL",
         "CLAUDE_MODEL_ALIASES",
         "CLAUDE_MODEL_FALLBACKS",
+        "default_provider",
         "claude_default_model",
         "anthropic_api_key_configured",
         "_normalize_claude_model",
         "_claude_model_candidates",
+        "_fetch_anthropic_model_ids",
+        "_post_prompt_with_fallback",
         "_select_ollama_default_model",
         "Auto-detected installed Gemma model",
         "_post_claude_message",
@@ -288,6 +331,9 @@ def test_claude_model_labels_normalize_to_current_sonnet() -> None:
     assert kmh_app._normalize_claude_model("Claude Sonnet 4.6") == "claude-sonnet-4-20250514"
     assert kmh_app._normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-20250514"
     assert kmh_app._normalize_claude_model("claude-sonnet-4-20250514") == "claude-sonnet-4-20250514"
+    assert kmh_app._normalize_claude_model("Claude Opus 4.1") == "claude-opus-4-1-20250805"
+    assert kmh_app._normalize_claude_model("Claude Opus 4.7") == "claude-opus-4-1-20250805"
+    assert kmh_app._normalize_claude_model("Claude Haiku 4.5") == "claude-3-5-haiku-20241022"
 
 
 def test_local_model_detection_prefers_installed_gemma_alias() -> None:
@@ -447,24 +493,103 @@ def test_source_planner_degrades_without_false_inference_failure() -> None:
 
 def test_prompt_submission_tries_selected_provider_then_local_then_deterministic() -> None:
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    app_source = Path(kmh_app.__file__).read_text(encoding="utf-8")
 
     assert "streamAssistantProvider" in js
-    assert "resolveLocalModelForFallback" in js
-    assert "Trying local model fallback" in js
-    assert "Claude request failed; trying detected local Ollama." in js
+    assert "Trying Claude, then local model if needed" in js
+    assert "eventData.type === \"fallback\"" in js
     assert "deterministic planner response" in js
-    assert "Model providers unavailable; deterministic planner response shown." in js
+    assert "Prompt request failed; deterministic planner response shown." in js
     assert 'provider === "ollama" && !state.localModelAvailable' not in js
     assert "Claude failed; trying local Ollama fallback" not in js
     assert "Claude key missing; trying local Ollama fallback" not in js
     assert "local fallback after Claude failure" not in js
     assert "Model providers unavailable; deterministic advisor response shown (" not in js
 
-    claude_attempt = js.index('provider: "claude"')
-    local_attempt = js.index('provider: "ollama"')
+    claude_attempt = app_source.index('return ["claude", "ollama"]')
     deterministic = js.index("deterministic planner response")
 
-    assert claude_attempt < local_attempt < deterministic
+    assert claude_attempt >= 0
+    assert deterministic >= 0
+
+
+def test_backend_provider_sequence_is_claude_then_ollama() -> None:
+    assert kmh_app._request_llm_provider(kmh_app.PromptRequest(prompt="x")) == "auto"
+    assert kmh_app._provider_sequence(kmh_app.PromptRequest(prompt="x")) == ["claude", "ollama"]
+    assert kmh_app._provider_sequence(
+        kmh_app.PromptRequest(prompt="x", llm_provider="ollama")
+    ) == ["ollama"]
+    assert kmh_app._provider_sequence(
+        kmh_app.PromptRequest(prompt="x", llm_provider="claude")
+    ) == ["claude", "ollama"]
+
+
+class _ClaudeInvalidModelResponse:
+    status_code = 400
+    text = '{"error":{"message":"model not found"}}'
+
+    def raise_for_status(self) -> None:
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(400, text=self.text, request=request)
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+
+class _OllamaGenerateResponse:
+    status_code = 200
+    text = '{"response":"Ollama fallback response."}'
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {"response": "Ollama fallback response."}
+
+
+@pytest.mark.asyncio
+async def test_auto_prompt_falls_back_from_claude_to_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *_exc_info: object) -> None:
+            return None
+
+        async def get(self, *_args: object, **_kwargs: Any) -> object:
+            return _ModelsResponse()
+
+        async def post(self, url: str, **_kwargs: Any) -> object:
+            if "anthropic" in url:
+                return _ClaudeInvalidModelResponse()
+            return _OllamaGenerateResponse()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-test")
+    monkeypatch.setattr(kmh_app.httpx, "AsyncClient", FakeClient)
+
+    response = await kmh_app.prompt_ollama(
+        kmh_app.PromptRequest(prompt="Recommend sources.", llm_provider="auto")
+    )
+
+    assert response.provider == "ollama"
+    assert response.response == "Ollama fallback response."
+    assert response.fallbacks
+    assert "claude:" in response.fallbacks[0]
+
+
+def test_runtime_config_advertises_auto_provider_when_claude_key_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-test")
+
+    assert kmh_app._default_provider() == "auto"
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    assert kmh_app._default_provider() == "ollama"
 
 
 def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
