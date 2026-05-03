@@ -317,6 +317,7 @@ class ViewBounds(BaseModel):
 
 class MapContext(BaseModel):
     selected_area: ViewBounds | None = None
+    client_location: MapPoint | None = None
     camera: MapPoint | None = None
     view_bounds: ViewBounds | None = None
     imagery_source: str | None = Field(default=None, max_length=200)
@@ -4916,6 +4917,8 @@ def _active_tak_item_count(map_context: MapContext | None) -> int:
 def _origin_from_map_context(map_context: MapContext | None) -> MapPoint | None:
     if map_context is None:
         return None
+    if map_context.client_location is not None:
+        return map_context.client_location
     for candidate in (
         map_context.selected_area,
         map_context.view_bounds,
@@ -4931,18 +4934,61 @@ def _origin_from_map_context(map_context: MapContext | None) -> MapPoint | None:
     return None
 
 
-def _prompt_radius_m(prompt: str) -> float:
+def _explicit_prompt_radius_m(prompt: str) -> float | None:
     match = re.search(
         r"within\s+(\d+(?:\.\d+)?)\s*(km|kilometer|kilometers|mile|miles|mi)\b",
         prompt.lower(),
     )
     if not match:
-        return 5000.0
+        return None
     value = float(match.group(1))
     unit = match.group(2)
     if unit in {"mile", "miles", "mi"}:
         return value * 1609.344
     return value * 1000.0
+
+
+def _prompt_radius_m(prompt: str) -> float:
+    return _explicit_prompt_radius_m(prompt) or 5000.0
+
+
+def _bounds_contains_point(bounds: ViewBounds | None, lat: float, lon: float) -> bool:
+    if bounds is None:
+        return False
+    if lat < bounds.south or lat > bounds.north:
+        return False
+    if bounds.west <= bounds.east:
+        return bounds.west <= lon <= bounds.east
+    return lon >= bounds.west or lon <= bounds.east
+
+
+def _view_bounds_radius_m(origin: MapPoint, bounds: ViewBounds | None) -> float | None:
+    if bounds is None:
+        return None
+    corners = (
+        (bounds.south, bounds.west),
+        (bounds.south, bounds.east),
+        (bounds.north, bounds.west),
+        (bounds.north, bounds.east),
+    )
+    return max(_haversine_m(origin.lat, origin.lon, lat, lon) for lat, lon in corners)
+
+
+def _tak_query_radius_m(
+    prompt: str,
+    map_context: MapContext | None,
+    origin: MapPoint,
+) -> float:
+    explicit_radius = _explicit_prompt_radius_m(prompt)
+    if explicit_radius is not None:
+        return explicit_radius
+    view_radius = _view_bounds_radius_m(
+        origin,
+        map_context.view_bounds if map_context else None,
+    )
+    if view_radius is None:
+        return 5000.0
+    return min(max(view_radius, 500.0), 50000.0)
 
 
 def _tak_target_type_for_prompt(prompt: str) -> str | None:
@@ -5150,6 +5196,29 @@ def _query_tak_targets(
     return targets
 
 
+def _rank_tak_targets_for_map_context(
+    targets: list[dict[str, Any]],
+    map_context: MapContext | None,
+) -> list[dict[str, Any]]:
+    bounds = map_context.view_bounds if map_context else None
+    ranked: list[dict[str, Any]] = []
+    for target in targets:
+        target_copy = dict(target)
+        try:
+            inside_view = _bounds_contains_point(
+                bounds,
+                float(target_copy["lat"]),
+                float(target_copy["lon"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            inside_view = False
+        target_copy["inside_view_bounds"] = inside_view
+        ranked.append(target_copy)
+
+    visible_targets = [target for target in ranked if target["inside_view_bounds"]]
+    return visible_targets or ranked
+
+
 def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCotPayload:
     profile = (request.agent_profile or "").strip().lower()
     if "atak" not in profile and not JETSON_ATAK_MODE.get("active"):
@@ -5169,13 +5238,15 @@ def _build_tak_cot_payload(request: PromptRequest, response_text: str) -> TakCot
         return TakCotPayload()
 
     limit = 5 if points_requested and not route_requested else 3
-    radius_m = _prompt_radius_m(request.prompt)
+    query_limit = 20 if request.map_context and request.map_context.view_bounds else limit
+    radius_m = _tak_query_radius_m(request.prompt, request.map_context, origin)
     targets = _query_tak_targets(
         target_type=target_type,
         origin=origin,
         radius_m=radius_m,
-        limit=limit,
+        limit=query_limit,
     )
+    targets = _rank_tak_targets_for_map_context(targets, request.map_context)
     if not targets:
         return TakCotPayload(
             summary=f"No local {target_type} target found within {radius_m:.0f} m.",
@@ -6104,8 +6175,21 @@ def _format_view_bounds(bounds: ViewBounds | None) -> str:
     )
 
 
+def _map_focus_text(map_context: MapContext | None, *, atak_live: bool) -> str:
+    if map_context is None:
+        return "not confirmed"
+    if map_context.location_confirmed or map_context.selected_area is not None:
+        label = map_context.location_focus_label or "selected AO"
+        source = map_context.location_focus_source or "map"
+        return f"{label} via {source}"
+    if atak_live and map_context.view_bounds is not None:
+        return "displayed ATAK map view via plugin"
+    return "not confirmed"
+
+
 def _build_system_prompt(request: PromptRequest) -> str:
     profile = (request.agent_profile or "imagery-sourcing").strip().lower()
+    atak_live = "atak" in profile
     profile_prompt = AGENT_PROFILE_PROMPTS.get(
         profile, AGENT_PROFILE_PROMPTS["imagery-sourcing"]
     )
@@ -6116,19 +6200,22 @@ def _build_system_prompt(request: PromptRequest) -> str:
         prompt_family, PROMPT_FAMILY_GUIDANCE["terrain-aware-routing"]
     )
     map_lines = [
+        _format_point(
+            "TAK client location (route origin)",
+            map_context.client_location if map_context else None,
+        ),
         _format_view_bounds(map_context.selected_area if map_context else None).replace(
             "Visible map bounds", "Selected AO bounds"
         ),
         (
             "- Planner-confirmed mission map focus: "
-            + (
-                f"{map_context.location_focus_label or 'selected AO'} via {map_context.location_focus_source or 'map'}"
-                if map_context and (map_context.location_confirmed or map_context.selected_area)
-                else "not confirmed"
-            )
+            + _map_focus_text(map_context, atak_live=atak_live)
         ),
-        _format_point("Camera position", map_context.camera if map_context else None),
-        _format_view_bounds(map_context.view_bounds if map_context else None),
+        _format_point("Displayed map center", map_context.camera if map_context else None),
+        _format_view_bounds(map_context.view_bounds if map_context else None).replace(
+            "Visible map bounds",
+            "Displayed ATAK map bounds",
+        ),
         f"- Imagery source: {(map_context.imagery_source if map_context else None) or 'unknown'}",
         f"- Terrain source: {(map_context.terrain_source if map_context else None) or 'unknown'}",
         f"- Active TERA TAK items on map: {_active_tak_item_count(map_context) if map_context else 0}",
@@ -6197,9 +6284,15 @@ def _build_system_prompt(request: PromptRequest) -> str:
                     ),
                     (
                         "- In ATAK live mode, be decisive: if the prompt names a target "
-                        "class and the map context gives an origin, answer with the "
-                        "recommended action now. The server will attach any deterministic "
-                        "TAK CoT route or points separately."
+                        "class and the map context gives a TAK client location, use that "
+                        "client location as the route origin and answer with the recommended "
+                        "action now. The server will attach any deterministic TAK CoT route "
+                        "or points separately."
+                    ),
+                    (
+                        "- Use the displayed ATAK map bounds as the visible operating area: "
+                        "prefer targets, checkpoints, and caveats that fit inside that map "
+                        "view unless the user explicitly gives a different radius or objective."
                     ),
                     (
                         "- For follow-up rejection like 'that route does not work' or "

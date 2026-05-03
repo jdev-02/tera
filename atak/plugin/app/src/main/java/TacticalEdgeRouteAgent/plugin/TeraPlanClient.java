@@ -337,19 +337,28 @@ final class TeraPlanClient {
         if (mapContext != null) {
             payload.put("map_context", mapContext);
             JSONObject current = null;
-            JSONObject selectedArea = mapContext.optJSONObject("selected_area");
-            if (selectedArea != null
+            JSONObject clientLocation = mapContext.optJSONObject("client_location");
+            if (clientLocation != null
+                    && clientLocation.has("lat")
+                    && clientLocation.has("lon")) {
+                current = new JSONObject();
+                current.put("lat", clientLocation.getDouble("lat"));
+                current.put("lon", clientLocation.getDouble("lon"));
+            } else {
+                JSONObject selectedArea = mapContext.optJSONObject("selected_area");
+                if (selectedArea != null
                     && selectedArea.has("center_lat")
                     && selectedArea.has("center_lon")) {
-                current = new JSONObject();
-                current.put("lat", selectedArea.getDouble("center_lat"));
-                current.put("lon", selectedArea.getDouble("center_lon"));
-            } else {
-                JSONObject camera = mapContext.optJSONObject("camera");
-                if (camera != null && camera.has("lat") && camera.has("lon")) {
                     current = new JSONObject();
-                    current.put("lat", camera.getDouble("lat"));
-                    current.put("lon", camera.getDouble("lon"));
+                    current.put("lat", selectedArea.getDouble("center_lat"));
+                    current.put("lon", selectedArea.getDouble("center_lon"));
+                } else {
+                    JSONObject camera = mapContext.optJSONObject("camera");
+                    if (camera != null && camera.has("lat") && camera.has("lon")) {
+                        current = new JSONObject();
+                        current.put("lat", camera.getDouble("lat"));
+                        current.put("lon", camera.getDouble("lon"));
+                    }
                 }
             }
             if (current != null) {
