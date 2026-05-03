@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run atak-link-server atak-link-test tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -97,6 +97,13 @@ ci: lint test security ## Full CI gate (must pass before push)
 
 run: install ## Start the agent service locally (stub)
 	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
+
+atak-link-server: install ## Start Jetson Gemma proof server for ATAK plugin link tests
+	bash atak/scripts/run_jetson_gemma_server.sh
+
+atak-link-test: ## Test Samsung/ATAK-device LAN reachability to Jetson. Pass JETSON_IP=...
+	@test -n "$(JETSON_IP)" || (echo "Usage: make atak-link-test JETSON_IP=<jetson-wifi-ip> [PORT=8080]" >&2; exit 2)
+	bash atak/scripts/test_jetson_link.sh "$(JETSON_IP)" "$(if $(PORT),$(PORT),8080)"
 
 tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
 	@bash infra/security_demo_monitors.sh
