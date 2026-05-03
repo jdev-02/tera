@@ -132,57 +132,233 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  listen:  {listen_for}")
 
 
+# Phrase metadata for the severity demo. Each entry tells judges:
+#   1. WHO the operator is (PRD persona)
+#   2. WHAT they just asked / what's happening
+#   3. WHERE in the PRD this scenario is documented
+#   4. WHY the voice profile choice solves a real problem under stress
+# Kept in module scope so unit tests / other callers can reuse it.
+_SEVERITY_DEMO_PHRASES: list[dict[str, str]] = [
+    {
+        "tag": "routine",
+        "text": "Routed to Lobos Creek. Distance 2.1 kilometers. ETA 38 minutes.",
+        "operator": (
+            "P-1 Sgt. Vega — dismounted recon, hands on rifle + TAK device. "
+            "Just asked TERA: 'route to nearest freshwater within 5 km.'"
+        ),
+        "prd_section": "PRD §6.2 Hero Scenario A (urban / Lobos Creek)",
+        "value": (
+            "Voice-out replaces the head-down map check. Eyes stay on AO. "
+            "PRD §3 Core Problem: minimize cognitive load under stress."
+        ),
+    },
+    {
+        "tag": "urgent",
+        "text": "Be advised, route blocked at waypoint 3. Rerouting through alternate.",
+        "operator": (
+            "Mid-mission. Orchestrator detected a blocked waypoint (terrain "
+            "refresh, threat update, or teammate no-go sync) and re-routed."
+        ),
+        "prd_section": "PRD §6.2 Hero Scenario A (mid-mission re-plan)",
+        "value": (
+            "Severity-routed voice = one bit of info AT THE GEAR LEVEL "
+            "('this isn't routine') before words are parsed. Faster orient "
+            "in the operator's OODA loop."
+        ),
+    },
+    {
+        "tag": "critical",
+        "text": "CASEVAC inbound. Routing to open field at grid 11SMS1234 5678. Suitable HLZ.",
+        "operator": (
+            "P-3 Sam (SAR variant) — operator hears mirror flash from a "
+            "person in distress. Reports to TERA. New route to HLZ in the "
+            "golden hour. (See docs/demo-scenarios/sar-olympic.md.)"
+        ),
+        "prd_section": "PRD §6.2 + Issue #60 (Olympic SAR scenario)",
+        "value": (
+            "Catastrophic-mode voice profile = operator KNOWS the severity "
+            "without parsing the words. PRD §3 thesis under live stress: "
+            "the gear talks, the operator stays focused on the casualty."
+        ),
+    },
+]
+
+
+def _print_pitch_block(
+    *,
+    idx: int,
+    total: int,
+    phrase: dict[str, str],
+    cadence: str,
+    profile_name: str,
+    voice: str,
+    fx: str,
+    length_scale: float,
+    bump: int,
+    base_mode: str,
+) -> None:
+    """Print a self-narrating pitch block for one phrase. Designed so a
+    judge watching the recorded demo can read the scenario context BEFORE
+    the audio plays, with the architecture path visible."""
+    sep = "=" * 76
+    bar = "-" * 76
+    print()
+    print(sep)
+    print(f"  PHRASE {idx}/{total} — {phrase['tag'].upper()}")
+    print(f"  {phrase['prd_section']}")
+    print(sep)
+    print()
+    print("OPERATOR:")
+    for line in _wrap(phrase["operator"], 70):
+        print(f"  {line}")
+    print()
+    print("WHAT THIS SOLVES (PRD-cited):")
+    for line in _wrap(phrase["value"], 70):
+        print(f"  {line}")
+    print()
+    print("ROUTE THROUGH THE STACK (PRD §7.1):")
+    print("  ATAK plugin (mic/STT)")
+    print("       │")
+    print("       ▼  HTTP over local IP — NO cloud, NO outbound packets")
+    print("  agent/app.py                  POST /plan?tts=true")
+    print("  agent/orchestrator.py         dispatch")
+    print("  agent/llm.py                  gemma2:2b (austere profile)")
+    print("  security/pipeline.py          PlanGuard / parse-verify / policy gate")
+    print("  agent/tools/ + routing/       Valhalla local routing (Ben's lane)")
+    print("  agent/orchestrator.py         rationale built  ◀── upstream done")
+
+    # Box content fits exactly 64 chars between the borders so the right
+    # edge lands consistently regardless of value length.
+    def _box(s: str) -> str:
+        return s[:64].ljust(64)
+
+    print("  ┌─[ THIS DEMO'S CODE PATH STARTS HERE ]" + "─" * 27 + "┐")
+    print(f"  │ {_box(f'voice/profiles.py       severity classified -> {profile_name}')} │")
+    print(f"  │ {_box('voice/rationale.py      cadence transform')} │")
+    print(f"  │ {_box(f'voice/piper_client.py   Piper TTS ({voice})')} │")
+    print(f"  │ {_box(f'voice/audio_fx.py       radio FX ({fx})')} │")
+    print(f"  │ {_box('agent/orchestrator.py   audio_b64 in PlanResponse')} │")
+    print("  └" + "─" * 66 + "┘")
+    print("       │")
+    print("       ▼")
+    print("  ATAK plugin → operator headset")
+    print()
+    print("INPUT (English from orchestrator rationale):")
+    for line in _wrap(phrase["text"], 70):
+        print(f"  {line}")
+    print()
+    print("CADENCE TRANSFORM (what Piper actually speaks):")
+    for line in _wrap(cadence, 70):
+        print(f"  {line}")
+    print()
+    print(f"VOICE PROFILE PICKED  (operator-mode={base_mode}, severity bump={bump}):")
+    print(f"  profile name : {profile_name}")
+    print(f"  voice model  : {voice}")
+    print(f"  radio FX     : {fx}")
+    print(f"  pace         : length_scale={length_scale:.2f}")
+    print()
+    print(bar)
+    print("  ▶ Playing audio...")
+    print(bar)
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    """Tiny wordwrap so paragraphs don\'t blow past the 76-col band."""
+    out: list[str] = []
+    for paragraph in text.split("\n"):
+        words = paragraph.split()
+        cur: list[str] = []
+        cur_len = 0
+        for w in words:
+            if cur and cur_len + 1 + len(w) > width:
+                out.append(" ".join(cur))
+                cur, cur_len = [w], len(w)
+            else:
+                cur.append(w)
+                cur_len += (1 if cur_len else 0) + len(w)
+        if cur:
+            out.append(" ".join(cur))
+    return out
+
+
 def _run_severity_demo(operator_mode: str | None) -> int:
-    """Render three phrases that exercise the auto-elevation rule.
+    """Self-narrating pitch demo of severity-routed voice profiles.
 
-    Phrase A: routine briefing -- no cues, stays at the operator's base mode.
-    Phrase B: contains 'BE ADVISED' -- bumps one level (calm->comms or
-              comms->critical).
-    Phrase C: contains 'CASEVAC' -- bumps two levels to critical.
+    For each of three phrases (routine / urgent / critical), the script
+    prints a structured pitch block with: operator persona, PRD section,
+    architecture path through the full stack, the cadence transform, and
+    the voice profile chosen. Then plays the audio. Designed for screen-
+    record-once judge demos: judges read the context, then HEAR the result.
 
-    Plays them back-to-back so the listener hears the voice change.
+    Phrase 1 (routine, no cues) -> stays at the operator\'s base mode.
+    Phrase 2 (BE ADVISED cue)   -> bumps one level toward critical.
+    Phrase 3 (CASEVAC cue)      -> bumps two levels (caps at critical).
     """
     from voice.profiles import OperatorMode, detect_severity_bump, select_profile
     from voice.tts import synthesize_rationale_b64
 
     base_mode: OperatorMode = operator_mode or "comms"  # type: ignore[assignment]
 
-    phrases: list[tuple[str, str]] = [
-        ("routine", "Routed to Lobos Creek. Distance 2.1 kilometers. ETA 38 minutes."),
-        (
-            "urgent",
-            "Be advised, route blocked at waypoint 3. Rerouting through alternate.",
-        ),
-        (
-            "critical",
-            "CASEVAC inbound. Routing to open field at grid 11SMS1234 5678. Suitable HLZ.",
-        ),
-    ]
     out_dir = Path(tempfile.gettempdir()) / "tera_severity_demo"
     out_dir.mkdir(exist_ok=True)
-    for old in out_dir.glob("*.wav"):
-        old.unlink()
+    for old_wav in out_dir.glob("*.wav"):
+        old_wav.unlink()
 
-    print(f"base operator mode: {base_mode}")
-    print(f"phrases: {len(phrases)} -- routine, urgent (BE ADVISED), critical (CASEVAC)\n")
+    # Banner up front so the judge sees the framing before phrase 1.
+    sep = "=" * 76
+    print(sep)
+    print("  TERA — Severity-Routed Voice Demo (PS4: Cybersecurity / PRD §6.2)")
+    print(sep)
+    print()
+    print(f"  Operator base mode      : {base_mode}")
+    print(f"  Phrases queued          : {len(_SEVERITY_DEMO_PHRASES)}")
+    print("  Auto-elevation rule     : calm < comms < critical (one-way)")
+    print(f"  Demo audio output dir   : {out_dir}/")
+    print()
+    print("  Severity cues that auto-elevate the operator's chosen mode:")
+    print("    URGENT (+1)  : BE ADVISED, BREAK, CONTACT FRONT/REAR/LEFT/RIGHT")
+    print("    CRITICAL (+2): CASEVAC, MEDEVAC, DANGER CLOSE, MASS CASUALTY,")
+    print("                   TROOPS IN CONTACT")
+    print()
 
-    for tag, text in phrases:
-        bump = detect_severity_bump(text)
-        profile = select_profile(text, operator_mode=base_mode)
-        print(
-            f"  [{tag}] cue_bump={bump}  profile={profile.name}  "
-            f"voice={profile.voice}  fx={profile.fx}"
+    for i, phrase in enumerate(_SEVERITY_DEMO_PHRASES, start=1):
+        bump = detect_severity_bump(phrase["text"])
+        profile = select_profile(phrase["text"], operator_mode=base_mode)
+        cadence = to_operator_cadence(phrase["text"])
+
+        _print_pitch_block(
+            idx=i,
+            total=len(_SEVERITY_DEMO_PHRASES),
+            phrase=phrase,
+            cadence=cadence,
+            profile_name=profile.name,
+            voice=profile.voice,
+            fx=profile.fx,
+            length_scale=profile.length_scale,
+            bump=bump,
+            base_mode=base_mode,
         )
-        audio = synthesize_rationale_b64(text, operator_mode=base_mode)
+
+        audio = synthesize_rationale_b64(phrase["text"], operator_mode=base_mode)
         if audio is None:
-            print(f"    ! synth returned None for {tag}")
+            print(f"  ! synth returned None for {phrase['tag']} (Piper unavailable?)")
             continue
-        out_path = out_dir / f"{tag}_{profile.name}.wav"
+        out_path = out_dir / f"{i}_{phrase['tag']}_{profile.name}.wav"
         out_path.write_bytes(base64.b64decode(audio))
-        print(f"    -> {out_path}")
         _play(out_path)
 
-    print(f"\nAll renders in {out_dir}/")
+    print()
+    print(sep)
+    print("  END OF DEMO  — three phrases, three voice profiles, one stack.")
+    print(sep)
+    print(f"  All WAVs saved at {out_dir}/")
+    print("  Voice path on main:")
+    print("    voice/profiles.py     severity-routed VoiceProfile registry (#54)")
+    print("    voice/rationale.py    operator cadence transform (#26)")
+    print("    voice/piper_client.py Piper TTS wrapper (#26)")
+    print("    voice/audio_fx.py     pure-numpy band-pass + compressor (#54)")
+    print("    voice/glossary.py     deterministic acronym explain (#54)")
+    print()
     return 0
 
 
