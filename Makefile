@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax model-integrity ci run run-https gen-cert atak-link-server atak-link-test atak-plugin-build atak-plugin-install tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install jetson-compose-refresh
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -92,11 +92,51 @@ security: install ## Bandit + pip-audit + optional gitleaks
 		echo "[security] gitleaks not installed locally; GitHub Action still runs gitleaks"; \
 	fi
 
-ci: lint test security ## Full CI gate (must pass before push)
+model-integrity: install ## Verify SHA-256 model pins + scan for unsafe torch.load() (issue #57)
+	$(PYTHON) -m security.model_integrity
+
+ci: lint test security shellcheck-syntax model-integrity ## Full CI gate (must pass before push)
 	@echo "[OK] make ci passed"
 
-run: install ## Start the agent service locally (stub)
-	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
+
+shellcheck-syntax: ## bash -n parse-check on every committed shell script (catches typos like "diname")
+	@echo "[shellcheck-syntax] parsing every *.sh under repo root..."
+	@status=0; 	while IFS= read -r f; do 	  if bash -n "$$f" 2>&1; then 	    echo "  [ok] $$f"; 	  else 	    echo "  [FAIL] $$f"; status=1; 	  fi; 	done < <(find . -name '*.sh' -not -path './.venv/*' -not -path './node_modules/*' -not -path './.git/*'); 	if [ $$status -eq 0 ]; then echo "[OK] all shell scripts parse cleanly"; else exit $$status; fi
+
+run: install ## Start the agent service on localhost only (HTTP, port 8000)
+	PYTHONIOENCODING=utf-8 $(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 127.0.0.1 --port 8000 --reload
+
+gen-cert: ## Generate self-signed TLS cert for local HTTPS (run once, output to certs/)
+	@bash infra/gen_dev_cert.sh
+
+run-https: install gen-cert ## Start agent with HTTPS on localhost (port 8443)
+	PYTHONIOENCODING=utf-8 $(VENV_BIN)/uvicorn$(EXE) agent.app:app \
+		--host 127.0.0.1 --port 8443 \
+		--ssl-keyfile certs/key.pem \
+		--ssl-certfile certs/cert.pem \
+		--reload
+
+firewall: ## Block port 8000 from WiFi (Windows only). Run before `make run` on shared networks.
+	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 add
+
+firewall-remove: ## Remove the TERA port 8000 firewall block
+	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 remove
+
+firewall-status: ## Check if port 8000 firewall rule is active
+	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 status
+
+atak-link-server: install ## Start Jetson Gemma proof server for ATAK plugin link tests
+	bash atak/scripts/run_jetson_gemma_server.sh
+
+atak-link-test: ## Test Samsung/ATAK-device LAN reachability to Jetson. Pass JETSON_IP=...
+	@test -n "$(JETSON_IP)" || (echo "Usage: make atak-link-test JETSON_IP=<jetson-wifi-ip> [PORT=8080]" >&2; exit 2)
+	bash atak/scripts/test_jetson_link.sh "$(JETSON_IP)" "$(if $(PORT),$(PORT),8080)"
+
+atak-plugin-build: ## Build the ATAK plugin CIV release APK
+	cd atak/plugin && ./scripts/build_release.sh
+
+atak-plugin-install: ## Build if needed and install the ATAK plugin to an attached device
+	cd atak/plugin && ./scripts/install_device.sh
 
 tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
 	@bash infra/security_demo_monitors.sh
@@ -125,6 +165,12 @@ demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
 
 eval: install ## Run the 20-prompt regression set
 	$(PYTHON) -m eval.runner
+
+jetson-autoupdate-install: ## Install systemd services on Jetson to auto-pull origin/main and restart planner
+	@bash deploy/scripts/install_jetson_autoupdate.sh
+
+jetson-compose-refresh: ## On Jetson: pull main and rebuild/restart the planner with Docker Compose
+	@bash deploy/scripts/jetson_compose_refresh.sh
 
 clean: ## Remove venv and caches
 	rm -rf $(VENV) .pytest_cache .ruff_cache .mypy_cache __pycache__

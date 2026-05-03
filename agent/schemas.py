@@ -57,12 +57,21 @@ class Coord(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    """The operator's natural-language request + their current position."""
+    """ATAK plugin request: operator text/STT prompt + current TAK position.
+
+    `voice_profile` lets the caller pin which voice the orchestrator uses
+    for the spoken rationale (PRD §6, issue #54). 'calm' = briefer voice,
+    'comms' = default ops cadence, 'critical' = degraded radio FX. None
+    means: read TERA_VOICE_PROFILE env var, falling back to 'comms'.
+    Severity cues in the rationale (CASEVAC, DANGER CLOSE, etc.) will
+    auto-elevate the chosen mode upward but never demote.
+    """
 
     prompt: str = Field(..., min_length=1, max_length=2000)
     current: Coord
     request_id: str | None = None
     source: Literal["operator_voice", "operator_text", "test"] = "operator_text"
+    voice_profile: Literal["calm", "comms", "critical"] | None = None
 
 
 class Waypoint(BaseModel):
@@ -72,12 +81,20 @@ class Waypoint(BaseModel):
 
 
 class Signature(BaseModel):
-    """ML-DSA signature wrapper. Source of truth: docs/contracts/cot_signed.md."""
+    """Route signature wrapper. Source of truth: docs/contracts/cot_signed.md.
 
-    scheme: Literal["ML-DSA-65", "ML-DSA-44", "ML-DSA-87"]
+    payload_hash/payload_json make /plan responses self-contained for the
+    ATAK render gate. The verifier still binds payload_json back to the route
+    fields before accepting it.
+    """
+
+    scheme: Literal["ML-DSA-65", "ML-DSA-44", "ML-DSA-87", "Ed25519-fallback"]
     key_id: str
     value_b64: str
     signed_at: str
+    canonicalization: str | None = None
+    payload_hash: str | None = None
+    payload_json: str | None = None
 
 
 class OperatorSignature(BaseModel):
@@ -142,3 +159,13 @@ class PlanApprovalResponse(BaseModel):
     route_hash: str
     device_signature: Signature
     operator_signature: OperatorSignature
+
+
+class PlanVerifyResponse(BaseModel):
+    """Returned from POST /plan/verify before ATAK renders a route."""
+
+    valid: bool
+    reason: str
+    key_id: str | None = None
+    scheme: str | None = None
+    route_hash: str | None = None

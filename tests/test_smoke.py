@@ -101,3 +101,28 @@ def test_plan_approve_endpoint_returns_commit(
     )
     assert r.status_code == 200
     assert r.json()["approval_state"] == "operator_committed"
+
+
+def test_plan_verify_endpoint_rejects_missing_signature() -> None:
+    r = client.post(
+        "/plan/verify",
+        json={
+            "request_id": "verify-smoke",
+            "route": {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[-122.39, 37.79], [-122.40, 37.80]],
+                },
+            },
+            "waypoints": [{"lat": 37.80, "lon": -122.40, "label": "HLZ"}],
+            "rationale": "Routed to HLZ.",
+            "cost_breakdown": {"distance_m": 100.0, "time_s": 60.0},
+            "trust": {"trust_status": "needs_review"},
+            "signature": None,
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is False
+    assert "REJECTED" in body["reason"]

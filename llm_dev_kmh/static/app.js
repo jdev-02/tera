@@ -13,8 +13,9 @@ const state = {
   areaStartPoint: null,
   cameraText: "",
   chatCount: 0,
-  imageryMode: "esri",
+  imageryMode: "ion-satellite",
   terrainMode: "cesium-world",
+  mapMode: "2d",
   panelWidth: 520,
   panelCollapsed: false,
   dragState: null,
@@ -27,19 +28,27 @@ const state = {
   sourcePlannerMessage: "",
   overlayDataSource: null,
   overlayFileName: "",
+  overlayFeatureCount: 0,
   locationSearchMatches: [],
+  locationSearchDetail: "",
   activeLocationSearchIndex: -1,
   mapFocusLabel: "",
   mapFocusSource: "",
   mapLocationConfirmed: false,
   locationSearchTimer: null,
   locationSearchRequestId: 0,
+  cesiumIonTokenAvailable: false,
   localModelAvailable: false,
   localModelDetail: "",
-  llmProvider: sessionStorage.getItem("teraLlmProvider") || "ollama",
+  serverClaudeKeyAvailable: false,
+  llmProvider: sessionStorage.getItem("teraLlmProvider") || "auto",
   claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
+  atakAgentActive: false,
+  atakMirrorTimer: null,
   selectedSourceIds: new Set(),
   packagePlan: null,
+  packageStatusTimer: null,
+  jetsonStorage: null,
   sourceInference: null,
   sourceConfirmed: false,
   workflowStageIndex: 0,
@@ -68,6 +77,11 @@ const els = {
   resetViewBtn: document.getElementById("resetViewBtn"),
   importOverlayBtn: document.getElementById("importOverlayBtn"),
   overlayFileInput: document.getElementById("overlayFileInput"),
+  atakAgentBtn: document.getElementById("atakAgentBtn"),
+  atakMirrorPanel: document.getElementById("atakMirrorPanel"),
+  atakMirrorStatus: document.getElementById("atakMirrorStatus"),
+  atakMirrorLog: document.getElementById("atakMirrorLog"),
+  atakMirrorRefreshBtn: document.getElementById("atakMirrorRefreshBtn"),
   panelToggleBtn: document.getElementById("panelToggleBtn"),
   panelResizer: document.getElementById("panelResizer"),
   workspaceShell: document.querySelector(".workspace-shell"),
@@ -75,6 +89,7 @@ const els = {
   sourcePanel: document.getElementById("sourcePanel"),
   mapStage: document.querySelector(".map-stage"),
   mapResetViewBtn: document.getElementById("mapResetViewBtn"),
+  mapModeToggleBtn: document.getElementById("mapModeToggleBtn"),
   locationSearchPanel: document.getElementById("locationSearchPanel"),
   locationSearchForm: document.getElementById("locationSearchForm"),
   locationSearchInput: document.getElementById("locationSearchInput"),
@@ -110,7 +125,6 @@ const els = {
   workflowStageMeta: document.getElementById("workflowStageMeta"),
   workflowDots: document.getElementById("workflowDots"),
   workflowSlides: Array.from(document.querySelectorAll("[data-workflow-slide]")),
-  clarifyingQuestions: document.getElementById("clarifyingQuestions"),
   sourceList: document.getElementById("sourceList"),
   packageModeChip: document.getElementById("packageModeChip"),
   inferredMission: document.getElementById("inferredMission"),
@@ -125,6 +139,20 @@ const els = {
   packageStatus: document.getElementById("packageStatus"),
   packageManifest: document.getElementById("packageManifest"),
   downloadManifestLink: document.getElementById("downloadManifestLink"),
+  jetsonStorageCard: document.getElementById("jetsonStorageCard"),
+  storageRoot: document.getElementById("storageRoot"),
+  storageFitChip: document.getElementById("storageFitChip"),
+  storageMeterUsed: document.getElementById("storageMeterUsed"),
+  storageMeterReserve: document.getElementById("storageMeterReserve"),
+  storageFree: document.getElementById("storageFree"),
+  storageUsable: document.getElementById("storageUsable"),
+  storageReserve: document.getElementById("storageReserve"),
+  storageEstimate: document.getElementById("storageEstimate"),
+  packageExecutionActions: document.getElementById("packageExecutionActions"),
+  downloadToJetsonBtn: document.getElementById("downloadToJetsonBtn"),
+  refreshPackageStatusBtn: document.getElementById("refreshPackageStatusBtn"),
+  packageExecutionStatus: document.getElementById("packageExecutionStatus"),
+  packageArtifacts: document.getElementById("packageArtifacts"),
 };
 
 window.__TERA_SOURCE_STATE = state;
@@ -135,11 +163,6 @@ const WORKFLOW_STAGES = [
     key: "mission",
     label: "Mission",
     meta: "Review extracted mission",
-  },
-  {
-    key: "questions",
-    label: "Questions",
-    meta: "Broaden or limit scope",
   },
   {
     key: "sources",
@@ -159,6 +182,11 @@ const IMAGERY_FALLBACKS = {
     credit: "Esri World Imagery",
     label: "Esri World Imagery",
   },
+  "usgs-imagery": {
+    url: "https://basemap.nationalmap.gov/ArcGIS/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+    credit: "USGS The National Map",
+    label: "USGS Imagery Only",
+  },
   osm: {
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     credit: "OpenStreetMap contributors",
@@ -167,10 +195,13 @@ const IMAGERY_FALLBACKS = {
 };
 
 const FALLBACK_PRIMARY_STREAM_SOURCE_IDS = [
-  "esri_world_imagery",
+  "cesium_world_imagery",
+  "usgs_imagery_only",
   "cesium_world_terrain",
   "osm_basemap",
 ];
+
+const LOCATION_INTENT_PREFIX_PATTERN = /^(go to|goto|navigate to|take me to|move map to|move to|search for|find|show me|zoom to|center on|focus on)\s+/i;
 
 const LOCATION_GAZETTEER = [
   {
@@ -236,6 +267,38 @@ const LOCATION_GAZETTEER = [
     lon: -120.0324,
     heightM: 18000,
     aliases: ["tahoe", "south lake tahoe"],
+  },
+  {
+    name: "Cascade Range, WA/OR/BC",
+    detail: "Pacific Northwest mountain range, national forests, volcanoes, SAR and terrain-routing context",
+    lat: 45.6500,
+    lon: -121.7000,
+    heightM: 26000,
+    aliases: ["cascades", "the cascades", "cascade mountains", "cascade range", "pnw cascades"],
+  },
+  {
+    name: "North Cascades National Park, WA",
+    detail: "High alpine terrain, glaciers, steep valleys, trails, and SAR access constraints",
+    lat: 48.7718,
+    lon: -121.2985,
+    heightM: 22000,
+    aliases: ["north cascades", "north cascades np", "noca"],
+  },
+  {
+    name: "Olympic National Park, WA",
+    detail: "Dense forest, mountains, river valleys, coastline, and SAR mission terrain",
+    lat: 47.8021,
+    lon: -123.6044,
+    heightM: 22000,
+    aliases: ["olympic", "olympic peninsula", "olympics"],
+  },
+  {
+    name: "Mount Rainier National Park, WA",
+    detail: "Volcanic alpine terrain, glaciers, roads, trails, and high-risk weather",
+    lat: 46.8523,
+    lon: -121.7603,
+    heightM: 20000,
+    aliases: ["rainier", "mount rainier", "mt rainier"],
   },
   {
     name: "Joshua Tree National Park, CA",
@@ -344,6 +407,13 @@ const LOCATION_GAZETTEER = [
 ];
 
 const LOCATION_SEARCH_LIMIT = 6;
+const LOCATION_SOURCE_PRIORITY = {
+  "coordinate-query": 500,
+  "google-places": 260,
+  gazetteer: 180,
+  "local-gazetteer": 180,
+  "online-geocoder": 0,
+};
 const UTM_LATITUDE_BANDS = "CDEFGHJKLMNPQRSTUVWXX";
 const MGRS_COLUMN_LETTER_SETS = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"];
 const MGRS_ROW_LETTER_SETS = ["ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE"];
@@ -367,10 +437,57 @@ const FALLBACK_SOURCE_CATALOG = [
     name: "Esri World Imagery",
     provider: "Esri ArcGIS Online",
     category: "imagery",
-    purpose: "Streamable visual basemap for AO inspection and imagery context.",
+    purpose: "Optional licensed imagery stream when an Esri account is available.",
     stream_status: "streamable",
-    download_status: "manifest-only",
+    download_status: "export-tiles-with-account",
     stream_layer: "esri",
+  },
+  {
+    id: "cesium_world_imagery",
+    name: "Cesium World Imagery",
+    provider: "Cesium ion",
+    category: "imagery",
+    purpose: "Token-backed imagery preview stream using the available Cesium token.",
+    stream_status: "streamable-with-token",
+    download_status: "stream-only-no-offline-copy",
+    stream_layer: "ion-satellite",
+  },
+  {
+    id: "cesium_ion_archive",
+    name: "Cesium ion Offline Archive",
+    provider: "Cesium ion",
+    category: "imagery-terrain-archive",
+    purpose: "Licensed Cesium ion archive or AO clip downloaded to the Jetson for local preview and metadata queries.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "usgs_imagery_only",
+    name: "USGS Imagery Only",
+    provider: "USGS The National Map",
+    category: "imagery",
+    purpose: "Free U.S. imagery tile stream and AO tile cache for offline visual context.",
+    stream_status: "streamable",
+    download_status: "cache-tiles",
+    stream_layer: "usgs-imagery",
+  },
+  {
+    id: "nrl_naip_conus",
+    name: "NRL NAIP (CONUS)",
+    provider: "NRL / USDA NAIP",
+    category: "imagery",
+    purpose: "Free CONUS NAIP tile stream from the WinTAK imagery source folder for high-detail visual review.",
+    stream_status: "streamable",
+    download_status: "cache-tiles",
+  },
+  {
+    id: "esri_world_elevation",
+    name: "Esri World Elevation Terrain",
+    provider: "Esri ArcGIS Online / Living Atlas",
+    category: "terrain",
+    purpose: "Primary queryable terrain source for DEM export, slope, hydrology, cost surfaces, and viewshed.",
+    stream_status: "queryable-online",
+    download_status: "download-required",
   },
   {
     id: "cesium_world_terrain",
@@ -379,17 +496,8 @@ const FALLBACK_SOURCE_CATALOG = [
     category: "terrain-display",
     purpose: "Streamable 3D terrain preview for landform awareness.",
     stream_status: "streamable-with-token",
-    download_status: "cache-via-cesium-pipeline",
+    download_status: "stream-only-no-offline-copy",
     stream_layer: "cesium-world",
-  },
-  {
-    id: "esri_world_elevation",
-    name: "Esri World Elevation Terrain",
-    provider: "Esri ArcGIS Online / Living Atlas",
-    category: "terrain",
-    purpose: "Queryable elevation terrain fallback for AO sampling, slope, hillshade, and viewshed preflight.",
-    stream_status: "queryable-online",
-    download_status: "download-required",
   },
   {
     id: "osm_basemap",
@@ -421,12 +529,21 @@ const FALLBACK_SOURCE_CATALOG = [
   },
   {
     id: "copernicus_dem",
-    name: "Copernicus DEM",
+    name: "Copernicus DEM GLO-30 COG",
     provider: "Copernicus",
     category: "terrain",
-    purpose: "Global elevation fallback for slope, viewshed, and terrain-cost analysis.",
+    purpose: "No-account public S3 COG terrain tiles for slope, viewshed, and terrain-cost analysis.",
     stream_status: "not-streamed",
     download_status: "download-required",
+  },
+  {
+    id: "dted_earth_explorer",
+    name: "DTED from USGS EarthExplorer",
+    provider: "USGS EarthExplorer",
+    category: "terrain",
+    purpose: "Operator-staged DTED cells imported to the Jetson and converted to GeoTIFF when GDAL is available.",
+    stream_status: "not-streamed",
+    download_status: "manual-stage-import",
   },
   {
     id: "nlcd",
@@ -476,9 +593,9 @@ const FALLBACK_SOURCE_CATALOG = [
   {
     id: "sentinel_2",
     name: "Sentinel-2 Multispectral",
-    provider: "ESA Copernicus",
+    provider: "ESA Copernicus / Element 84 Earth Search",
     category: "imagery-analysis",
-    purpose: "Analysis imagery for vegetation, water, burn, and surface-condition indices.",
+    purpose: "Free downloadable COG imagery for offline visual context, vegetation, water, burn, and surface-condition indices.",
     stream_status: "not-streamed",
     download_status: "download-required",
   },
@@ -586,6 +703,11 @@ function setModelProviderButton(text, tone = "") {
   els.modelProviderBtn.className = `chip chip-button${tone ? ` ${tone}` : ""}`;
 }
 
+function setAtakAgentButton(text, tone = "") {
+  els.atakAgentBtn.textContent = text;
+  els.atakAgentBtn.className = `chip chip-button${tone ? ` ${tone}` : ""}`;
+}
+
 function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -597,6 +719,66 @@ async function fetchJson(url, options) {
     throw new Error(data.detail || `${response.status} ${response.statusText}`);
   }
   return data;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let scaled = Math.max(0, bytes);
+  let index = 0;
+  while (scaled >= 1024 && index < units.length - 1) {
+    scaled /= 1024;
+    index += 1;
+  }
+  const precision = index <= 1 ? 0 : 1;
+  return `${scaled.toFixed(precision)} ${units[index]}`;
+}
+
+function renderJetsonStorage(storage = state.jetsonStorage, estimateBytes = null, storageFit = true, warning = "") {
+  if (!storage) {
+    els.storageRoot.textContent = "Jetson storage unavailable";
+    setChip(els.storageFitChip, "Unknown", "warn");
+    return;
+  }
+  state.jetsonStorage = storage;
+  const total = Number(storage.total_bytes || 0);
+  const used = Number(storage.used_bytes || 0);
+  const reserved = Number(storage.reserved_bytes || 0);
+  const free = Number(storage.free_bytes || 0);
+  const usable = Number(storage.usable_bytes || 0);
+  const estimate = Number(estimateBytes || 0);
+  const usedPct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
+  const reservePct = total > 0 ? Math.min(100, (reserved / total) * 100) : 0;
+
+  els.storageRoot.textContent = storage.package_root || "Jetson package root";
+  els.storageFree.textContent = formatBytes(free);
+  els.storageUsable.textContent = formatBytes(usable);
+  els.storageReserve.textContent = formatBytes(reserved);
+  els.storageEstimate.textContent = estimate ? formatBytes(estimate) : "--";
+  els.storageMeterUsed.style.width = `${usedPct}%`;
+  els.storageMeterReserve.style.left = `${Math.max(0, 100 - reservePct)}%`;
+  els.storageMeterReserve.style.width = `${reservePct}%`;
+
+  if (estimate && !storageFit) {
+    setChip(els.storageFitChip, "No room", "bad");
+    els.storageRoot.textContent = warning || "Package estimate exceeds Jetson usable storage";
+  } else if (estimate) {
+    setChip(els.storageFitChip, "Fits", "good");
+  } else {
+    setChip(els.storageFitChip, "Ready", usable > 0 ? "good" : "warn");
+  }
+}
+
+async function loadJetsonStorage() {
+  try {
+    const storage = await fetchJson("/api/storage");
+    renderJetsonStorage(storage);
+    return storage;
+  } catch (error) {
+    els.storageRoot.textContent = getErrorMessage(error);
+    setChip(els.storageFitChip, "Storage error", "bad");
+    return null;
+  }
 }
 
 function normalizeSearchText(value) {
@@ -650,9 +832,56 @@ function tokenLooksLike(token, target) {
   return distance <= Math.max(1, Math.floor(Math.max(token.length, target.length) * 0.28));
 }
 
+function cleanLocationSearchQuery(query) {
+  let cleaned = query.trim().replace(/\s+/g, " ");
+  let previous = "";
+  while (cleaned && cleaned !== previous) {
+    previous = cleaned;
+    cleaned = cleaned.replace(LOCATION_INTENT_PREFIX_PATTERN, "").trim();
+  }
+  return cleaned;
+}
+
+function parseGoogleMapsCoordinateQuery(query) {
+  const patterns = [
+    /!3d([+-]?\d+(?:\.\d+)?)!4d([+-]?\d+(?:\.\d+)?)/i,
+    /@([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)/i,
+    /[?&](?:q|ll|center)=([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = query.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const lat = Number(match[1]);
+    const lon = Number(match[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      return {
+        name: `Coordinates ${lat.toFixed(5)}, ${lon.toFixed(5)}`,
+        detail: "Parsed from Google Maps link or coordinate query",
+        lat,
+        lon,
+        heightM: 12000,
+        source: "coordinate-query",
+        score: LOCATION_SOURCE_PRIORITY["coordinate-query"],
+      };
+    }
+  }
+  return null;
+}
+
 function parseCoordinateQuery(query) {
-  const trimmed = query.trim();
+  const trimmed = cleanLocationSearchQuery(query);
   if (!trimmed) {
+    return null;
+  }
+
+  const googleMapsCoordinate = parseGoogleMapsCoordinateQuery(trimmed);
+  if (googleMapsCoordinate) {
+    return googleMapsCoordinate;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
     return null;
   }
 
@@ -698,7 +927,7 @@ function parseCoordinateQuery(query) {
 }
 
 function scoreLocationCandidate(candidate, query) {
-  const normalizedQuery = normalizeSearchText(query);
+  const normalizedQuery = normalizeSearchText(cleanLocationSearchQuery(query));
   if (!normalizedQuery) {
     return 0;
   }
@@ -718,7 +947,7 @@ function scoreLocationCandidate(candidate, query) {
 
   for (const alias of aliases) {
     if (alias === normalizedQuery) {
-      score += 110;
+      score += 145;
     } else if (alias.startsWith(normalizedQuery)) {
       score += 85;
     } else if (alias.includes(normalizedQuery)) {
@@ -747,13 +976,17 @@ function scoreLocationCandidate(candidate, query) {
 }
 
 function getLocationSearchSuggestions(query) {
-  const coordinate = parseCoordinateQuery(query);
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  const coordinate = parseCoordinateQuery(cleanedQuery);
   const scored = LOCATION_GAZETTEER
-    .map((candidate) => ({
-      ...candidate,
-      source: "gazetteer",
-      score: scoreLocationCandidate(candidate, query),
-    }))
+    .map((candidate) => {
+      const matchScore = scoreLocationCandidate(candidate, cleanedQuery);
+      return {
+        ...candidate,
+        source: "gazetteer",
+        score: matchScore > 0 ? matchScore + LOCATION_SOURCE_PRIORITY.gazetteer : 0,
+      };
+    })
     .filter((candidate) => candidate.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, LOCATION_SEARCH_LIMIT);
@@ -765,6 +998,7 @@ function getLocationSearchSuggestions(query) {
 }
 
 function normalizeServerLocationSuggestion(suggestion) {
+  const serverScore = Number(suggestion.score);
   return {
     name: suggestion.name,
     detail: suggestion.detail || `${Number(suggestion.lat).toFixed(5)}, ${Number(suggestion.lon).toFixed(5)}`,
@@ -772,10 +1006,20 @@ function normalizeServerLocationSuggestion(suggestion) {
     lon: Number(suggestion.lon),
     heightM: Number(suggestion.height_m || suggestion.heightM || 12000),
     source: suggestion.source || "online-geocoder",
+    score: Number.isFinite(serverScore) ? serverScore : 0,
   };
 }
 
-function mergeLocationSuggestions(primaryMatches, incomingMatches) {
+function scoreMergedLocation(match, query) {
+  const providedScore = Number(match.score);
+  if (Number.isFinite(providedScore) && providedScore > 0) {
+    return providedScore;
+  }
+  return scoreLocationCandidate(match, query)
+    + (LOCATION_SOURCE_PRIORITY[match.source] || 0);
+}
+
+function mergeLocationSuggestions(primaryMatches, incomingMatches, query = "") {
   const merged = [];
   const seen = new Set();
   for (const match of [...primaryMatches, ...incomingMatches]) {
@@ -787,25 +1031,78 @@ function mergeLocationSuggestions(primaryMatches, incomingMatches) {
       continue;
     }
     seen.add(key);
-    merged.push(match);
+    merged.push({
+      ...match,
+      score: scoreMergedLocation(match, query),
+    });
   }
-  return merged.slice(0, LOCATION_SEARCH_LIMIT);
+  return merged
+    .sort((a, b) => {
+      const scoreDelta = scoreMergedLocation(b, query) - scoreMergedLocation(a, query);
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      return (LOCATION_SOURCE_PRIORITY[b.source] || 0) - (LOCATION_SOURCE_PRIORITY[a.source] || 0);
+    })
+    .slice(0, LOCATION_SEARCH_LIMIT);
+}
+
+function buildLocationSearchUrl(query) {
+  const params = new URLSearchParams({ q: cleanLocationSearchQuery(query) });
+  const center = getMapCenterPoint();
+  if (center) {
+    params.set("lat", center.lat.toFixed(6));
+    params.set("lon", center.lon.toFixed(6));
+  }
+
+  const bounds = buildMapContext().view_bounds;
+  if (bounds) {
+    params.set("west", bounds.west.toFixed(6));
+    params.set("south", bounds.south.toFixed(6));
+    params.set("east", bounds.east.toFixed(6));
+    params.set("north", bounds.north.toFixed(6));
+  }
+  return `/api/location-search?${params.toString()}`;
+}
+
+function googleMapsSearchUrl(query) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanLocationSearchQuery(query))}`;
+}
+
+async function fetchLocationSearchSuggestions(query) {
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  if (cleanedQuery.length < 1) {
+    return { suggestions: [], detail: "" };
+  }
+  const data = await fetchJson(buildLocationSearchUrl(cleanedQuery));
+  return {
+    suggestions: Array.isArray(data.suggestions)
+      ? data.suggestions.map(normalizeServerLocationSuggestion)
+      : [],
+    detail: data.detail || "",
+    online: Boolean(data.online),
+  };
 }
 
 async function refreshOnlineLocationSuggestions(query, requestId, localMatches) {
   try {
-    const data = await fetchJson(`/api/location-search?q=${encodeURIComponent(query)}`);
+    const cleanedQuery = cleanLocationSearchQuery(query);
+    const result = await fetchLocationSearchSuggestions(cleanedQuery);
     if (requestId !== state.locationSearchRequestId) {
       return;
     }
-    const serverMatches = Array.isArray(data.suggestions)
-      ? data.suggestions.map(normalizeServerLocationSuggestion)
-      : [];
-    state.locationSearchMatches = mergeLocationSuggestions(localMatches, serverMatches);
-    renderLocationSearchSuggestions();
+    state.locationSearchDetail = result.detail || "";
+    const serverMatches = result.suggestions || [];
+    state.locationSearchMatches = mergeLocationSuggestions(localMatches, serverMatches, cleanedQuery);
+    if (state.locationSearchMatches.length) {
+      renderLocationSearchSuggestions();
+    } else {
+      renderLocationSearchEmpty(cleanedQuery, state.locationSearchDetail);
+    }
   } catch (_error) {
     if (requestId === state.locationSearchRequestId && !state.locationSearchMatches.length) {
-      setLocationSearchOpen(false);
+      state.locationSearchDetail = getErrorMessage(_error);
+      renderLocationSearchEmpty(query, state.locationSearchDetail);
     }
   }
 }
@@ -826,6 +1123,43 @@ function setActiveLocationSuggestion(index) {
     option.classList.toggle("active", isActive);
     option.setAttribute("aria-selected", String(isActive));
   });
+}
+
+function renderLocationSearchStatus(message, query = "") {
+  els.locationSearchSuggestions.replaceChildren();
+  const status = document.createElement("div");
+  status.className = "location-suggestion-status";
+  const text = document.createElement("span");
+  text.textContent = message;
+  status.appendChild(text);
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  if (cleanedQuery) {
+    const externalLink = document.createElement("a");
+    externalLink.className = "location-suggestion-external";
+    externalLink.href = googleMapsSearchUrl(cleanedQuery);
+    externalLink.target = "_blank";
+    externalLink.rel = "noreferrer";
+    externalLink.textContent = "Open Google Maps search";
+    status.appendChild(externalLink);
+  }
+  els.locationSearchSuggestions.appendChild(status);
+  setLocationSearchOpen(true);
+}
+
+function renderLocationSearchLoading(query) {
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  renderLocationSearchStatus(`Searching ${cleanedQuery}...`, cleanedQuery);
+}
+
+function renderLocationSearchEmpty(query, detail = "") {
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  const detailText = detail ? ` ${detail}` : "";
+  renderLocationSearchStatus(
+    cleanedQuery
+      ? `No in-map coordinate match for "${cleanedQuery}".${detailText}`
+      : "Enter a mission location, coordinates, or KML/KMZ overlay.",
+    cleanedQuery,
+  );
 }
 
 function renderLocationSearchSuggestions() {
@@ -854,7 +1188,7 @@ function renderLocationSearchSuggestions() {
     button.addEventListener("pointerenter", () => setActiveLocationSuggestion(index));
     button.addEventListener("click", () => {
       state.activeLocationSearchIndex = index;
-      void commitLocationSearch();
+      flyToLocationSuggestion(match);
     });
 
     els.locationSearchSuggestions.appendChild(button);
@@ -893,49 +1227,87 @@ function flyToLocationSuggestion(suggestion) {
 }
 
 async function commitLocationSearch() {
-  const query = els.locationSearchInput.value.trim();
-  let matches = state.locationSearchMatches.length
-    ? state.locationSearchMatches
-    : getLocationSearchSuggestions(query);
-  const index = state.activeLocationSearchIndex >= 0 ? state.activeLocationSearchIndex : 0;
-  let suggestion = matches[index] || matches[0];
-  if (!suggestion && query.length >= 2) {
-    try {
-      const data = await fetchJson(`/api/location-search?q=${encodeURIComponent(query)}`);
-      const serverMatches = Array.isArray(data.suggestions)
-        ? data.suggestions.map(normalizeServerLocationSuggestion)
-        : [];
-      matches = mergeLocationSuggestions([], serverMatches);
-      state.locationSearchMatches = matches;
-      suggestion = matches[0];
-    } catch (_error) {
-      suggestion = null;
-    }
-  }
-  if (!suggestion) {
-    els.requestStatus.textContent = "No local match. Paste decimal coordinates or import a KML/KMZ overlay.";
-    setLocationSearchOpen(false);
+  const query = cleanLocationSearchQuery(els.locationSearchInput.value);
+  window.clearTimeout(state.locationSearchTimer);
+  state.locationSearchRequestId += 1;
+  state.locationSearchDetail = "";
+
+  const coordinate = parseCoordinateQuery(query);
+  if (coordinate) {
+    flyToLocationSuggestion(coordinate);
     return;
+  }
+
+  if (query.length < 1) {
+    renderLocationSearchEmpty(query);
+    return;
+  }
+
+  const localMatches = getLocationSearchSuggestions(query);
+  const selectedBeforeFetch = state.activeLocationSearchIndex >= 0
+    ? state.locationSearchMatches[state.activeLocationSearchIndex]
+    : null;
+  if (localMatches.length) {
+    state.locationSearchMatches = localMatches;
+    renderLocationSearchSuggestions();
+  } else {
+    renderLocationSearchLoading(query);
+  }
+
+  let serverMatches = [];
+  try {
+    const result = await fetchLocationSearchSuggestions(query);
+    serverMatches = result.suggestions || [];
+    state.locationSearchDetail = result.detail || "";
+  } catch (error) {
+    serverMatches = [];
+    state.locationSearchDetail = getErrorMessage(error);
+  }
+
+  const matches = mergeLocationSuggestions(localMatches, serverMatches, query);
+  state.locationSearchMatches = matches;
+  const selectedKey = selectedBeforeFetch
+    ? `${Math.round(selectedBeforeFetch.lat * 1000)}:${Math.round(selectedBeforeFetch.lon * 1000)}:${selectedBeforeFetch.name.toLowerCase()}`
+    : "";
+  const suggestion = selectedKey
+    ? matches.find((match) => (
+      `${Math.round(match.lat * 1000)}:${Math.round(match.lon * 1000)}:${match.name.toLowerCase()}`
+    ) === selectedKey) || selectedBeforeFetch
+    : matches[0];
+
+  if (!suggestion) {
+    els.requestStatus.textContent = "Location not resolved. Try a more specific place, coordinates, or KML/KMZ.";
+    renderLocationSearchEmpty(query, state.locationSearchDetail);
+    return;
+  }
+
+  if (matches.length) {
+    renderLocationSearchSuggestions();
   }
   flyToLocationSuggestion(suggestion);
 }
 
 function onLocationSearchInput() {
-  const query = els.locationSearchInput.value.trim();
+  const query = cleanLocationSearchQuery(els.locationSearchInput.value);
   window.clearTimeout(state.locationSearchTimer);
   state.locationSearchRequestId += 1;
-  if (query.length < 2) {
+  state.locationSearchDetail = "";
+  if (query.length < 1) {
     state.locationSearchMatches = [];
     setLocationSearchOpen(false);
     return;
   }
   const localMatches = getLocationSearchSuggestions(query);
   state.locationSearchMatches = localMatches;
-  renderLocationSearchSuggestions();
+  if (localMatches.length) {
+    renderLocationSearchSuggestions();
+  } else {
+    renderLocationSearchLoading(query);
+  }
   const requestId = state.locationSearchRequestId;
   state.locationSearchTimer = window.setTimeout(() => {
     void refreshOnlineLocationSuggestions(query, requestId, localMatches);
-  }, 240);
+  }, 180);
 }
 
 function onLocationSearchKeyDown(event) {
@@ -1420,24 +1792,47 @@ function syncModelSelects(sourceSelect, targetSelect) {
   });
 }
 
+function hasClaudeProviderCredential() {
+  return Boolean(state.claudeApiKey || state.serverClaudeKeyAvailable);
+}
+
 function applyProviderVisibility() {
   const isClaude = state.llmProvider === "claude";
+  const isAuto = state.llmProvider === "auto";
+  const hasClaudeKey = hasClaudeProviderCredential();
   els.providerSelect.value = state.llmProvider;
   els.providerLocalModelRow.classList.toggle("hidden", isClaude);
-  els.providerClaudeModelRow.classList.toggle("hidden", !isClaude);
-  els.providerClaudeKeyRow.classList.toggle("hidden", !isClaude);
+  els.providerClaudeModelRow.classList.toggle("hidden", !(isClaude || isAuto));
+  els.providerClaudeKeyRow.classList.toggle("hidden", !(isClaude || isAuto));
   if (state.claudeApiKey) {
     els.claudeApiKeyInput.value = state.claudeApiKey;
   }
-  if (isClaude) {
-    setModelProviderButton(`Claude: ${els.claudeModelSelect.value}`, state.claudeApiKey ? "good" : "warn");
-    els.providerStatus.textContent = state.claudeApiKey ? "Claude API key loaded for this session" : "Claude key required";
+  if (isAuto) {
+    const localLabel = els.modelSelect.value || els.topModelSelect.value || state.config?.default_model || "local model";
+    const tone = hasClaudeKey || state.localModelAvailable ? "good" : "warn";
+    setModelProviderButton(hasClaudeKey ? "Auto: Claude primary" : "Auto: local fallback", tone);
+    if (hasClaudeKey && state.localModelAvailable) {
+      els.providerStatus.textContent = `Claude primary; local fallback: ${localLabel}`;
+    } else if (hasClaudeKey) {
+      els.providerStatus.textContent = "Claude primary; local model unavailable";
+    } else if (state.localModelAvailable) {
+      els.providerStatus.textContent = `Claude key missing; using local fallback: ${localLabel}`;
+    } else {
+      els.providerStatus.textContent = "Claude key and local model unavailable; deterministic planner remains active";
+    }
+  } else if (isClaude) {
+    setModelProviderButton(`Claude: ${els.claudeModelSelect.value}`, hasClaudeKey ? "good" : "warn");
+    els.providerStatus.textContent = state.claudeApiKey
+      ? "Claude API key loaded for this browser session"
+      : state.serverClaudeKeyAvailable
+        ? "Server ANTHROPIC_API_KEY will be used"
+        : "Claude key required";
   } else {
     const label = els.modelSelect.value || els.topModelSelect.value || state.config?.default_model || "local model";
     const tone = state.localModelAvailable ? "good" : "warn";
     setModelProviderButton(state.localModelAvailable ? `Local: ${label}` : "Local model offline; rules active", tone);
     els.providerStatus.textContent = state.localModelAvailable
-      ? "Local Ollama available"
+      ? `Using detected local model: ${label}`
       : "Local model offline; deterministic planner remains active";
   }
 }
@@ -1445,9 +1840,9 @@ function applyProviderVisibility() {
 function applyProviderSelection() {
   state.llmProvider = els.providerSelect.value;
   state.claudeApiKey = els.claudeApiKeyInput.value.trim();
-  if (state.llmProvider === "claude" && !state.claudeApiKey) {
+  if (state.llmProvider === "claude" && !hasClaudeProviderCredential()) {
     applyProviderVisibility();
-    els.providerStatus.textContent = "Claude API key required before switching providers";
+    els.providerStatus.textContent = "Claude API key required here or ANTHROPIC_API_KEY on the server";
     setModelProviderMenuOpen(true);
     els.claudeApiKeyInput.focus();
     return;
@@ -1460,7 +1855,7 @@ function applyProviderSelection() {
     sessionStorage.removeItem("teraClaudeApiKey");
   }
 
-  if (state.llmProvider === "ollama") {
+  if (state.llmProvider === "ollama" || state.llmProvider === "auto") {
     els.modelSelect.value = els.topModelSelect.value;
   }
   applyProviderVisibility();
@@ -1487,26 +1882,6 @@ function renderWorkflowDots() {
     dot.title = stage.label;
     els.workflowDots.appendChild(dot);
   });
-}
-
-function renderClarifyingQuestions() {
-  els.clarifyingQuestions.replaceChildren();
-  const questions = state.sourceInference?.clarifying_questions || [];
-
-  if (!questions.length) {
-    const item = document.createElement("li");
-    item.textContent = state.sourceInference
-      ? "No additional Socratic question is needed. Review the working sources or describe a constraint in chat."
-      : "Socratic source questions will appear after the first mission description.";
-    els.clarifyingQuestions.appendChild(item);
-    return;
-  }
-
-  for (const question of questions) {
-    const item = document.createElement("li");
-    item.textContent = question;
-    els.clarifyingQuestions.appendChild(item);
-  }
 }
 
 function ensureClarifyingQuestions(recommendation) {
@@ -1561,7 +1936,6 @@ function updateWorkflowPanel() {
   els.buildPackageBtn.disabled = selectedCount === 0 || !state.sourceConfirmed;
   els.streamSelectedBtn.disabled = selectedCount === 0;
 
-  renderClarifyingQuestions();
   renderWorkflowDots();
 }
 
@@ -1706,8 +2080,12 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   const questions = [];
   const rationale = [`Planner API unavailable: ${plannerErrorMessage}. Using embedded deterministic source rules.`];
 
-  appendUniqueSourceIds(optionalIds, "esri_world_imagery", "osm_basemap");
-  rationale.push("Esri imagery and OSM basemap stay as lightweight preview/context layers.");
+  appendUniqueSourceIds(requiredIds, isUsContext ? "naip" : "sentinel_2");
+  appendUniqueSourceIds(optionalIds, "cesium_world_imagery", "osm_basemap");
+  if (isUsContext) {
+    appendUniqueSourceIds(optionalIds, "usgs_imagery_only", "nrl_naip_conus");
+  }
+  rationale.push("NAIP is the high-detail U.S. imagery default; Sentinel-2 remains the global free imagery fallback and Cesium imagery stays as the token-backed preview stream.");
 
   const needsRouting = textHasAny(promptText, [
     "route",
@@ -1732,6 +2110,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     "exposed",
     "viewshed",
   ]);
+  const needsDted = textHasAny(promptText, ["dted", "dt2", "earth explorer", "earthexplorer"]);
   const needsWater = textHasAny(promptText, ["water", "stream", "river", "spring", "lake", "potable", "hydrate"]);
   const needsLandcover = needsRouting || textHasAny(promptText, [
     "cover",
@@ -1780,16 +2159,36 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     "changed",
     "cloud",
   ]);
+  const needsCesiumArchive = promptText.includes("cesium") && textHasAny(promptText, [
+    "download",
+    "offline",
+    "archive",
+    "export",
+    "jetson",
+    "local",
+  ]);
 
+  if (needsCesiumArchive) {
+    appendUniqueSourceIds(requiredIds, "cesium_ion_archive");
+    rationale.push("Cesium offline use is handled through ion archive/export downloads to the Jetson, not by scraping World stream tiles.");
+  }
   if (needsRouting) {
     appendUniqueSourceIds(requiredIds, "osm_extract");
     rationale.push("OSM PBF is required for the local routable graph and feature lookup.");
   }
   if (needsTerrain) {
-    appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dep" : "copernicus_dem");
-    appendUniqueSourceIds(requiredIds, "esri_world_elevation");
+    appendUniqueSourceIds(requiredIds, "copernicus_dem");
+    if (isUsContext) {
+      appendUniqueSourceIds(optionalIds, "dted_earth_explorer", "usgs_3dep");
+    } else {
+      appendUniqueSourceIds(optionalIds, "dted_earth_explorer");
+    }
     appendUniqueSourceIds(optionalIds, "cesium_world_terrain");
-    rationale.push("Analysis DEM plus queryable Esri terrain fallback is required for slope, exposure, hydrology, and cost surfaces.");
+    rationale.push("Copernicus GLO-30 COGs are the no-account terrain default; staged EarthExplorer DTED supplements it when available.");
+  }
+  if (needsDted) {
+    appendUniqueSourceIds(requiredIds, "dted_earth_explorer");
+    rationale.push("DTED was explicitly requested, so staged EarthExplorer DTED import is included; set DTED_SOURCE_DIR on the Jetson before executing the package.");
   }
   if (needsLandcover) {
     appendUniqueSourceIds(requiredIds, isUsContext ? "nlcd" : "esa_worldcover");
@@ -1800,7 +2199,6 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     if (isUsContext) {
       appendUniqueSourceIds(optionalIds, "nwis");
     }
-    appendUniqueSourceIds(optionalIds, "sentinel_2");
     rationale.push("Hydrography is required for water-source and drainage queries.");
   }
   if (needsSar) {
@@ -1829,13 +2227,15 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
     appendUniqueSourceIds(requiredIds, "viewshed_surfaces");
     appendUniqueSourceIds(optionalIds, isUsContext ? "fcc_towers" : "osm_towers", "osm_towers");
     if (!needsTerrain) {
-      appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dep" : "copernicus_dem");
-      appendUniqueSourceIds(requiredIds, "esri_world_elevation");
+      appendUniqueSourceIds(requiredIds, "copernicus_dem");
+      if (isUsContext) {
+        appendUniqueSourceIds(optionalIds, "dted_earth_explorer", "usgs_3dep");
+      }
     }
     rationale.push("Signal planning requires DEM-derived viewsheds plus tower or high-ground candidates.");
   }
   if (needsCurrentImagery && !needsWater && !needsHazards) {
-    appendUniqueSourceIds(optionalIds, "sentinel_2");
+    appendUniqueSourceIds(optionalIds, "landsat_collection_2");
     if (isUsContext) {
       appendUniqueSourceIds(optionalIds, "naip");
     }
@@ -1874,7 +2274,7 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
   }
 
   const selectedIds = [];
-  const previewIds = optionalIds.filter((sourceId) => ["esri_world_imagery", "osm_basemap"].includes(sourceId));
+  const previewIds = optionalIds.filter((sourceId) => ["cesium_world_imagery", "usgs_imagery_only", "osm_basemap"].includes(sourceId));
   appendUniqueSourceIds(selectedIds, ...requiredIds, ...previewIds);
   const missionSummary = missionText.length > 220 ? `${missionText.slice(0, 217)}...` : missionText;
 
@@ -1919,7 +2319,7 @@ function applySourceRecommendation(data, missionText, mode = "server", statusMes
   const fallbackText = mode === "fallback"
     ? ` Browser fallback used because the planner API is unavailable (${statusMessage}).`
     : "";
-  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Use Questions to scope, then confirm sources.`;
+  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Confirm sources when ready.`;
   updateWorkflowPanel();
 }
 
@@ -2007,7 +2407,7 @@ function renderSourceList() {
 
   for (const source of visibleSources) {
     const article = document.createElement("article");
-    article.className = "source-item compact-source-item";
+    article.className = "source-item compact-source-item source-chip";
     article.dataset.selected = String(state.selectedSourceIds.has(source.id));
     article.title = `${source.category} | ${formatSourceStatus(source)}`;
 
@@ -2047,6 +2447,16 @@ function hidePackageOutput() {
   els.packageManifest.textContent = "";
   els.downloadManifestLink.classList.add("hidden");
   els.downloadManifestLink.removeAttribute("href");
+  els.packageExecutionActions.classList.add("hidden");
+  els.downloadToJetsonBtn.disabled = true;
+  els.packageExecutionStatus.classList.add("hidden");
+  els.packageExecutionStatus.textContent = "";
+  els.packageArtifacts.classList.add("hidden");
+  els.packageArtifacts.textContent = "";
+  if (state.packageStatusTimer) {
+    window.clearInterval(state.packageStatusTimer);
+    state.packageStatusTimer = null;
+  }
 }
 
 async function loadDataSources() {
@@ -2165,7 +2575,7 @@ function confirmSources() {
   }
   state.sourceConfirmed = true;
   hidePackageOutput();
-  setWorkflowStage(3);
+  setWorkflowStage(2);
   els.packageStatus.textContent = "Sources confirmed. Draw or adjust the AO rectangle for the data package.";
 }
 
@@ -2270,14 +2680,93 @@ function updateCameraText() {
   updateCenterGrid();
 }
 
+function updateMapModeControl() {
+  if (!els.mapModeToggleBtn) {
+    return;
+  }
+  const is3d = state.mapMode === "3d";
+  els.mapModeToggleBtn.textContent = is3d ? "2D View" : "3D View";
+  els.mapModeToggleBtn.setAttribute("aria-pressed", String(is3d));
+}
+
+function applyMapModeCameraControls() {
+  if (!state.viewer) {
+    return;
+  }
+  const controller = state.viewer.scene.screenSpaceCameraController;
+  const is3d = state.mapMode === "3d";
+  controller.enableTranslate = true;
+  controller.enableZoom = true;
+  controller.enableRotate = is3d;
+  controller.enableTilt = is3d;
+  controller.enableLook = is3d;
+  controller.enableCollisionDetection = true;
+  updateMapModeControl();
+}
+
+function setMapMode(mode, { animate = true } = {}) {
+  if (!state.viewer) {
+    state.mapMode = mode;
+    updateMapModeControl();
+    return;
+  }
+  const nextMode = mode === "3d" ? "3d" : "2d";
+  state.mapMode = nextMode;
+  const duration = animate ? 0.45 : 0;
+  if (nextMode === "3d") {
+    state.viewer.scene.morphTo3D(duration);
+  } else {
+    state.viewer.scene.morphTo2D(duration);
+  }
+  applyMapModeCameraControls();
+  state.viewer.scene.requestRender();
+}
+
+function toggleMapMode() {
+  setMapMode(state.mapMode === "3d" ? "2d" : "3d");
+}
+
+function hasCesiumIonToken() {
+  return Boolean(state.config?.cesium_ion_token);
+}
+
+function updateMapStreamChip(imagery, terrain, requestedModes = {}) {
+  const requestedIon = requestedModes.imageryMode === "ion-satellite"
+    || requestedModes.terrainMode === "cesium-world";
+  const fallbackReason = [imagery?.fallbackReason, terrain?.fallbackReason]
+    .filter(Boolean)
+    .join("; ");
+
+  if (imagery?.usingIon || terrain?.usingIon) {
+    setChip(els.tokenChip, "Cesium ion stream active", "good");
+    return;
+  }
+
+  if (fallbackReason || (requestedIon && !state.cesiumIonTokenAvailable)) {
+    setChip(els.tokenChip, "Map stream active; ion fallback", "warn");
+    return;
+  }
+
+  const imageryLabel = imagery?.shortLabel || imagery?.label || "imagery";
+  setChip(els.tokenChip, `Map stream: ${imageryLabel}`, "good");
+}
+
 async function loadRuntimeConfig() {
   state.config = await fetchJson("/api/config");
-  const hasToken = Boolean(state.config.cesium_ion_token);
-  setChip(els.tokenChip, hasToken ? "Cesium token detected" : "Cesium token missing", hasToken ? "good" : "warn");
+  state.cesiumIonTokenAvailable = hasCesiumIonToken();
+  state.serverClaudeKeyAvailable = Boolean(state.config.anthropic_api_key_configured);
+  if (!sessionStorage.getItem("teraLlmProvider")) {
+    state.llmProvider = state.config.default_provider || (state.serverClaudeKeyAvailable ? "auto" : "ollama");
+  }
+  setChip(els.tokenChip, "Map stream checking");
+  els.providerSelect.value = state.llmProvider;
   els.claudeModelSelect.value = state.config.claude_default_model || els.claudeModelSelect.value;
-  setModelProviderButton(`Default model: ${state.config.default_model}`, "warn");
+  setModelProviderButton(
+    state.llmProvider === "auto" ? "Auto: Claude primary" : `Default model: ${state.config.default_model}`,
+    state.serverClaudeKeyAvailable ? "good" : "warn",
+  );
   state.imageryMode = "esri";
-  state.terrainMode = hasToken ? "cesium-world" : "ellipsoid";
+  state.terrainMode = state.cesiumIonTokenAvailable ? "cesium-world" : "ellipsoid";
   els.imagerySelect.value = state.imageryMode;
   els.terrainSelect.value = state.terrainMode;
 }
@@ -2303,7 +2792,7 @@ async function loadModels() {
       els.modelsList.appendChild(item);
       els.modelsStatus.textContent = "Local model offline; deterministic planner active";
       applyProviderVisibility();
-      return;
+      return data;
     }
 
     if (!Array.isArray(data.models) || data.models.length === 0) {
@@ -2318,7 +2807,7 @@ async function loadModels() {
       els.modelsStatus.textContent = `Default model: ${data.default_model}`;
       syncModelSelects(els.modelSelect, els.topModelSelect);
       applyProviderVisibility();
-      return;
+      return data;
     }
 
     for (const model of data.models) {
@@ -2341,9 +2830,10 @@ async function loadModels() {
       els.modelSelect.appendChild(option);
     }
 
-    els.modelsStatus.textContent = `${data.models.length} model${data.models.length === 1 ? "" : "s"} available`;
+    els.modelsStatus.textContent = `Detected local model: ${data.default_model}`;
     syncModelSelects(els.modelSelect, els.topModelSelect);
     applyProviderVisibility();
+    return data;
   } catch (error) {
     state.localModelAvailable = false;
     state.localModelDetail = error instanceof Error ? error.message : String(error);
@@ -2359,6 +2849,167 @@ async function loadModels() {
     els.modelsStatus.textContent = "Local model offline; deterministic planner active";
     syncModelSelects(els.modelSelect, els.topModelSelect);
     applyProviderVisibility();
+    return null;
+  }
+}
+
+function ensureLocalModelOption(model) {
+  if (!model) {
+    return;
+  }
+  for (const select of [els.modelSelect, els.topModelSelect]) {
+    const exists = Array.from(select.options).some((option) => option.value === model);
+    if (!exists) {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = `${model} (ATAK local)`;
+      select.appendChild(option);
+    }
+    select.value = model;
+  }
+}
+
+function renderAtakMirror(events = []) {
+  els.atakMirrorLog.innerHTML = "";
+  const conversationEvents = events.filter((event) => (
+    event.role === "operator" || event.role === "assistant"
+  ));
+
+  if (!conversationEvents.length) {
+    const empty = document.createElement("div");
+    empty.className = "atak-mirror-empty";
+    empty.textContent = "No ATAK plugin conversation mirrored yet. Send from the Samsung TAK device.";
+    els.atakMirrorLog.appendChild(empty);
+    return;
+  }
+
+  for (const event of conversationEvents) {
+    const item = document.createElement("article");
+    item.className = `atak-mirror-event ${event.role === "operator" ? "inbound" : "outbound"}`;
+
+    const header = document.createElement("div");
+    header.className = "atak-mirror-event-header";
+    const source = document.createElement("span");
+    source.textContent = event.role === "operator"
+      ? "ATAK device / operator"
+      : "TERA agent / Ollama";
+    const stamp = document.createElement("time");
+    stamp.dateTime = event.timestamp || "";
+    stamp.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "";
+    header.append(source, stamp);
+
+    const body = document.createElement("div");
+    body.className = "atak-mirror-event-body";
+    body.textContent = event.text || "";
+
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    meta.textContent = [
+      event.direction,
+      event.provider,
+      event.model,
+    ].filter(Boolean).join(" | ");
+
+    item.append(header, body);
+    if (meta.textContent) {
+      item.appendChild(meta);
+    }
+    els.atakMirrorLog.appendChild(item);
+  }
+  els.atakMirrorLog.scrollTop = els.atakMirrorLog.scrollHeight;
+}
+
+function applyAtakMonitorMode() {
+  document.body.classList.toggle("atak-monitor-mode", state.atakAgentActive);
+  els.promptInput.disabled = state.atakAgentActive;
+  els.submitBtn.disabled = state.atakAgentActive;
+  if (state.atakAgentActive) {
+    els.requestStatus.textContent = "Read-only ATAK monitor active";
+  }
+}
+
+function applyAtakAgentStatus(data) {
+  state.atakAgentActive = Boolean(data.active);
+  els.atakMirrorPanel.classList.toggle("hidden", !state.atakAgentActive);
+  applyAtakMonitorMode();
+  if (state.atakAgentActive) {
+    const label = data.status === "active"
+      ? "ATAK Local: ready"
+      : data.status === "error"
+        ? "ATAK Local: error"
+        : "ATAK Local: starting";
+    const tone = data.status === "active" ? "good" : data.status === "error" ? "bad" : "warn";
+    setAtakAgentButton(label, tone);
+    els.atakMirrorStatus.textContent = data.status === "active"
+      ? `Watching Samsung TAK -> ${data.model || "local Ollama"} -> Samsung TAK`
+      : data.detail || `Mirroring ${data.model || "local model"}`;
+    renderAtakMirror(data.events || []);
+  } else {
+    setAtakAgentButton("ATAK Local", "");
+    els.promptInput.disabled = false;
+    els.submitBtn.disabled = false;
+  }
+}
+
+async function refreshAtakMirror() {
+  const data = await fetchJson("/api/jetson/atak-agent/mirror");
+  applyAtakAgentStatus(data);
+  return data;
+}
+
+function startAtakMirrorPolling() {
+  if (state.atakMirrorTimer) {
+    window.clearInterval(state.atakMirrorTimer);
+  }
+  state.atakMirrorTimer = window.setInterval(() => {
+    refreshAtakMirror().catch((error) => {
+      els.atakMirrorStatus.textContent = getErrorMessage(error);
+      setAtakAgentButton("ATAK mirror error", "bad");
+    });
+  }, 2000);
+}
+
+async function loadAtakAgentStatus() {
+  try {
+    const data = await fetchJson("/api/jetson/atak-agent/status");
+    applyAtakAgentStatus(data);
+    if (data.active) {
+      ensureLocalModelOption(data.model);
+      startAtakMirrorPolling();
+    }
+  } catch (error) {
+    setAtakAgentButton("ATAK status unknown", "warn");
+  }
+}
+
+async function activateAtakLocalAgent() {
+  els.atakAgentBtn.disabled = true;
+  setAtakAgentButton("Switching ATAK...", "warn");
+  try {
+    const data = await fetchJson("/api/jetson/atak-agent/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemma3:4b",
+        agent_profile: "tera-atak-live",
+      }),
+    });
+
+    ensureLocalModelOption(data.model || "gemma3:4b");
+    state.llmProvider = "ollama";
+    sessionStorage.setItem("teraLlmProvider", "ollama");
+    els.providerSelect.value = "ollama";
+    els.agentProfileSelect.value = data.agent_profile || "tera-atak-live";
+    state.localModelAvailable = true;
+    els.modelsStatus.textContent = `ATAK local model: ${data.model}`;
+    applyProviderVisibility();
+    applyAtakAgentStatus(data);
+    startAtakMirrorPolling();
+  } catch (error) {
+    setAtakAgentButton("ATAK switch failed", "bad");
+    els.requestStatus.textContent = getErrorMessage(error);
+  } finally {
+    els.atakAgentBtn.disabled = false;
   }
 }
 
@@ -2407,7 +3058,7 @@ async function planSourcesFromMission(missionText, mapContext) {
 async function buildSourcePackage() {
   if (!state.sourceConfirmed) {
     els.packageStatus.textContent = "Confirm the recommended source list before building the manifest.";
-    setWorkflowStage(2);
+    setWorkflowStage(1);
     return;
   }
 
@@ -2431,12 +3082,17 @@ async function buildSourcePackage() {
     });
     state.packagePlan = data;
     const warningText = data.warnings?.length ? ` Warnings: ${data.warnings.join(" ")}` : "";
-    els.packageStatus.textContent = `Manifest ${data.package_id} ready with ${data.sources.length} sources.${warningText}`;
+    renderJetsonStorage(data.storage, data.estimated_bytes, data.storage_fit, data.storage_warning);
+    const fitText = data.storage_fit ? " Jetson storage check passed." : ` ${data.storage_warning || "Jetson storage check failed."}`;
+    els.packageStatus.textContent = `Manifest ${data.package_id} ready with ${data.sources.length} sources.${fitText}${warningText}`;
     els.packageManifest.textContent = JSON.stringify(data.manifest, null, 2);
     els.packageManifest.classList.remove("hidden");
     els.downloadManifestLink.href = data.download_url;
     els.downloadManifestLink.download = `${data.package_name}.json`;
     els.downloadManifestLink.classList.remove("hidden");
+    els.packageExecutionActions.classList.remove("hidden");
+    els.downloadToJetsonBtn.disabled = !data.storage_fit;
+    els.refreshPackageStatusBtn.disabled = false;
   } catch (error) {
     els.packageStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
@@ -2444,8 +3100,207 @@ async function buildSourcePackage() {
   }
 }
 
+function renderPackageExecutionStatus(status) {
+  const rows = [];
+  rows.push(["State", status.state || "unknown"]);
+  rows.push(["Bytes", formatBytes(status.bytes_written || 0)]);
+  rows.push(["Message", status.message || ""]);
+  for (const operation of status.operations || []) {
+    const label = operation.source_name || operation.id || "source";
+    const value = `${operation.state || "planned"} ${operation.bytes_written ? `(${formatBytes(operation.bytes_written)})` : ""}`;
+    rows.push([label, value]);
+  }
+  els.packageExecutionStatus.innerHTML = "";
+  for (const [label, value] of rows) {
+    const left = document.createElement("span");
+    left.textContent = label;
+    const right = document.createElement("strong");
+    right.textContent = value;
+    els.packageExecutionStatus.append(left, right);
+  }
+  els.packageExecutionStatus.classList.remove("hidden");
+  if (status.storage) {
+    renderJetsonStorage(status.storage, state.packagePlan?.estimated_bytes, state.packagePlan?.storage_fit, state.packagePlan?.storage_warning);
+  }
+}
+
+async function refreshPackageArtifacts() {
+  if (!state.packagePlan?.artifacts_url) {
+    return null;
+  }
+  const artifacts = await fetchJson(state.packagePlan.artifacts_url);
+  els.packageArtifacts.textContent = JSON.stringify(artifacts, null, 2);
+  els.packageArtifacts.classList.remove("hidden");
+  return artifacts;
+}
+
+async function refreshPackageStatus() {
+  if (!state.packagePlan?.status_url) {
+    return null;
+  }
+  const status = await fetchJson(state.packagePlan.status_url);
+  renderPackageExecutionStatus(status);
+  if (status.state === "succeeded" || status.state === "failed") {
+    if (state.packageStatusTimer) {
+      window.clearInterval(state.packageStatusTimer);
+      state.packageStatusTimer = null;
+    }
+    els.downloadToJetsonBtn.disabled = status.state === "succeeded";
+    await refreshPackageArtifacts().catch(() => null);
+  }
+  return status;
+}
+
+async function downloadPackageToJetson() {
+  if (!state.packagePlan?.execute_url) {
+    els.packageStatus.textContent = "Build the manifest before starting a Jetson download.";
+    return;
+  }
+  els.downloadToJetsonBtn.disabled = true;
+  els.packageStatus.textContent = "Starting Jetson download job...";
+  try {
+    const response = await fetchJson(state.packagePlan.execute_url, { method: "POST" });
+    renderPackageExecutionStatus(response);
+    els.packageStatus.textContent = response.message || "Jetson download job started.";
+    await refreshPackageStatus();
+    if (!state.packageStatusTimer) {
+      state.packageStatusTimer = window.setInterval(() => {
+        refreshPackageStatus().catch((error) => {
+          els.packageStatus.textContent = getErrorMessage(error);
+        });
+      }, 2000);
+    }
+  } catch (error) {
+    els.downloadToJetsonBtn.disabled = false;
+    els.packageStatus.textContent = getErrorMessage(error);
+  }
+}
+
+function providerDisplayName(provider) {
+  if (provider === "auto") {
+    return "auto provider";
+  }
+  return provider === "claude" ? "Claude" : "local Ollama";
+}
+
+async function resolveLocalModelForFallback() {
+  const modelData = await loadModels();
+  return (
+    els.modelSelect.value.trim()
+    || els.topModelSelect.value.trim()
+    || modelData?.default_model
+    || state.config?.default_model
+    || ""
+  );
+}
+
+async function streamAssistantProvider({
+  assistantMessage,
+  provider,
+  localModel,
+  cloudModel,
+  finalPrompt,
+  system,
+  agentProfile,
+  mapContext,
+  sourceContext,
+  metaPrefix = "",
+}) {
+  const providerLabel = providerDisplayName(provider);
+  const baseMeta = metaPrefix ? `${metaPrefix} | ${providerLabel}` : providerLabel;
+  let streamedText = "";
+  let resolvedModel = provider === "ollama"
+    ? localModel || "auto-detect"
+    : cloudModel || localModel || "default model";
+  let resolvedProvider = provider;
+  const selectedLocalModel = localModel || "";
+  const selectedCloudModel = cloudModel || "";
+
+  setMessagePending(assistantMessage, `${providerLabel} is thinking`);
+  ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${resolvedModel} | streaming`);
+  els.requestStatus.textContent = provider === "claude"
+    ? "Streaming Claude response..."
+    : provider === "auto"
+      ? "Trying Claude, then local model if needed..."
+      : "Streaming local Ollama response...";
+
+  const response = await fetch("/api/prompt/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: finalPrompt,
+      system: system || null,
+      model: provider === "claude" ? null : selectedLocalModel || null,
+      llm_provider: provider,
+      cloud_model: provider === "ollama" ? null : selectedCloudModel || null,
+      cloud_api_key: provider === "ollama" ? null : state.claudeApiKey || null,
+      agent_profile: agentProfile,
+      map_context: mapContext,
+      source_context: sourceContext,
+    }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `${response.status} ${response.statusText}`);
+  }
+
+  await readEventStream(response, (eventData) => {
+    if (eventData.type === "start") {
+      resolvedModel = eventData.model || resolvedModel;
+      resolvedProvider = eventData.provider || resolvedProvider;
+      ensureMessageMeta(assistantMessage, `provider: ${providerDisplayName(resolvedProvider)} | model: ${resolvedModel} | streaming`);
+      return;
+    }
+    if (eventData.type === "token") {
+      streamedText += eventData.text || "";
+      const shouldFollowStream = isChatPinnedToBottom();
+      setMessageBody(assistantMessage, streamedText);
+      maybeScrollChatToBottom(shouldFollowStream);
+      return;
+    }
+    if (eventData.type === "status") {
+      els.requestStatus.textContent = eventData.detail || `Streaming ${providerLabel} response...`;
+      return;
+    }
+    if (eventData.type === "fallback") {
+      const reason = eventData.reason ? ` ${eventData.reason}` : "";
+      els.providerStatus.textContent = eventData.detail || "Trying fallback model provider.";
+      els.requestStatus.textContent = eventData.detail || "Trying fallback model provider.";
+      ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | fallback:${reason}`);
+      return;
+    }
+    if (eventData.type === "error") {
+      throw new Error(eventData.detail || `${providerLabel} request failed.`);
+    }
+    if (eventData.type === "done") {
+      resolvedProvider = eventData.provider || resolvedProvider;
+      ensureMessageMeta(assistantMessage, `provider: ${providerDisplayName(resolvedProvider)} | model: ${eventData.model || resolvedModel}`);
+    }
+  });
+
+  if (!streamedText.trim()) {
+    throw new Error(provider === "claude"
+      ? "Claude returned an empty response."
+      : "The local Ollama model returned an empty streamed response.");
+  }
+
+  if (resolvedProvider === "ollama") {
+    state.localModelAvailable = true;
+    state.localModelDetail = "";
+    applyProviderVisibility();
+  }
+
+  return { provider: resolvedProvider, model: resolvedModel, text: streamedText };
+}
+
 async function submitPrompt(event) {
   event.preventDefault();
+  if (state.atakAgentActive) {
+    els.requestStatus.textContent = "ATAK Local is read-only here. Send prompts from the Samsung TAK device.";
+    await refreshAtakMirror().catch(() => null);
+    return;
+  }
   els.submitBtn.disabled = true;
 
   const prompt = els.promptInput.value.trim();
@@ -2456,23 +3311,17 @@ async function submitPrompt(event) {
   }
   const system = els.systemInput.value.trim();
   const provider = state.llmProvider;
-  const model = provider === "claude"
-    ? els.claudeModelSelect.value.trim()
-    : els.modelSelect.value.trim();
+  const localModel = els.modelSelect.value.trim();
+  const cloudModel = els.claudeModelSelect.value.trim();
   els.requestStatus.textContent = provider === "claude"
     ? "Connecting to Claude API..."
-    : "Connecting to local model...";
-  if (provider === "claude" && !state.claudeApiKey) {
-    els.submitBtn.disabled = false;
-    els.requestStatus.textContent = "Claude API key required";
-    els.providerStatus.textContent = "Enter a Claude API key to use cloud inference";
-    setModelProviderMenuOpen(true);
-    els.claudeApiKeyInput.focus();
-    return;
-  }
+    : provider === "auto"
+      ? "Connecting with Claude primary and local fallback..."
+      : "Connecting to local model...";
   const agentProfile = els.agentProfileSelect.value;
   const finalPrompt = `${prompt}${makeMapContextAppendix()}`;
   const mapContext = els.includeMapContext.checked ? buildMapContext() : null;
+  els.promptInput.value = "";
   els.requestStatus.textContent = "Planning source package...";
   try {
     await planSourcesFromMission(prompt, mapContext);
@@ -2486,122 +3335,47 @@ async function submitPrompt(event) {
 
   appendMessage(
     "user",
-    finalPrompt,
-    [
-      model ? `model: ${model}` : "default model",
-      `provider: ${provider}`,
-      `profile: ${agentProfile}`,
-      `focus: ${sourceContext.mission_focus}`,
-      `${sourceContext.selected_source_ids.length} sources`,
-    ].join(" | "),
+    prompt,
   );
 
-  let activeAssistantMessage = null;
-
-  if (provider === "ollama" && !state.localModelAvailable) {
-    appendMessage(
-      "assistant",
-      buildDeterministicAdvisorResponse(sourceRecommendation, mapContext),
-      "deterministic source advisor | local model offline",
-    );
-    els.requestStatus.textContent = "Local model offline; deterministic advisor response shown";
-    els.promptInput.value = "";
-    els.submitBtn.disabled = false;
-    return;
-  }
+  const assistantMessage = appendMessage(
+    "assistant",
+    "",
+    provider === "auto"
+      ? `provider: Auto | Claude: ${cloudModel || "default"} | Local: ${localModel || "auto-detect"} | queued`
+      : provider === "claude"
+        ? `provider: Claude | model: ${cloudModel || "default"} | queued`
+        : `provider: local Ollama | model: ${localModel || "auto-detect"} | queued`,
+  );
 
   try {
-    const assistantMessage = appendMessage(
-      "assistant",
-      "",
-      model ? `model: ${model} | streaming` : "streaming",
-    );
-    activeAssistantMessage = assistantMessage;
-    setMessagePending(assistantMessage);
-    const response = await fetch("/api/prompt/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: finalPrompt,
-        system: system || null,
-        model: model || null,
-        llm_provider: provider,
-        cloud_model: provider === "claude" ? model : null,
-        cloud_api_key: provider === "claude" ? state.claudeApiKey || null : null,
-        agent_profile: agentProfile,
-        map_context: mapContext,
-        source_context: sourceContext,
-      }),
+    const result = await streamAssistantProvider({
+      assistantMessage,
+      provider,
+      localModel,
+      cloudModel,
+      finalPrompt,
+      system,
+      agentProfile,
+      mapContext,
+      sourceContext,
     });
 
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.detail || `${response.status} ${response.statusText}`);
+    if (result) {
+      els.requestStatus.textContent = result.provider === "claude"
+        ? `Completed with Claude ${result.model}`
+        : `Completed with local Ollama ${result.model}`;
+      return;
     }
-
-    let streamedText = "";
-    let resolvedModel = model || "default model";
-
-    els.requestStatus.textContent = "Streaming response...";
-
-    await readEventStream(response, (eventData) => {
-      if (eventData.type === "start") {
-        resolvedModel = eventData.model || resolvedModel;
-        ensureMessageMeta(assistantMessage, `model: ${resolvedModel} | streaming`);
-        return;
-      }
-      if (eventData.type === "token") {
-        streamedText += eventData.text || "";
-        const shouldFollowStream = isChatPinnedToBottom();
-        setMessageBody(assistantMessage, streamedText);
-        maybeScrollChatToBottom(shouldFollowStream);
-        return;
-      }
-      if (eventData.type === "status") {
-        els.requestStatus.textContent = eventData.detail || "Streaming response...";
-        return;
-      }
-      if (eventData.type === "error") {
-        throw new Error(eventData.detail || "Streaming request failed.");
-      }
-      if (eventData.type === "done") {
-        ensureMessageMeta(assistantMessage, `model: ${eventData.model || resolvedModel}`);
-      }
-    });
-
-    if (!streamedText.trim()) {
-      throw new Error(provider === "claude"
-        ? "Claude returned an empty response."
-        : "The local model returned an empty streamed response.");
-    }
-
-    els.requestStatus.textContent = `Completed with ${resolvedModel}`;
-    els.promptInput.value = "";
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (provider === "ollama") {
-      state.localModelAvailable = false;
-      state.localModelDetail = message;
-      applyProviderVisibility();
-    } else {
-      els.providerStatus.textContent = `Claude request failed: ${message}`;
-    }
-    const fallbackMeta = provider === "claude"
-      ? "deterministic fallback | Claude request failed"
-      : "deterministic fallback | local model unavailable";
-    if (activeAssistantMessage) {
-      setMessageBody(activeAssistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
-      ensureMessageMeta(activeAssistantMessage, fallbackMeta);
-    } else {
-      appendMessage(
-        "assistant",
-        buildDeterministicAdvisorResponse(sourceRecommendation, mapContext),
-        fallbackMeta,
-      );
-    }
-    els.requestStatus.textContent = provider === "claude"
-      ? `Claude request failed; deterministic advisor response shown (${message})`
-      : `Local model unavailable; deterministic advisor response shown (${message})`;
+    const message = getErrorMessage(error);
+    console.warn("Prompt request failed; deterministic planner response shown.", message);
+    state.localModelAvailable = false;
+    state.localModelDetail = message;
+    applyProviderVisibility();
+    setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
+    ensureMessageMeta(assistantMessage, "deterministic planner response");
+    els.requestStatus.textContent = "Deterministic planner response shown.";
   } finally {
     els.submitBtn.disabled = false;
   }
@@ -2644,6 +3418,8 @@ async function resolveImageryProvider() {
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
       label: IMAGERY_FALLBACKS.esri.label,
+      shortLabel: "Esri imagery",
+      usingIon: false,
     };
   }
 
@@ -2651,15 +3427,29 @@ async function resolveImageryProvider() {
     return {
       provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.osm),
       label: IMAGERY_FALLBACKS.osm.label,
+      shortLabel: "OSM basemap",
+      usingIon: false,
     };
   }
 
-  if (!state.config.cesium_ion_token) {
-    state.imageryMode = "esri";
-    els.imagerySelect.value = "esri";
+  if (state.imageryMode === "usgs-imagery") {
     return {
-      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
-      label: IMAGERY_FALLBACKS.esri.label,
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS["usgs-imagery"]),
+      label: IMAGERY_FALLBACKS["usgs-imagery"].label,
+      shortLabel: "USGS imagery",
+      usingIon: false,
+    };
+  }
+
+  if (!hasCesiumIonToken()) {
+    state.imageryMode = "usgs-imagery";
+    els.imagerySelect.value = "usgs-imagery";
+    return {
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS["usgs-imagery"]),
+      label: IMAGERY_FALLBACKS["usgs-imagery"].label,
+      shortLabel: "USGS imagery",
+      usingIon: false,
+      fallbackReason: "Cesium ion token is not configured for World Imagery.",
     };
   }
 
@@ -2669,33 +3459,46 @@ async function resolveImageryProvider() {
         style: Cesium.IonWorldImageryStyle.AERIAL,
       }),
       label: "Cesium World Imagery",
+      shortLabel: "Cesium imagery",
+      usingIon: true,
     };
   } catch (error) {
-    console.warn("Cesium imagery failed; using Esri fallback.", error);
-    state.imageryMode = "esri";
-    els.imagerySelect.value = "esri";
+    console.warn("Cesium imagery failed; using USGS imagery fallback.", error);
+    state.imageryMode = "usgs-imagery";
+    els.imagerySelect.value = "usgs-imagery";
     return {
-      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS.esri),
-      label: IMAGERY_FALLBACKS.esri.label,
+      provider: makeUrlTemplateImageryProvider(IMAGERY_FALLBACKS["usgs-imagery"]),
+      label: IMAGERY_FALLBACKS["usgs-imagery"].label,
+      shortLabel: "USGS imagery",
+      usingIon: false,
+      fallbackReason: "Cesium World Imagery request failed.",
     };
   }
 }
 
 async function resolveTerrainProvider() {
-  if (state.terrainMode === "ellipsoid" || !state.config.cesium_ion_token) {
-    if (state.terrainMode !== "ellipsoid" && !state.config.cesium_ion_token) {
+  if (state.terrainMode === "ellipsoid" || !hasCesiumIonToken()) {
+    const fallbackReason = state.terrainMode !== "ellipsoid" && !hasCesiumIonToken()
+      ? "Cesium ion token is not configured for World Terrain."
+      : "";
+    if (state.terrainMode !== "ellipsoid" && !hasCesiumIonToken()) {
       state.terrainMode = "ellipsoid";
       els.terrainSelect.value = "ellipsoid";
     }
     return {
       provider: new Cesium.EllipsoidTerrainProvider(),
       label: "Terrain: Ellipsoid only",
+      shortLabel: "ellipsoid terrain",
+      usingIon: false,
+      fallbackReason,
     };
   }
   try {
     return {
       provider: await Cesium.createWorldTerrainAsync(),
       label: "Terrain: Cesium World Terrain",
+      shortLabel: "Cesium terrain",
+      usingIon: true,
     };
   } catch (error) {
     console.warn("Cesium terrain failed; using ellipsoid fallback.", error);
@@ -2704,6 +3507,9 @@ async function resolveTerrainProvider() {
     return {
       provider: new Cesium.EllipsoidTerrainProvider(),
       label: "Terrain: Ellipsoid fallback",
+      shortLabel: "ellipsoid terrain",
+      usingIon: false,
+      fallbackReason: "Cesium World Terrain request failed.",
     };
   }
 }
@@ -2876,7 +3682,7 @@ function clearSelectedArea() {
 function setAreaSelectMode(active) {
   if (active && !state.sourceConfirmed) {
     els.packageStatus.textContent = "Confirm the recommended source list before drawing AO coverage.";
-    setWorkflowStage(2);
+    setWorkflowStage(1);
     return;
   }
   state.areaSelectActive = active;
@@ -2890,10 +3696,11 @@ function setCameraDragEnabled(enabled) {
     return;
   }
   const controller = state.viewer.scene.screenSpaceCameraController;
-  controller.enableRotate = enabled;
   controller.enableTranslate = enabled;
-  controller.enableTilt = enabled;
-  controller.enableLook = enabled;
+  controller.enableZoom = true;
+  controller.enableRotate = enabled && state.mapMode === "3d";
+  controller.enableTilt = enabled && state.mapMode === "3d";
+  controller.enableLook = enabled && state.mapMode === "3d";
 }
 
 function finishAreaResize(position) {
@@ -3006,6 +3813,13 @@ function wireMapInteraction() {
     finishAreaDrawing(movement.position);
   }, Cesium.ScreenSpaceEventType.LEFT_UP);
 
+  handler.setInputAction(() => {
+    if (state.areaDrawing || state.areaResizeHandle) {
+      return;
+    }
+    setMapMode("3d");
+  }, Cesium.ScreenSpaceEventType.MIDDLE_DOWN);
+
   state.viewer.camera.changed.addEventListener(updateCameraText);
   updateCameraText();
 }
@@ -3022,12 +3836,13 @@ async function buildViewer() {
     state.areaHandleEntities = [];
     state.overlayDataSource = null;
     state.overlayFileName = "";
+    state.overlayFeatureCount = 0;
     if (state.mapFocusSource === "kml-kmz-import") {
       clearMapLocationFocus();
     }
   }
 
-  if (state.config.cesium_ion_token) {
+  if (hasCesiumIonToken()) {
     Cesium.Ion.defaultAccessToken = state.config.cesium_ion_token;
   }
 
@@ -3039,6 +3854,7 @@ async function buildViewer() {
     homeButton: false,
     infoBox: false,
     navigationHelpButton: false,
+    sceneMode: Cesium.SceneMode.SCENE2D,
     sceneModePicker: false,
     selectionIndicator: false,
     terrainProvider: new Cesium.EllipsoidTerrainProvider(),
@@ -3046,16 +3862,25 @@ async function buildViewer() {
   });
   window.__LLM_DEV_VIEWER = state.viewer;
 
+  const requestedModes = {
+    imageryMode: state.imageryMode,
+    terrainMode: state.terrainMode,
+  };
   const imagery = await resolveImageryProvider();
   state.viewer.imageryLayers.removeAll();
   state.viewer.imageryLayers.addImageryProvider(imagery.provider);
 
   const terrain = await resolveTerrainProvider();
   state.viewer.terrainProvider = terrain.provider;
+  updateMapStreamChip(imagery, terrain, requestedModes);
 
   state.viewer.scene.globe.depthTestAgainstTerrain = false;
-  state.viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+  applyMapModeCameraControls();
   state.viewer.camera.percentageChanged = 0.01;
+  state.viewer.scene.morphComplete.addEventListener(() => {
+    applyMapModeCameraControls();
+    updateCameraText();
+  });
 
   const target = state.lastCamera || {
     lat: state.config.default_lat,
@@ -3074,6 +3899,7 @@ async function buildViewer() {
   state.viewer.resize();
   state.viewer.scene.requestRender();
   wireMapInteraction();
+  setMapMode(state.mapMode, { animate: false });
   if (state.selectedArea) {
     setAreaEntityBounds(state.selectedArea);
   }
@@ -3098,6 +3924,276 @@ function resetView() {
   els.requestStatus.textContent = "Map reset. Search or import the mission location before source confirmation.";
 }
 
+function kmlDescendants(root, localName) {
+  return Array.from(root.getElementsByTagName("*")).filter((node) => node.localName === localName);
+}
+
+function firstKmlDescendant(root, localName) {
+  return kmlDescendants(root, localName)[0] || null;
+}
+
+function readKmlText(root, localName) {
+  const node = firstKmlDescendant(root, localName);
+  return node?.textContent?.trim() || "";
+}
+
+function parseKmlCoordinateText(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .map((tuple) => tuple.split(",").map((value) => Number.parseFloat(value)))
+    .filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat))
+    .map(([lon, lat, height]) => (
+      Number.isFinite(height) ? [lon, lat, height] : [lon, lat]
+    ));
+}
+
+function parseKmlGxCoordinateText(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .map((value) => Number.parseFloat(value))
+    .filter((value) => Number.isFinite(value));
+}
+
+function closeLinearRing(points) {
+  if (points.length < 3) {
+    return points;
+  }
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first[0] === last[0] && first[1] === last[1]) {
+    return points;
+  }
+  return [...points, [...first]];
+}
+
+function parseKmlPointGeometry(node) {
+  const coordinates = parseKmlCoordinateText(readKmlText(node, "coordinates"))[0];
+  return coordinates ? { type: "Point", coordinates } : null;
+}
+
+function parseKmlLineGeometry(node) {
+  const coordinates = parseKmlCoordinateText(readKmlText(node, "coordinates"));
+  return coordinates.length >= 2 ? { type: "LineString", coordinates } : null;
+}
+
+function parseKmlTrackGeometry(node) {
+  const coordinates = kmlDescendants(node, "coord")
+    .map((coordNode) => parseKmlGxCoordinateText(coordNode.textContent))
+    .filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat))
+    .map(([lon, lat, height]) => (
+      Number.isFinite(height) ? [lon, lat, height] : [lon, lat]
+    ));
+  return coordinates.length >= 2 ? { type: "LineString", coordinates } : null;
+}
+
+function parseKmlPolygonGeometry(node) {
+  const outerBoundary = firstKmlDescendant(node, "outerBoundaryIs") || node;
+  const outerRing = firstKmlDescendant(outerBoundary, "LinearRing");
+  const outerCoordinates = closeLinearRing(parseKmlCoordinateText(readKmlText(outerRing || outerBoundary, "coordinates")));
+  if (outerCoordinates.length < 4) {
+    return null;
+  }
+
+  const innerCoordinates = kmlDescendants(node, "innerBoundaryIs")
+    .map((innerBoundary) => {
+      const innerRing = firstKmlDescendant(innerBoundary, "LinearRing");
+      return closeLinearRing(parseKmlCoordinateText(readKmlText(innerRing || innerBoundary, "coordinates")));
+    })
+    .filter((ring) => ring.length >= 4);
+
+  return { type: "Polygon", coordinates: [outerCoordinates, ...innerCoordinates] };
+}
+
+function extractKmlGeometries(root) {
+  const geometries = [];
+  for (const node of kmlDescendants(root, "Point")) {
+    const geometry = parseKmlPointGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  for (const node of kmlDescendants(root, "LineString")) {
+    const geometry = parseKmlLineGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  for (const node of kmlDescendants(root, "Track")) {
+    const geometry = parseKmlTrackGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  for (const node of kmlDescendants(root, "Polygon")) {
+    const geometry = parseKmlPolygonGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  return geometries;
+}
+
+function parseKmlToGeoJson(kmlText, sourceName) {
+  const xml = new DOMParser().parseFromString(kmlText, "application/xml");
+  if (xml.querySelector("parsererror")) {
+    throw new Error(`${sourceName} is not valid KML XML.`);
+  }
+
+  const placemarks = kmlDescendants(xml, "Placemark");
+  const features = [];
+  const roots = placemarks.length ? placemarks : [xml.documentElement];
+
+  roots.forEach((root, index) => {
+    const name = readKmlText(root, "name") || `${sourceName} feature ${index + 1}`;
+    const description = readKmlText(root, "description");
+    for (const geometry of extractKmlGeometries(root)) {
+      features.push({
+        type: "Feature",
+        properties: {
+          name,
+          description,
+          source: sourceName,
+        },
+        geometry,
+      });
+    }
+  });
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
+
+function sortKmlArchiveEntries(a, b) {
+  const aName = a.name.toLowerCase();
+  const bName = b.name.toLowerCase();
+  const aDepth = aName.split("/").length;
+  const bDepth = bName.split("/").length;
+  if (aDepth !== bDepth) {
+    return aDepth - bDepth;
+  }
+  if (aName.endsWith("doc.kml") && !bName.endsWith("doc.kml")) {
+    return -1;
+  }
+  if (bName.endsWith("doc.kml") && !aName.endsWith("doc.kml")) {
+    return 1;
+  }
+  return aName.localeCompare(bName);
+}
+
+async function readOverlayFileText(file) {
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith(".kml")) {
+    return [{ name: file.name, text: await file.text() }];
+  }
+
+  if (!lowerName.endsWith(".kmz")) {
+    throw new Error(`Unsupported overlay format: ${file.name}`);
+  }
+  if (!window.JSZip) {
+    throw new Error("KMZ import requires JSZip to finish loading. Try again after the page is ready.");
+  }
+
+  const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+  const entries = Object.values(zip.files)
+    .filter((entry) => !entry.dir && entry.name.toLowerCase().endsWith(".kml"))
+    .sort(sortKmlArchiveEntries);
+  if (!entries.length) {
+    throw new Error(`No KML document found inside ${file.name}.`);
+  }
+
+  const texts = [];
+  for (const entry of entries) {
+    texts.push({
+      name: entry.name,
+      text: await entry.async("text"),
+    });
+  }
+  return texts;
+}
+
+async function loadParsedOverlayDataSource(file) {
+  const entries = await readOverlayFileText(file);
+  const features = [];
+  for (const entry of entries) {
+    const collection = parseKmlToGeoJson(entry.text, entry.name);
+    for (const feature of collection.features) {
+      features.push({
+        ...feature,
+        properties: {
+          ...(feature.properties || {}),
+          package: file.name,
+        },
+      });
+    }
+  }
+  if (!features.length) {
+    throw new Error(`No supported point, line, track, or polygon features were found in ${file.name}.`);
+  }
+
+  const dataSource = await Cesium.GeoJsonDataSource.load({
+    type: "FeatureCollection",
+    features,
+  }, {
+    clampToGround: true,
+    markerColor: cesiumCssColor("--color-accent-gold"),
+    stroke: cesiumCssColor("--color-accent-gold"),
+    fill: cesiumCssColor("--color-accent-gold").withAlpha(0.2),
+    strokeWidth: 3,
+  });
+  dataSource.name = file.name;
+  styleOverlayDataSource(dataSource);
+  state.overlayFeatureCount = features.length;
+  return dataSource;
+}
+
+async function loadNativeOverlayDataSource(file) {
+  const dataSource = await Cesium.KmlDataSource.load(file, {
+    camera: state.viewer.scene.camera,
+    canvas: state.viewer.scene.canvas,
+    clampToGround: true,
+    sourceUri: file.name,
+  });
+  state.overlayFeatureCount = dataSource.entities.values.length;
+  return dataSource;
+}
+
+function styleOverlayDataSource(dataSource) {
+  const gold = cesiumCssColor("--color-accent-gold");
+  const background = cesiumCssColor("--color-bg-primary");
+  const fill = gold.withAlpha(0.22);
+
+  for (const entity of dataSource.entities.values) {
+    if (entity.position) {
+      entity.billboard = undefined;
+      entity.point = new Cesium.PointGraphics({
+        pixelSize: 11,
+        color: gold,
+        outlineColor: background,
+        outlineWidth: 2,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      });
+    }
+    if (entity.polyline) {
+      entity.polyline.width = 3;
+      entity.polyline.material = gold;
+      entity.polyline.depthFailMaterial = gold.withAlpha(0.55);
+      entity.polyline.clampToGround = true;
+    }
+    if (entity.polygon) {
+      entity.polygon.material = fill;
+      entity.polygon.outline = true;
+      entity.polygon.outlineColor = gold;
+      entity.polygon.outlineWidth = 2;
+      entity.polygon.perPositionHeight = false;
+    }
+  }
+}
+
 function isSupportedOverlayFile(file) {
   return /\.(kml|kmz)$/i.test(file.name);
 }
@@ -3106,6 +4202,7 @@ async function removeCurrentOverlay() {
   if (!state.viewer || !state.overlayDataSource) {
     state.overlayDataSource = null;
     state.overlayFileName = "";
+    state.overlayFeatureCount = 0;
     if (state.mapFocusSource === "kml-kmz-import") {
       clearMapLocationFocus();
     }
@@ -3115,6 +4212,7 @@ async function removeCurrentOverlay() {
   await state.viewer.dataSources.remove(state.overlayDataSource, true);
   state.overlayDataSource = null;
   state.overlayFileName = "";
+  state.overlayFeatureCount = 0;
   if (state.mapFocusSource === "kml-kmz-import") {
     clearMapLocationFocus();
   }
@@ -3138,12 +4236,13 @@ async function importMapOverlay(file) {
 
   try {
     await removeCurrentOverlay();
-    const dataSource = await Cesium.KmlDataSource.load(file, {
-      camera: state.viewer.scene.camera,
-      canvas: state.viewer.scene.canvas,
-      clampToGround: true,
-      sourceUri: file.name,
-    });
+    let dataSource;
+    try {
+      dataSource = await loadParsedOverlayDataSource(file);
+    } catch (parseError) {
+      console.warn("Parsed KML/KMZ rendering failed; trying Cesium native loader.", parseError);
+      dataSource = await loadNativeOverlayDataSource(file);
+    }
     state.overlayDataSource = await state.viewer.dataSources.add(dataSource);
     state.overlayFileName = file.name;
     markMapLocationFocused(file.name, "kml-kmz-import");
@@ -3151,7 +4250,7 @@ async function importMapOverlay(file) {
     if (state.overlayDataSource.entities.values.length) {
       await state.viewer.flyTo(state.overlayDataSource, { duration: 1.1 });
       updateCameraText();
-      els.requestStatus.textContent = `Overlay loaded: ${file.name}`;
+      els.requestStatus.textContent = `Overlay loaded: ${file.name} (${state.overlayFeatureCount} features)`;
     } else {
       els.requestStatus.textContent = `Overlay loaded with no visible features: ${file.name}`;
     }
@@ -3291,16 +4390,18 @@ function onPromptInputKeyDown(event) {
 }
 
 async function streamSelectedSources() {
-  if (state.selectedSourceIds.has("esri_world_imagery")) {
-    state.imageryMode = "esri";
-  } else if (state.selectedSourceIds.has("cesium_world_imagery") && state.config?.cesium_ion_token) {
+  if (state.selectedSourceIds.has("cesium_world_imagery") && hasCesiumIonToken()) {
     state.imageryMode = "ion-satellite";
+  } else if (state.selectedSourceIds.has("usgs_imagery_only")) {
+    state.imageryMode = "usgs-imagery";
+  } else if (state.selectedSourceIds.has("esri_world_imagery")) {
+    state.imageryMode = "esri";
   } else if (state.selectedSourceIds.has("osm_basemap")) {
     state.imageryMode = "osm";
   }
 
   state.terrainMode = state.selectedSourceIds.has("cesium_world_terrain")
-    && state.config?.cesium_ion_token
+    && hasCesiumIonToken()
     ? "cesium-world"
     : "ellipsoid";
 
@@ -3322,17 +4423,31 @@ async function init() {
     els.clearChatBtn.addEventListener("click", clearChat);
     els.resetViewBtn.addEventListener("click", resetView);
     els.mapResetViewBtn.addEventListener("click", resetView);
+    els.mapModeToggleBtn.addEventListener("click", toggleMapMode);
     els.importOverlayBtn.addEventListener("click", requestOverlayFile);
     els.overlayFileInput.addEventListener("change", onOverlayFileSelected);
+    els.atakAgentBtn.addEventListener("click", activateAtakLocalAgent);
+    els.atakMirrorRefreshBtn.addEventListener("click", () => {
+      refreshAtakMirror().catch((error) => {
+        els.atakMirrorStatus.textContent = getErrorMessage(error);
+      });
+    });
     els.locationSearchForm.addEventListener("submit", onLocationSearchSubmit);
     els.locationSearchInput.addEventListener("input", onLocationSearchInput);
     els.locationSearchInput.addEventListener("keydown", onLocationSearchKeyDown);
     els.modelProviderBtn.addEventListener("click", () => {
-      setModelProviderMenuOpen(els.modelProviderMenu.classList.contains("hidden"));
+      const shouldOpen = els.modelProviderMenu.classList.contains("hidden");
+      setModelProviderMenuOpen(shouldOpen);
+      if (shouldOpen && (state.llmProvider === "ollama" || state.llmProvider === "auto")) {
+        void loadModels();
+      }
     });
     els.providerSelect.addEventListener("change", (event) => {
       state.llmProvider = event.target.value;
       applyProviderVisibility();
+      if (state.llmProvider === "ollama" || state.llmProvider === "auto") {
+        void loadModels();
+      }
     });
     els.topModelSelect.addEventListener("change", () => {
       els.modelSelect.value = els.topModelSelect.value;
@@ -3365,6 +4480,12 @@ async function init() {
     els.clearAreaBtn.addEventListener("click", clearSelectedArea);
     els.streamSelectedBtn.addEventListener("click", streamSelectedSources);
     els.buildPackageBtn.addEventListener("click", buildSourcePackage);
+    els.downloadToJetsonBtn.addEventListener("click", downloadPackageToJetson);
+    els.refreshPackageStatusBtn.addEventListener("click", () => {
+      refreshPackageStatus().catch((error) => {
+        els.packageStatus.textContent = getErrorMessage(error);
+      });
+    });
     els.imagerySelect.addEventListener("change", async (event) => {
       state.imageryMode = event.target.value;
       await buildViewer();
@@ -3389,7 +4510,9 @@ async function init() {
 
   await loadRuntimeConfig();
   await loadModels();
+  await loadAtakAgentStatus();
   await loadDataSources();
+  await loadJetsonStorage();
   await buildViewer();
 }
 

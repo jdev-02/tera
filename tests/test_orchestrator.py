@@ -20,14 +20,17 @@ from agent.orchestrator import (
     _profile_for,
     _route_hash,
     _run_security_pipeline,
+    _sign_response,
     approve_plan,
     plan,
+    verify_plan_response,
 )
 from agent.schemas import (
     Coord,
     OperatorSignature,
     PlanApprovalRequest,
     PlanRequest,
+    PlanResponse,
     Signature,
     Waypoint,
 )
@@ -551,3 +554,174 @@ def test_approve_plan_returns_operator_commit(monkeypatch: pytest.MonkeyPatch) -
     assert response.route_hash == expected_hash
     assert response.operator_signature.approves_route_hash == expected_hash
     assert response.operator_signature.key_id == "OPERATOR-VEGA-001"
+
+
+def _signed_plan_response() -> PlanResponse:
+    route = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-122.3937, 37.7955], [-122.415, 37.803]],
+        },
+        "properties": {"profile": "foot_covered"},
+    }
+    waypoints = [{"lat": 37.803, "lon": -122.415, "label": "HLZ open field"}]
+    rationale = "Routed to HLZ open field, distance 2.1 kilometers, ETA 30 minutes."
+    signature = _sign_response(
+        request_id="verify-test",
+        feature=route,
+        waypoints=waypoints,
+        rationale=rationale,
+        mission_type="tactical_route",
+    )
+    assert signature is not None
+    assert signature.payload_hash
+    assert signature.payload_json
+    return PlanResponse(
+        request_id="verify-test",
+        route=route,
+        waypoints=[Waypoint(**w) for w in waypoints],
+        rationale=rationale,
+        cost_breakdown={"distance_m": 2100.0, "time_s": 1800.0},
+        trust={"trust_status": "trusted"},
+        signature=signature,
+    )
+
+
+def test_verify_plan_response_accepts_signed_response() -> None:
+    response = _signed_plan_response()
+
+    result = verify_plan_response(response)
+
+    assert result.valid is True
+    assert result.route_hash
+    assert result.reason == "Signature valid - route authentic"
+
+
+def test_verify_plan_response_rejects_tampered_route() -> None:
+    response = _signed_plan_response()
+    tampered = response.model_copy(deep=True)
+    tampered.route["geometry"]["coordinates"][-1][0] = -122.5
+
+    result = verify_plan_response(tampered)
+
+    assert result.valid is False
+    assert "route_hash does not match" in result.reason
+
+
+def test_verify_plan_response_rejects_missing_signature() -> None:
+    response = _signed_plan_response().model_copy(update={"signature": None})
+
+    result = verify_plan_response(response)
+
+    assert result.valid is False
+    assert result.reason == "Route signature missing - REJECTED"
+
+
+# ---------------------------------------------------------------------------
+# Trust list gating (PRD §8.2 step 3, line 293-294)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_plan_response_rejects_untrusted_key_id(monkeypatch) -> None:
+    """Unknown key_id must fail the render gate even with an otherwise-valid sig.
+
+    PRD line 294: "Trust list -- static list of allowed key IDs for the demo".
+    We simulate PRD line 325's attacker: the adversary has a real signature
+    and a real payload, but under a key_id the Jetson has never seen. The
+    render gate must reject them BEFORE touching liboqs so a fresh keypair
+    isn't silently forged in place of the missing one.
+    """
+    response = _signed_plan_response()
+    signer_key_id = response.signature.key_id  # type: ignore[union-attr]
+
+    # Point load_trust_list at a trust list that deliberately does NOT contain
+    # the signer's key_id. Intercepting at the import site used by
+    # verify_plan_response (`from crypto.cot_signer import load_trust_list`)
+    # catches the rebind without touching the real trust_list.json on disk.
+    monkeypatch.setattr(
+        "crypto.cot_signer.load_trust_list",
+        lambda path="crypto/keys/trust_list.json": {"SOME-OTHER-KEY": b"not-the-device-key"},
+    )
+
+    result = verify_plan_response(response)
+
+    assert result.valid is False
+    assert result.reason == "Untrusted key_id - REJECTED"
+    assert result.key_id == signer_key_id
+
+
+def test_verify_plan_response_accepts_trusted_key_id(monkeypatch) -> None:
+    """Happy path: trust list contains the device key and the sig verifies.
+
+    Asserts that load_trust_list is actually consulted (not bypassed) and
+    that the returned verification result is valid + bound to the route.
+    """
+    import crypto.cot_signer as cs
+
+    real_loader = cs.load_trust_list
+    call_count = {"n": 0}
+
+    def spy_loader(path: str = "crypto/keys/trust_list.json") -> dict[str, bytes]:
+        call_count["n"] += 1
+        return real_loader(path)
+
+    monkeypatch.setattr("crypto.cot_signer.load_trust_list", spy_loader)
+
+    response = _signed_plan_response()
+    result = verify_plan_response(response)
+
+    assert call_count["n"] >= 1, "verify_plan_response must consult the trust list"
+    assert result.valid is True, result.reason
+    assert result.reason == "Signature valid - route authentic"
+
+
+def test_trust_list_bootstrapped_on_startup(monkeypatch, tmp_path) -> None:
+    """Fresh Jetson boot: device pub key must land in the trust list.
+
+    Covers the PRD line 293-294 first-boot gap: without this bootstrap, the
+    Jetson would sign a valid route whose own key_id is not in the trust
+    list, /plan/verify would reject it, and the hero demo would die on the
+    first request. Emulate "fresh Jetson" by redirecting both the key dir
+    and the trust list file to a tmp path, then run the FastAPI lifespan.
+    """
+    from fastapi.testclient import TestClient
+
+    key_dir = tmp_path / "keys"
+    trust_path = tmp_path / "trust_list.json"
+    monkeypatch.setenv("WAYFINDER_KEY_DIR", str(key_dir))
+
+    # Rebind both the export destination and the loader so the lifespan
+    # writes to tmp and our post-assert reads from the same place.
+    from crypto import cot_signer as cs
+
+    real_export = cs.export_public_key_to_trust_list
+    real_load = cs.load_trust_list
+
+    def export_to_tmp(signer_instance=None, path: str = "crypto/keys/trust_list.json") -> None:
+        real_export(signer_instance=signer_instance, path=str(trust_path))
+
+    def load_from_tmp(path: str = "crypto/keys/trust_list.json") -> dict[str, bytes]:
+        return real_load(str(trust_path))
+
+    monkeypatch.setattr("crypto.cot_signer.export_public_key_to_trust_list", export_to_tmp)
+    monkeypatch.setattr("crypto.cot_signer.load_trust_list", load_from_tmp)
+
+    # Reset the per-process bootstrap memo so the lifespan actually runs
+    # even if a prior test already ran the startup hook in this session.
+    from agent import orchestrator as orch
+
+    orch._BOOTSTRAPPED_KEY_IDS.clear()
+
+    from agent.app import app
+
+    with TestClient(app) as _client:  # triggers lifespan startup
+        pass
+
+    assert trust_path.exists(), "startup bootstrap must create the trust list"
+    loaded = load_from_tmp()
+    assert loaded, "trust list must not be empty after bootstrap"
+    from crypto.ml_dsa_signer import create_signer
+
+    device_key_id = create_signer().key_id
+    assert device_key_id in loaded, f"device key {device_key_id!r} must be auto-trusted on startup"
