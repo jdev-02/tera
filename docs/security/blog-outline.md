@@ -37,18 +37,34 @@ unauthenticated-CoT property of TAK; ATAK plugin chat threads.
 
 - Show the actual flow: voice → Whisper-tiny → Gemma → structured RouteQuery
   JSON → Valhalla → signed PlanResponse → `/plan/verify` → ATAK.
-- Walk through `agent/orchestrator.py:334` (`verify_plan_response`): payload
-  binding (uid, route_hash, rationale, lat/lon, mission_type), then crypto
-  verify, then fail-closed.
+- Walk through `agent/orchestrator.py:365` (`verify_plan_response`): payload
+  binding (uid, route_hash, rationale, lat/lon, mission_type), then trust-list
+  lookup (`agent/orchestrator.py:420–438`), then crypto verify with the
+  trusted public key passed in explicitly (`agent/orchestrator.py:459`), then
+  fail-closed. Three independent reject reasons surface to the operator UI:
+  `payload_hash mismatch`, `Untrusted key_id - REJECTED`, and
+  `Signature invalid - route REJECTED` — they map to three different
+  attacker capabilities and are testable in isolation.
+- Cover the trust-list bootstrap as a deployment-tooling story, not a
+  crypto novelty. FastAPI lifespan auto-registers the device's own public
+  key (`agent/app.py:42` → `:58`) so `make jetson-compose-refresh` works
+  zero-friction; the orchestrator also bootstraps on first sign as
+  belt-and-suspenders (`agent/orchestrator.py:267`). Be honest in the post:
+  the trust model is "device self-attests" — competent for a single-device
+  hackathon demo, deliberately not a chain back to an external CA.
 - The deployment-context delta from "ML-DSA exists" to "ML-DSA gates the
   render path of an LLM-produced route on a Jetson at 7W idle in airplane
-  mode": this is the part worth writing up.
-- Include the tamper-reject test transcript
-  (`tests/test_orchestrator.py:601`) as the "show, don't tell".
+  mode, with a trust list bootstrapped at process start and consulted
+  before every render": this is the part worth writing up.
+- Include the tamper-reject and trust-list-reject test transcripts
+  (`tests/test_orchestrator.py:601`, `:626`) as "show, don't tell".
 
-**Cite:** `crypto/ml_dsa_signer.py`, `agent/orchestrator.py:184`
-(`_sign_response`), `agent/orchestrator.py:334` (`verify_plan_response`),
-`agent/app.py:115` (`/plan/verify`).
+**Cite:** `crypto/ml_dsa_signer.py`, `agent/orchestrator.py:217`
+(`_sign_response`), `agent/orchestrator.py:288` (`_bootstrap_device_trust`),
+`agent/orchestrator.py:365` (`verify_plan_response`),
+`agent/orchestrator.py:420–459` (trust-list wiring),
+`agent/app.py:42–60` (lifespan bootstrap),
+`agent/app.py:142` (`/plan/verify`).
 
 ### 3. The supply-chain layer: SHA-256 pinning is the floor, not the ceiling
 
@@ -83,9 +99,10 @@ PRD §8.4 lines 317–325.
 
 ### 5. What we'd ship differently in v2 (the credibility section)
 
-- Trust list: implement key_id → public-key lookup at the `/plan/verify`
-  layer (not just in `verify_cot`); document an enrollment ceremony for
-  multi-device.
+- Trust list: extend the now-wired flat-file trust list (#105) with an
+  external enrollment ceremony for multi-device fleets, a CRL distribution
+  channel, and key rotation. The single-device auto-bootstrap is fine for
+  the demo; it is not what production looks like.
 - Manifest: add a detached signature on `MANIFEST.yml` itself; move toward a
   SLSA Level 2 build with provenance attestations.
 - Hardware-rooted identity: TPM2 / NV-SE-backed device key on Jetson Orin
@@ -93,17 +110,33 @@ PRD §8.4 lines 317–325.
 - Egress firewall: today an opt-in shell script; v2 is a `tera-firewall.service`
   triggered by `TERA_PHASE=3` (PRD §8.4 line 321; tracked in #22).
 - The two-signature operator-approval path (ADR-003) is the more interesting
-  workflow than single-sig `/plan` — call out the asymmetry.
+  workflow than single-sig `/plan` — call out the asymmetry. Today
+  `_run_security_pipeline` hard-codes `operator_approved=True` in the MVP
+  path; v2 wires the approval wrapper into the default flow.
+- Manifest coverage: today the four committed Piper voice configs are
+  pinned but the Gemma weights and Piper `.onnx` files are still
+  `PLACEHOLDER_run_sha256sum_after_download`. v2 fills those in as part of
+  the release-engineering pass.
+- AST scanner: today the unsafe-`torch.load` scanner has an unreachable
+  fallback branch and misses aliased imports (`from torch import load`).
+  v2 either upgrades to Bandit `B614` or fixes the branch.
 
 ## Specific code & data the post would cite
 
 - `crypto/ml_dsa_signer.py:115` — the Dilithium3 signer.
 - `crypto/ml_dsa_signer.py:165` — the verify path with payload-hash fast
   path.
-- `agent/orchestrator.py:184` — sign on emit.
-- `agent/orchestrator.py:334` — verify on render.
-- `agent/orchestrator.py:292` — the payload→response binding (this is the
-  "you can't swap the geometry without breaking the sig" piece).
+- `agent/orchestrator.py:217` — sign on emit (`_sign_response`).
+- `agent/orchestrator.py:288` — `_bootstrap_device_trust` (single helper called
+  from both startup and first-sign paths).
+- `agent/orchestrator.py:365` — verify on render (`verify_plan_response`).
+- `agent/orchestrator.py:322` — the payload→response binding
+  (`_payload_matches_plan_response` — this is the "you can't swap the
+  geometry without breaking the sig" piece).
+- `agent/orchestrator.py:420–459` — trust-list lookup, untrusted-key reject,
+  explicit trusted-pub-key plumbing into `MLDSASigner.verify`.
+- `agent/app.py:42–60` — FastAPI lifespan that bootstraps the device's own
+  key into the trust list before the first request can land.
 - `models/MANIFEST.yml` — the actual pin file.
 - `security/model_integrity.py:43` — `_sha256_file` with CRLF normalization
   (Windows-CI lesson).
