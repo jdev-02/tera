@@ -22,11 +22,27 @@ final class TeraPlanClient {
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final int CONNECT_TIMEOUT_MS = 5000;
     private static final int READ_TIMEOUT_MS = 180000;
+    private static final String REJECTED_SIGNATURE = "Route signature invalid - REJECTED";
 
     private TeraPlanClient() {
     }
 
-    static void requestPlan(String endpoint, String prompt, Callback callback) {
+    static void checkJetson(String endpoint, Callback callback) {
+        EXECUTOR.execute(() -> {
+            if (endpoint == null || !endpoint.startsWith("http")) {
+                callback.onComplete(false, "Endpoint must start with http:// or https://");
+                return;
+            }
+
+            String healthError = checkHealth(endpoint.trim());
+            callback.onComplete(healthError == null, healthError == null
+                    ? "Jetson health check passed."
+                    : healthError);
+        });
+    }
+
+    static void requestPlan(String endpoint, String prompt, JSONObject mapContext,
+                            Callback callback) {
         EXECUTOR.execute(() -> {
             HttpURLConnection connection = null;
             try {
@@ -53,7 +69,7 @@ final class TeraPlanClient {
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setDoOutput(true);
 
-                String payload = buildPromptPayload(prompt.trim(), null);
+                String payload = buildPromptPayload(prompt.trim(), mapContext);
                 byte[] body = payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(body.length);
 
@@ -62,7 +78,16 @@ final class TeraPlanClient {
                 }
 
                 int code = connection.getResponseCode();
-                PromptResult result = parsePromptResult(code, readResponse(connection, code));
+                String responseBody = readResponse(connection, code);
+                if (code >= 200 && code < 300 && shouldVerifyPlanResponse(responseBody)) {
+                    VerifyResult verify = verifyPlanResponse(endpoint, responseBody);
+                    if (!verify.ok) {
+                        callback.onComplete(false, REJECTED_SIGNATURE + "\n" + verify.message);
+                        return;
+                    }
+                }
+
+                PromptResult result = parsePromptResult(code, responseBody);
                 callback.onComplete(result.ok, result.message);
             } catch (SocketTimeoutException e) {
                 callback.onComplete(false, "Jetson timed out. Check WiFi, port 8080, and whether Gemma is still generating.");
@@ -93,6 +118,69 @@ final class TeraPlanClient {
             result.append(line).append('\n');
         }
         return result.toString();
+    }
+
+    private static VerifyResult verifyPlanResponse(String planEndpoint, String planResponseJson) {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(verifyEndpointFor(planEndpoint));
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+
+            byte[] body = planResponseJson.getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+
+            int code = connection.getResponseCode();
+            String verifyBody = readResponse(connection, code);
+            boolean valid = code >= 200 && code < 300 && verifyBodyIsValid(verifyBody);
+            return new VerifyResult(valid, "HTTP " + code + "\n" + truncate(verifyBody));
+        } catch (Exception e) {
+            return new VerifyResult(false, friendlyException(e));
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static boolean shouldVerifyPlanResponse(String body) {
+        try {
+            JSONObject json = new JSONObject(body);
+            return json.has("route") || json.has("signature");
+        } catch (JSONException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean verifyBodyIsValid(String body) {
+        try {
+            return new JSONObject(body).optBoolean("valid", false);
+        } catch (JSONException ignored) {
+            return false;
+        }
+    }
+
+    private static String verifyEndpointFor(String endpoint) {
+        int planPath = endpoint.indexOf("/plan");
+        if (planPath >= 0) {
+            return endpoint.substring(0, planPath) + "/plan/verify";
+        }
+        int promptPath = endpoint.indexOf("/api/prompt");
+        if (promptPath >= 0) {
+            return endpoint.substring(0, promptPath) + "/plan/verify";
+        }
+        int lastSlash = endpoint.indexOf("/", endpoint.indexOf("://") + 3);
+        if (lastSlash >= 0) {
+            return endpoint.substring(0, lastSlash) + "/plan/verify";
+        }
+        return endpoint + "/plan/verify";
     }
 
     private static String checkHealth(String endpoint) {
@@ -152,6 +240,13 @@ final class TeraPlanClient {
             if (!response.trim().isEmpty()) {
                 return new PromptResult(code >= 200 && code < 300, response.trim());
             }
+            String rationale = json.optString("rationale", "");
+            if (code >= 200 && code < 300 && !rationale.trim().isEmpty()) {
+                return new PromptResult(true, "Signature verified\n" + rationale.trim());
+            }
+            if (code >= 200 && code < 300 && json.has("route")) {
+                return new PromptResult(true, "Signature verified\n" + truncate(body));
+            }
             if (code >= 200 && code < 300) {
                 return new PromptResult(false,
                         "Jetson returned HTTP " + code + " but no response field.");
@@ -175,6 +270,16 @@ final class TeraPlanClient {
             return value;
         }
         return value.substring(0, 1200) + "\n...";
+    }
+
+    private static final class VerifyResult {
+        final boolean ok;
+        final String message;
+
+        VerifyResult(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
+        }
     }
 
     private static final class PromptResult {
