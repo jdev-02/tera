@@ -81,3 +81,19 @@ local.properties
 **/.takdev/
 *.apk
 *.aab
+
+# ---------------------------------------------------------------------------
+# Demo / video / audio recordings should NEVER live in the repo.
+# Save to ~/Desktop/tera-demo-clips/ (gitignored at home dir level)
+# or share via the team Drive folder. See docs/demo-recording-plan.md.
+# ---------------------------------------------------------------------------
+*.mov
+*.mp4
+*.webm
+*.mkv
+*.m4a
+*.mp3
+*.flac
+*.wav
+!tests/**/*.wav
+!models/piper/*.onnx.json
