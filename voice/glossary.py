@@ -63,8 +63,7 @@ GLOSSARY: dict[str, GlossaryEntry] = {
         reading="alpha oscar",
         reading_kind="spell",
         full="Area of Operations",
-        context="the geographic area assigned to a unit for the conduct of "
-        "operations",
+        context="the geographic area assigned to a unit for the conduct of operations",
         source="JP 3-0",
     ),
     "CASEVAC": GlossaryEntry(
@@ -78,8 +77,7 @@ GLOSSARY: dict[str, GlossaryEntry] = {
         reading="charlie papa",
         reading_kind="spell",
         full="Checkpoint",
-        context="a predetermined point used as a reference for control of "
-        "movement",
+        context="a predetermined point used as a reference for control of movement",
     ),
     "EOD": GlossaryEntry(
         reading="echo oscar delta",
@@ -119,8 +117,7 @@ GLOSSARY: dict[str, GlossaryEntry] = {
         reading="med-evac",
         reading_kind="word",
         full="Medical Evacuation",
-        context="evacuation by a dedicated medical platform with "
-        "en-route care",
+        context="evacuation by a dedicated medical platform with en-route care",
         source="ATP 4-02.2",
     ),
     "MGRS": GlossaryEntry(
@@ -144,8 +141,7 @@ GLOSSARY: dict[str, GlossaryEntry] = {
         reading="papa zulu",
         reading_kind="spell",
         full="Pickup Zone",
-        context="a designated location for the pickup of personnel or "
-        "equipment by aircraft",
+        context="a designated location for the pickup of personnel or equipment by aircraft",
     ),
     "QRF": GlossaryEntry(
         reading="quebec romeo foxtrot",

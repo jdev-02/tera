@@ -28,9 +28,7 @@ from voice.rationale import to_operator_cadence
 log = structlog.get_logger(__name__)
 
 
-def synthesize_rationale_b64(
-    rationale: str, length_scale: float | None = None
-) -> str | None:
+def synthesize_rationale_b64(rationale: str, length_scale: float | None = None) -> str | None:
     """Take an English rationale, return base64-encoded WAV (or None).
 
     Steps:

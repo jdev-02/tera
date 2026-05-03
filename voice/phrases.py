@@ -36,7 +36,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "Acknowledge receipt and move on my mark.",
         "no numbers; pure prosody check",
     ),
-
     # ---- bearings & ranges --------------------------------------------
     (
         "bearing-01",
@@ -62,7 +61,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "From here, bearing 359, range 50 meters.",
         "near-360 bearing -- still digit-by-digit",
     ),
-
     # ---- MGRS grids ---------------------------------------------------
     (
         "mgrs-01",
@@ -82,7 +80,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "Hill at 11SMS12345678.",
         "MGRS without space-separated halves",
     ),
-
     # ---- units --------------------------------------------------------
     (
         "units-01",
@@ -102,7 +99,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "Altitude 1250 meters, descent 200 meters per minute.",
         "longer numbers digit-by-digit; trailing unit",
     ),
-
     # ---- homophone hazards --------------------------------------------
     (
         "homo-01",
@@ -122,7 +118,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "3 contacts at 300 meters bearing 030.",
         "'three' said three different ways (count, range, bearing)",
     ),
-
     # ---- compound directions -----------------------------------------
     (
         "compound-01",
@@ -136,7 +131,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "Primary route NW, alternate route SSW, contingency due south.",
         "three cardinals in one sentence",
     ),
-
     # ---- mission narration -------------------------------------------
     (
         "mission-01",
@@ -168,7 +162,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "Danger close, 50 meters, friendly mark north.",
         "'danger close' should NOT get glossed over",
     ),
-
     # ---- ambiguous / tricky -------------------------------------------
     (
         "amb-01",
@@ -188,7 +181,6 @@ PHRASES: list[tuple[str, str, str, str]] = [
         "0.9 kilometers to checkpoint, 9 minutes.",
         "leading-zero decimal next to plain integer",
     ),
-
     # ---- the canonical PRD scenarios ---------------------------------
     (
         "prd-A",
