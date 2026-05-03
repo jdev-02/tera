@@ -400,7 +400,7 @@ final class TeraPlanClient {
                     if (filePackage != null) {
                         String fileName = filePackage.optString("file_name", "");
                         if (!fileName.trim().isEmpty()) {
-                            packageLine = "\nTAK package: Internal storage/fromTERA/" + fileName;
+                            packageLine = "\nTAK package: /sdcard/fromTERA/" + fileName;
                         }
                     }
                 }

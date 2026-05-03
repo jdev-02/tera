@@ -41,8 +41,11 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import gov.tak.api.plugin.IPlugin;
@@ -67,6 +70,7 @@ public class TERAPlugin implements IPlugin {
     final List<Marker> activeWaypointMarkers = new ArrayList<>();
     final List<String> activeTeraItemUids = new ArrayList<>();
     final List<JSONObject> activeTeraItems = new ArrayList<>();
+    static final String TERA_SHARED_PACKAGE_DIR = "/sdcard/fromTERA";
 
     public TERAPlugin(IServiceController serviceController) {
         this.serviceController = serviceController;
@@ -598,22 +602,119 @@ public class TERAPlugin implements IPlugin {
         }
 
         String fileName = sanitizeTakPackageFileName(pkg.optString("file_name", "TERA-TAK.kmz"));
-        File outputDir = new File(Environment.getExternalStorageDirectory(), "fromTERA");
-        if (!outputDir.exists() && !outputDir.mkdirs()) {
-            Toast.makeText(pluginContext, "Could not create /sdcard/fromTERA",
+        byte[] content;
+        try {
+            content = Base64.decode(contentB64, Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            Toast.makeText(pluginContext, "TAK package decode failed: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
             return null;
         }
 
-        File outputFile = new File(outputDir, fileName);
-        try (FileOutputStream output = new FileOutputStream(outputFile)) {
-            output.write(Base64.decode(contentB64, Base64.DEFAULT));
-            output.flush();
-            return outputFile.getAbsolutePath();
-        } catch (IllegalArgumentException | IOException e) {
-            Toast.makeText(pluginContext, "TAK package write failed: " + e.getMessage(),
+        int expectedSize = pkg.optInt("size_bytes", -1);
+        if (expectedSize > 0 && expectedSize != content.length) {
+            Toast.makeText(pluginContext, "TAK package size mismatch; refusing write.",
                     Toast.LENGTH_LONG).show();
             return null;
+        }
+        String expectedSha = pkg.optString("sha256", "");
+        if (!expectedSha.trim().isEmpty()
+                && !expectedSha.equalsIgnoreCase(sha256Hex(content))) {
+            Toast.makeText(pluginContext, "TAK package checksum mismatch; refusing write.",
+                    Toast.LENGTH_LONG).show();
+            return null;
+        }
+
+        IOException lastError = null;
+        for (File outputDir : takPackageDirectories()) {
+            try {
+                File outputFile = writeTakPackageFile(outputDir, fileName, content);
+                return outputFile.getAbsolutePath();
+            } catch (IOException e) {
+                lastError = e;
+            }
+        }
+
+        String detail = lastError == null || lastError.getMessage() == null
+                ? "unknown storage error"
+                : lastError.getMessage();
+        Toast.makeText(pluginContext, "TAK package write failed: " + detail,
+                Toast.LENGTH_LONG).show();
+        return null;
+    }
+
+    private List<File> takPackageDirectories() {
+        List<File> directories = new ArrayList<>();
+        addTakPackageDirectory(directories, new File(TERA_SHARED_PACKAGE_DIR));
+        addTakPackageDirectory(directories, new File(
+                Environment.getExternalStorageDirectory(), "fromTERA"));
+        addTakPackageDirectory(directories, new File("/storage/emulated/0/fromTERA"));
+        File appExternal = pluginContext.getExternalFilesDir("fromTERA");
+        if (appExternal != null) {
+            addTakPackageDirectory(directories, appExternal);
+        }
+        return directories;
+    }
+
+    private void addTakPackageDirectory(List<File> directories, File candidate) {
+        String candidatePath = candidate.getAbsolutePath();
+        for (File existing : directories) {
+            if (existing.getAbsolutePath().equals(candidatePath)) {
+                return;
+            }
+        }
+        directories.add(candidate);
+    }
+
+    private File writeTakPackageFile(File outputDir, String fileName, byte[] content)
+            throws IOException {
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            throw new IOException("could not create " + outputDir.getAbsolutePath());
+        }
+        if (!outputDir.isDirectory()) {
+            throw new IOException(outputDir.getAbsolutePath() + " is not a directory");
+        }
+
+        File outputFile = uniqueTakPackageFile(outputDir, fileName);
+        try (FileOutputStream output = new FileOutputStream(outputFile)) {
+            output.write(content);
+            output.flush();
+        }
+        if (outputFile.length() != content.length) {
+            throw new IOException("short write to " + outputFile.getAbsolutePath());
+        }
+        return outputFile;
+    }
+
+    private File uniqueTakPackageFile(File outputDir, String fileName) {
+        File candidate = new File(outputDir, fileName);
+        if (!candidate.exists()) {
+            return candidate;
+        }
+
+        int dot = fileName.lastIndexOf('.');
+        String stem = dot > 0 ? fileName.substring(0, dot) : fileName;
+        String extension = dot > 0 ? fileName.substring(dot) : "";
+        for (int index = 1; index < 1000; index++) {
+            candidate = new File(outputDir, stem + "-" + index + extension);
+            if (!candidate.exists()) {
+                return candidate;
+            }
+        }
+        return new File(outputDir, stem + "-" + System.currentTimeMillis() + extension);
+    }
+
+    private String sha256Hex(byte[] content) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(content);
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte value : hash) {
+                hex.append(String.format(Locale.US, "%02x", value & 0xff));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            return "";
         }
     }
 
@@ -623,7 +724,7 @@ public class TERAPlugin implements IPlugin {
         if (name.isEmpty()) {
             name = "TERA-TAK";
         }
-        String lower = name.toLowerCase(java.util.Locale.US);
+        String lower = name.toLowerCase(Locale.US);
         if (!lower.endsWith(".kmz") && !lower.endsWith(".kml") && !lower.endsWith(".zip")) {
             name = name + ".kmz";
         }
