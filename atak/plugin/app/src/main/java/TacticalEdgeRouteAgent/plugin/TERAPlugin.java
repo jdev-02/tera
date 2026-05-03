@@ -11,6 +11,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -245,9 +246,10 @@ public class TERAPlugin implements IPlugin {
                 dp(38)));
         content.addView(actions);
 
-        PopupWindow popup = new PopupWindow(content, dp(280),
+        PopupWindow popup = new PopupWindow(content, dp(300),
                 LinearLayout.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
+        popup.setClippingEnabled(false);
         popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
         popup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
                 | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
@@ -272,7 +274,8 @@ public class TERAPlugin implements IPlugin {
             popup.dismiss();
         });
 
-        popup.showAsDropDown(hostButton, -dp(160), dp(6));
+        popup.showAtLocation(hostButton.getRootView(),
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, dp(18));
         hostEdit.requestFocus();
         mainHandler.postDelayed(() -> {
             InputMethodManager imm = (InputMethodManager) pluginContext.getSystemService(
