@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -100,8 +100,18 @@ shellcheck-syntax: ## bash -n parse-check on every committed shell script (catch
 	@echo "[shellcheck-syntax] parsing every *.sh under repo root..."
 	@status=0; 	while IFS= read -r f; do 	  if bash -n "$$f" 2>&1; then 	    echo "  [ok] $$f"; 	  else 	    echo "  [FAIL] $$f"; status=1; 	  fi; 	done < <(find . -name '*.sh' -not -path './.venv/*' -not -path './node_modules/*' -not -path './.git/*'); 	if [ $$status -eq 0 ]; then echo "[OK] all shell scripts parse cleanly"; else exit $$status; fi
 
-run: install ## Start the agent service locally (stub)
-	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
+run: install ## Start the agent service on localhost only (HTTP, port 8000)
+	PYTHONIOENCODING=utf-8 $(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 127.0.0.1 --port 8000 --reload
+
+gen-cert: ## Generate self-signed TLS cert for local HTTPS (run once, output to certs/)
+	@bash infra/gen_dev_cert.sh
+
+run-https: install gen-cert ## Start agent with HTTPS on localhost (port 8443)
+	PYTHONIOENCODING=utf-8 $(VENV_BIN)/uvicorn$(EXE) agent.app:app \
+		--host 127.0.0.1 --port 8443 \
+		--ssl-keyfile certs/key.pem \
+		--ssl-certfile certs/cert.pem \
+		--reload
 
 firewall: ## Block port 8000 from WiFi (Windows only). Run before `make run` on shared networks.
 	@powershell -ExecutionPolicy Bypass -File infra/firewall_dev.ps1 add
