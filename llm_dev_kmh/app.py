@@ -2587,9 +2587,28 @@ def _request_is_atak_mirror_candidate(request: PromptRequest) -> bool:
 
 def _mirror_source_for_request(request: PromptRequest) -> str:
     profile = (request.agent_profile or "").strip().lower()
-    if "atak" in profile:
+    if bool(JETSON_ATAK_MODE.get("active")) or "atak" in profile:
         return "atak-plugin"
     return "web-planner"
+
+
+def _coerce_atak_prompt_request(request: PromptRequest) -> PromptRequest:
+    if not bool(JETSON_ATAK_MODE.get("active")):
+        return request
+
+    profile = (request.agent_profile or "").strip().lower()
+    if "atak" in profile and (request.llm_provider or "").strip().lower() == "ollama":
+        return request
+
+    return request.model_copy(
+        update={
+            "agent_profile": str(
+                JETSON_ATAK_MODE.get("agent_profile") or TERA_ATAK_AGENT_PROFILE
+            ),
+            "llm_provider": "ollama",
+            "model": request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
+        }
+    )
 
 
 def _jetson_atak_response(detail: str | None = None) -> JetsonAtakModeResponse:
@@ -7798,6 +7817,7 @@ async def create_package_cot(
 
 @app.post("/api/prompt", response_model=PromptResponse)
 async def prompt_ollama(request: PromptRequest) -> PromptResponse:
+    request = _coerce_atak_prompt_request(request)
     mirror = _request_is_atak_mirror_candidate(request)
     if mirror:
         _append_atak_mirror_event(
@@ -7808,7 +7828,19 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
             provider=_request_llm_provider(request),
             direction="inbound",
         )
-    result = await _post_prompt_with_fallback(request)
+    try:
+        result = await _post_prompt_with_fallback(request)
+    except HTTPException as exc:
+        if mirror:
+            _append_atak_mirror_event(
+                source="tera-agent",
+                role="assistant",
+                text=f"ERROR: {exc.detail}",
+                model=request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
+                provider=_request_llm_provider(request),
+                direction="error",
+            )
+        raise
     if mirror:
         _append_atak_mirror_event(
             source="tera-agent",
@@ -7823,6 +7855,7 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
 
 @app.post("/api/prompt/stream")
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
+    request = _coerce_atak_prompt_request(request)
     mirror = _request_is_atak_mirror_candidate(request)
     if mirror:
         _append_atak_mirror_event(
@@ -7986,6 +8019,15 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                         model=model,
                     )
             failures.append("ollama: " + " | ".join(errors))
+            if mirror:
+                _append_atak_mirror_event(
+                    source="tera-agent",
+                    role="assistant",
+                    text="ERROR: All model providers failed. " + " | ".join(failures),
+                    model=model,
+                    provider="ollama",
+                    direction="error",
+                )
             yield _sse_event(
                 {
                     "type": "error",

@@ -268,6 +268,13 @@ final class TeraPlanClient {
                 }
                 return new PromptResult(true, summary.toString());
             }
+            if (code >= 200 && code < 300 && json.has("response")) {
+                String response = json.optString("response", "").trim();
+                if (!response.isEmpty()) {
+                    return new PromptResult(true, response);
+                }
+                return new PromptResult(false, "Jetson returned an empty TERA response.");
+            }
             String detail = json.optString("detail", json.optString("message", ""));
             if (code >= 200 && code < 300) {
                 return new PromptResult(false,

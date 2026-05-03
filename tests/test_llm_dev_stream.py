@@ -664,6 +664,30 @@ def test_atak_live_profile_uses_tactical_plugin_prompt() -> None:
     assert "local imagery and geospatial data sourcing assistant" not in prompt
 
 
+def test_atak_mode_coerces_prompt_requests_to_live_profile() -> None:
+    original_mode = kmh_app.JETSON_ATAK_MODE.copy()
+    try:
+        kmh_app.JETSON_ATAK_MODE.update(
+            {
+                "active": True,
+                "model": "gemma3:4b",
+                "agent_profile": "tera-atak-live",
+            }
+        )
+        request = kmh_app.PromptRequest(prompt="Hello from ATAK.")
+
+        coerced = kmh_app._coerce_atak_prompt_request(request)
+
+        assert coerced.llm_provider == "ollama"
+        assert coerced.model == "gemma3:4b"
+        assert coerced.agent_profile == "tera-atak-live"
+        assert kmh_app._mirror_source_for_request(coerced) == "atak-plugin"
+        assert "live ATAK plugin agent" in kmh_app._build_system_prompt(coerced)
+    finally:
+        kmh_app.JETSON_ATAK_MODE.clear()
+        kmh_app.JETSON_ATAK_MODE.update(original_mode)
+
+
 def test_atak_activation_normalizes_gemma3_4_alias() -> None:
     assert kmh_app._normalize_ollama_model_name("gemma3:4") == "gemma3:4b"
     assert kmh_app._normalize_ollama_model_name("gemma3:4b") == "gemma3:4b"
