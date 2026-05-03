@@ -36,6 +36,9 @@ class _FakeAsyncClient:
     def stream(self, *_args: object, **_kwargs: Any) -> _FakeStreamContext:
         return _FakeStreamContext(self.response)
 
+    async def post(self, *_args: object, **_kwargs: Any) -> object:
+        return self.response
+
 
 class _TokenResponse:
     status_code = 200
@@ -51,6 +54,17 @@ class _ErrorResponse:
 
     async def aread(self) -> bytes:
         return b'{"error":"model missing"}'
+
+
+class _ClaudeResponse:
+    status_code = 200
+    text = '{"content":[{"type":"text","text":"Claude source recommendation."}]}'
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {"content": [{"type": "text", "text": "Claude source recommendation."}]}
 
 
 async def _collect_stream(response: object) -> str:
@@ -94,6 +108,44 @@ async def test_prompt_stream_reports_ollama_http_errors(monkeypatch: pytest.Monk
     assert "model missing" in body
 
 
+@pytest.mark.asyncio
+async def test_prompt_stream_can_use_claude_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeAsyncClient.response = _ClaudeResponse()
+    monkeypatch.setattr(kmh_app.httpx, "AsyncClient", _FakeAsyncClient)
+
+    response = await kmh_app.prompt_ollama_stream(
+        kmh_app.PromptRequest(
+            prompt="Recommend sources.",
+            llm_provider="claude",
+            cloud_model="claude-sonnet-4-20250514",
+            cloud_api_key="sk-ant-test",
+        )
+    )
+
+    body = await _collect_stream(response)
+
+    assert '"provider": "claude"' in body
+    assert "Waiting for Claude API response" in body
+    assert "Claude source recommendation." in body
+    assert '"type": "done"' in body
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_reports_missing_claude_key() -> None:
+    response = await kmh_app.prompt_ollama_stream(
+        kmh_app.PromptRequest(
+            prompt="Recommend sources.",
+            llm_provider="claude",
+            cloud_model="claude-sonnet-4-20250514",
+        )
+    )
+
+    body = await _collect_stream(response)
+
+    assert '"type": "error"' in body
+    assert "Claude API key required" in body
+
+
 def test_imagery_sourcing_prompt_uses_socratic_dialogue() -> None:
     request = kmh_app.PromptRequest(
         prompt="Build a water access package for a foot patrol.",
@@ -122,6 +174,7 @@ def test_source_recommendation_questions_prioritize_source_scope() -> None:
     )
     questions = " ".join(recommendation.clarifying_questions).lower()
 
+    assert "move the map" in questions
     assert "movement" in questions
     assert "water" in questions
     assert "bounding box" not in questions
@@ -143,6 +196,54 @@ def test_planner_workflow_hides_ao_until_sources_are_confirmed() -> None:
     assert "state.sourceConfirmed = true" in js
 
 
+def test_model_provider_menu_supports_local_and_claude() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    app_source = Path(kmh_app.__file__).read_text(encoding="utf-8")
+
+    for token in [
+        'id="modelProviderBtn"',
+        'id="modelProviderMenu"',
+        'id="providerSelect"',
+        'id="topModelSelect"',
+        'id="claudeModelSelect"',
+        'id="claudeApiKeyInput"',
+        "Claude API",
+        "claude-sonnet-4-20250514",
+    ]:
+        assert token in html
+
+    for token in [
+        ".top-provider-shell",
+        ".chip-button",
+        ".provider-menu",
+        ".provider-actions",
+    ]:
+        assert token in css
+
+    for token in [
+        "teraLlmProvider",
+        "teraClaudeApiKey",
+        "applyProviderSelection",
+        "llm_provider",
+        "cloud_model",
+        "cloud_api_key",
+        "Claude API key required",
+    ]:
+        assert token in js
+
+    for token in [
+        "ANTHROPIC_API_URL",
+        "ANTHROPIC_VERSION",
+        "CLAUDE_MODEL",
+        "claude_default_model",
+        "_post_claude_message",
+        "_extract_claude_response_text",
+    ]:
+        assert token in app_source
+
+
 def test_planner_workflow_has_carousel_and_resizable_ao_handles() -> None:
     html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
@@ -156,6 +257,150 @@ def test_planner_workflow_has_carousel_and_resizable_ao_handles() -> None:
     assert "getPickedAreaHandle" in js
     assert "getResizeAnchorPoint" in js
     assert "finishAreaResize" in js
+
+
+def test_source_planner_degrades_without_false_inference_failure() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "FALLBACK_SOURCE_CATALOG" in js
+    assert "buildClientSourceRecommendation" in js
+    assert "Planner fallback" in js
+    assert "Source planner unavailable" in js
+    assert "Planning source package" in js
+    assert "Local model offline; rules active" in js
+    assert "deterministic source advisor" in js
+    assert "plan the needed package" in html
+
+    for stale_label in [
+        "Inference failed",
+        "Source inference failed",
+        "Inferring source package",
+        "Source catalog not loaded",
+        "No source catalog loaded",
+        "Source catalog failed",
+        "Ollama lookup failed",
+        "Model lookup failed",
+    ]:
+        assert stale_label not in js
+        assert stale_label not in html
+
+
+def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    prompt = (
+        Path("prompts/local_model_prompts/imagery_sourcing_local_model_system_prompt.md")
+        .read_text(encoding="utf-8")
+    )
+
+    source = kmh_app.SOURCE_BY_ID["esri_world_elevation"]
+
+    assert source.category == "terrain"
+    assert source.stream_status == "queryable-online"
+    assert source.download_status == "download-required"
+    assert "elevation_samples" in source.derived_layers
+    assert "esri_world_elevation" in js
+    assert "Esri World Elevation Terrain" in js
+    assert "queryable-online" in js
+    assert "download-required" in js
+    assert "Esri World Elevation Terrain is a queryable online fallback" in prompt
+
+    recommendation = kmh_app._infer_source_recommendation(
+        "Need a terrain route that avoids steep exposed terrain.",
+        None,
+    )
+    assert "esri_world_elevation" in recommendation.required_source_ids
+    assert "esri_world_elevation" in recommendation.selected_source_ids
+
+
+def test_chat_streaming_does_not_force_scroll_when_reader_moves_up() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "CHAT_AUTOSCROLL_THRESHOLD_PX" in js
+    assert "function isChatPinnedToBottom()" in js
+    assert "function maybeScrollChatToBottom" in js
+    assert "const shouldFollowNewMessage = isChatPinnedToBottom();" in js
+    assert "const shouldFollowStream = isChatPinnedToBottom();" in js
+    assert "maybeScrollChatToBottom(shouldFollowStream);" in js
+    assert js.count("els.chatLog.scrollTop = els.chatLog.scrollHeight;") == 1
+
+
+def test_header_title_precedes_kicker_and_map_imports_kml_overlays() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert html.index("<h1>TERA Source Planner</h1>") < html.index(
+        '<div class="eyebrow">Mission data sourcing workspace</div>'
+    )
+    assert 'id="importOverlayBtn"' in html
+    assert 'id="overlayFileInput"' in html
+    assert 'accept=".kml,.kmz' in html
+    assert ".file-input" in css
+
+    assert "overlayDataSource" in js
+    assert "async function importMapOverlay" in js
+    assert "Cesium.KmlDataSource.load" in js
+    assert "state.viewer.dataSources.add(dataSource)" in js
+    assert "state.viewer.flyTo(state.overlayDataSource" in js
+    assert 'els.importOverlayBtn.addEventListener("click", requestOverlayFile)' in js
+    assert 'els.overlayFileInput.addEventListener("change", onOverlayFileSelected)' in js
+
+
+def test_map_location_search_sets_context_and_center_grid() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    app_source = Path(kmh_app.__file__).read_text(encoding="utf-8")
+    prompt = (
+        Path("prompts/local_model_prompts/imagery_sourcing_local_model_system_prompt.md")
+        .read_text(encoding="utf-8")
+    )
+
+    assert 'id="locationSearchPanel"' in html
+    assert 'id="locationSearchInput"' in html
+    assert 'id="locationSearchSuggestions"' in html
+    assert 'id="centerGridValue"' in html
+    assert ".map-search-panel" in css
+    assert ".center-grid-panel" in css
+
+    assert "LOCATION_GAZETTEER" in js
+    assert "Joshua Tree National Park" in js
+    assert "parseCoordinateQuery" in js
+    assert "refreshOnlineLocationSuggestions" in js
+    assert "/api/location-search" in js
+    assert "flyToLocationSuggestion" in js
+    assert "latLonToUtm" in js
+    assert "updateCenterGrid()" in js
+    assert "location_confirmed" in js
+    assert "location_focus_label" in js
+    assert 'els.locationSearchForm.addEventListener("submit", onLocationSearchSubmit)' in js
+
+    assert "location_confirmed: bool = False" in app_source
+    assert '@app.get("/api/location-search"' in app_source
+    assert "LOCATION_SEARCH_URL" in app_source
+    assert "Planner-confirmed mission map focus" in app_source
+    assert "Move the map to the mission AO" in app_source
+    assert "use the map location search" in prompt
+
+
+def test_source_recommendation_tolerates_rough_phrasing_and_spelling() -> None:
+    recommendation = kmh_app._infer_source_recommendation(
+        "Need off-line pakage near Joshu Tree for patroll to find watter and avoid steep terain.",
+        None,
+    )
+
+    assert recommendation.mission_focus in {"water-access", "terrain-routing"}
+    assert "osm_extract" in recommendation.required_source_ids
+    assert "esri_world_elevation" in recommendation.required_source_ids
+    assert any(
+        source_id in recommendation.required_source_ids
+        for source_id in ("usgs_3dep", "copernicus_dem")
+    )
+    assert any(
+        source_id in recommendation.required_source_ids
+        for source_id in ("usgs_3dhp", "hydrosheds")
+    )
 
 
 def test_map_ui_does_not_expose_point_pin_overlay() -> None:
@@ -206,6 +451,13 @@ def test_source_planner_uses_defense_design_system() -> None:
     assert "body.panel-collapsed .workspace-shell" in css
     assert "grid-template-columns: minmax(0, 1fr);" in css
     assert 'els.workspaceShell.style.removeProperty("--panel-width")' in js
+    assert "body.is-resizing-panel" in css
+    assert "user-select: none !important;" in css
+    assert "touch-action: none;" in css
+    assert "clearDocumentSelection" in js
+    assert "event.preventDefault();" in js
+    assert 'document.body.classList.add("is-resizing-panel")' in js
+    assert 'document.body.classList.remove("is-resizing-panel")' in js
 
     forbidden_tokens = [
         "IBM Plex Sans",

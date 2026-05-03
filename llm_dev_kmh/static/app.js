@@ -21,6 +21,23 @@ const state = {
   handlersBound: false,
   dataSources: [],
   primarySourceIds: [],
+  sourceCatalogFallback: false,
+  sourceCatalogMessage: "",
+  sourcePlannerFallback: false,
+  sourcePlannerMessage: "",
+  overlayDataSource: null,
+  overlayFileName: "",
+  locationSearchMatches: [],
+  activeLocationSearchIndex: -1,
+  mapFocusLabel: "",
+  mapFocusSource: "",
+  mapLocationConfirmed: false,
+  locationSearchTimer: null,
+  locationSearchRequestId: 0,
+  localModelAvailable: false,
+  localModelDetail: "",
+  llmProvider: sessionStorage.getItem("teraLlmProvider") || "ollama",
+  claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
   selectedSourceIds: new Set(),
   packagePlan: null,
   sourceInference: null,
@@ -31,13 +48,26 @@ const state = {
 
 const els = {
   tokenChip: document.getElementById("tokenChip"),
-  ollamaChip: document.getElementById("ollamaChip"),
   settingsToggleBtn: document.getElementById("settingsToggleBtn"),
   settingsMenu: document.getElementById("settingsMenu"),
+  modelProviderBtn: document.getElementById("modelProviderBtn"),
+  modelProviderMenu: document.getElementById("modelProviderMenu"),
+  providerStatus: document.getElementById("providerStatus"),
+  providerSelect: document.getElementById("providerSelect"),
+  topModelSelect: document.getElementById("topModelSelect"),
+  claudeModelSelect: document.getElementById("claudeModelSelect"),
+  claudeApiKeyInput: document.getElementById("claudeApiKeyInput"),
+  providerLocalModelRow: document.getElementById("providerLocalModelRow"),
+  providerClaudeModelRow: document.getElementById("providerClaudeModelRow"),
+  providerClaudeKeyRow: document.getElementById("providerClaudeKeyRow"),
+  saveProviderBtn: document.getElementById("saveProviderBtn"),
+  clearClaudeKeyBtn: document.getElementById("clearClaudeKeyBtn"),
   agentProfileSelect: document.getElementById("agentProfileSelect"),
   imagerySelect: document.getElementById("imagerySelect"),
   terrainSelect: document.getElementById("terrainSelect"),
   resetViewBtn: document.getElementById("resetViewBtn"),
+  importOverlayBtn: document.getElementById("importOverlayBtn"),
+  overlayFileInput: document.getElementById("overlayFileInput"),
   panelToggleBtn: document.getElementById("panelToggleBtn"),
   panelResizer: document.getElementById("panelResizer"),
   workspaceShell: document.querySelector(".workspace-shell"),
@@ -45,6 +75,12 @@ const els = {
   sourcePanel: document.getElementById("sourcePanel"),
   mapStage: document.querySelector(".map-stage"),
   mapResetViewBtn: document.getElementById("mapResetViewBtn"),
+  locationSearchPanel: document.getElementById("locationSearchPanel"),
+  locationSearchForm: document.getElementById("locationSearchForm"),
+  locationSearchInput: document.getElementById("locationSearchInput"),
+  locationSearchSuggestions: document.getElementById("locationSearchSuggestions"),
+  centerGridValue: document.getElementById("centerGridValue"),
+  centerGridLatLon: document.getElementById("centerGridLatLon"),
   compassRose: document.getElementById("compassRose"),
   compassHeading: document.getElementById("compassHeading"),
   tiltNeedle: document.getElementById("tiltNeedle"),
@@ -130,9 +166,426 @@ const IMAGERY_FALLBACKS = {
   },
 };
 
+const FALLBACK_PRIMARY_STREAM_SOURCE_IDS = [
+  "esri_world_imagery",
+  "cesium_world_terrain",
+  "osm_basemap",
+];
+
+const LOCATION_GAZETTEER = [
+  {
+    name: "San Francisco, CA",
+    detail: "City center and Bay Area mission staging reference",
+    lat: 37.7749,
+    lon: -122.4194,
+    heightM: 14000,
+    aliases: ["sf", "san fran", "bay area"],
+  },
+  {
+    name: "Presidio of San Francisco, CA",
+    detail: "Urban-coastal terrain, trails, batteries, and shoreline access",
+    lat: 37.7989,
+    lon: -122.4662,
+    heightM: 4500,
+    aliases: ["presidio", "crissy field"],
+  },
+  {
+    name: "Golden Gate Bridge, CA",
+    detail: "Bridge, shoreline, ridge, and urban approach terrain",
+    lat: 37.8199,
+    lon: -122.4783,
+    heightM: 4500,
+    aliases: ["golden gate", "ggb"],
+  },
+  {
+    name: "Treasure Island, CA",
+    detail: "Bay island, bridge access, and maritime-adjacent infrastructure",
+    lat: 37.8230,
+    lon: -122.3708,
+    heightM: 5000,
+    aliases: ["yerba buena island", "treasure island sf"],
+  },
+  {
+    name: "Oakland, CA",
+    detail: "Urban port, hills, freeway, rail, and shoreline terrain",
+    lat: 37.8044,
+    lon: -122.2712,
+    heightM: 12000,
+    aliases: ["oakland hills", "port of oakland"],
+  },
+  {
+    name: "Mount Tamalpais, CA",
+    detail: "Coastal mountain terrain, ridges, trails, and signal high ground",
+    lat: 37.9235,
+    lon: -122.5965,
+    heightM: 9000,
+    aliases: ["mt tam", "mount tam"],
+  },
+  {
+    name: "Yosemite Valley, CA",
+    detail: "Steep granitic valley, trails, water, cliffs, and SAR terrain",
+    lat: 37.7456,
+    lon: -119.5936,
+    heightM: 9000,
+    aliases: ["yosemite", "yosemite national park"],
+  },
+  {
+    name: "Lake Tahoe, CA/NV",
+    detail: "Mountain lake, ridges, winter hazards, trails, and evacuation routes",
+    lat: 39.0968,
+    lon: -120.0324,
+    heightM: 18000,
+    aliases: ["tahoe", "south lake tahoe"],
+  },
+  {
+    name: "Joshua Tree National Park, CA",
+    detail: "Desert terrain, trails, dry washes, roads, climbing areas, and water scarcity",
+    lat: 33.8734,
+    lon: -115.9010,
+    heightM: 18000,
+    aliases: ["joshua tree", "joshua tree np", "jtnp", "joshu tree", "joshua"],
+  },
+  {
+    name: "Fort Hunter Liggett, CA",
+    detail: "Training area with rural roads, ridges, valleys, and access control",
+    lat: 35.9730,
+    lon: -121.2400,
+    heightM: 18000,
+    aliases: ["hunter liggett", "fhl"],
+  },
+  {
+    name: "Fort Irwin / National Training Center, CA",
+    detail: "Desert maneuver terrain, dry washes, roads, and range constraints",
+    lat: 35.2627,
+    lon: -116.6848,
+    heightM: 26000,
+    aliases: ["fort irwin", "ntc", "national training center"],
+  },
+  {
+    name: "Camp Pendleton, CA",
+    detail: "Coastal military terrain, roads, hills, and beach approaches",
+    lat: 33.3178,
+    lon: -117.3205,
+    heightM: 17000,
+    aliases: ["pendleton", "mcb camp pendleton"],
+  },
+  {
+    name: "Yakima Training Center, WA",
+    detail: "High-desert training terrain, ranges, roads, and ridgelines",
+    lat: 46.6847,
+    lon: -120.4531,
+    heightM: 25000,
+    aliases: ["yakima", "ytc"],
+  },
+  {
+    name: "White Sands Missile Range, NM",
+    detail: "Desert range terrain, restricted areas, roads, and dry lakebeds",
+    lat: 32.3825,
+    lon: -106.4795,
+    heightM: 26000,
+    aliases: ["white sands", "wsmr"],
+  },
+  {
+    name: "Fort Liberty, NC",
+    detail: "Installation and pine forest movement terrain",
+    lat: 35.1415,
+    lon: -79.0060,
+    heightM: 16000,
+    aliases: ["fort bragg", "liberty"],
+  },
+  {
+    name: "Fort Moore, GA",
+    detail: "Installation terrain, river corridors, roads, and training areas",
+    lat: 32.3668,
+    lon: -84.9693,
+    heightM: 16000,
+    aliases: ["fort benning", "moore"],
+  },
+  {
+    name: "Fort Carson, CO",
+    detail: "Front Range installation, foothills, roads, and mountain approaches",
+    lat: 38.7375,
+    lon: -104.7889,
+    heightM: 18000,
+    aliases: ["carson", "colorado springs"],
+  },
+  {
+    name: "Joint Base Lewis-McChord, WA",
+    detail: "Installation, forest, prairie, airfield, and road access context",
+    lat: 47.1079,
+    lon: -122.5769,
+    heightM: 16000,
+    aliases: ["jblm", "fort lewis", "mcchord"],
+  },
+  {
+    name: "Washington, DC",
+    detail: "Capital region urban infrastructure, waterways, and access constraints",
+    lat: 38.9072,
+    lon: -77.0369,
+    heightM: 12000,
+    aliases: ["dc", "district of columbia"],
+  },
+  {
+    name: "Honolulu, HI",
+    detail: "Island urban, volcanic ridges, coastline, and evacuation context",
+    lat: 21.3099,
+    lon: -157.8581,
+    heightM: 13000,
+    aliases: ["oahu", "pearl harbor"],
+  },
+  {
+    name: "Anchorage, AK",
+    detail: "Arctic/subarctic urban, mountain, river, and coastal terrain",
+    lat: 61.2181,
+    lon: -149.9003,
+    heightM: 22000,
+    aliases: ["alaska", "anchorage bowl"],
+  },
+];
+
+const LOCATION_SEARCH_LIMIT = 6;
+const UTM_LATITUDE_BANDS = "CDEFGHJKLMNPQRSTUVWXX";
+const KEYWORD_EXPANSIONS = {
+  route: ["routing", "navigate", "navigation", "path", "corridor", "approach"],
+  patrol: ["movement", "move", "walk", "team", "operator"],
+  water: ["hydration", "hydrate", "stream", "river", "spring", "creek", "wash", "well", "source", "watter"],
+  terrain: ["terain", "topography", "elevation", "ground", "landform"],
+  slope: ["steep", "grade", "incline", "cliff", "exposed", "exposure"],
+  cover: ["concealment", "conceal", "canopy", "shade", "vegetation", "brush"],
+  hazard: ["hazzard", "risk", "danger", "closure", "blocked", "unsafe"],
+  signal: ["comms", "communications", "radio", "relay", "antenna", "line of sight", "los"],
+  imagery: ["image", "satellite", "satelite", "aerial", "visual", "photo"],
+  sar: ["search", "rescue", "missing", "lost", "hasty"],
+  access: ["private", "restricted", "boundary", "parcel", "permission", "legal"],
+};
+
+const FALLBACK_SOURCE_CATALOG = [
+  {
+    id: "esri_world_imagery",
+    name: "Esri World Imagery",
+    provider: "Esri ArcGIS Online",
+    category: "imagery",
+    purpose: "Streamable visual basemap for AO inspection and imagery context.",
+    stream_status: "streamable",
+    download_status: "manifest-only",
+    stream_layer: "esri",
+  },
+  {
+    id: "cesium_world_terrain",
+    name: "Cesium World Terrain",
+    provider: "Cesium ion",
+    category: "terrain-display",
+    purpose: "Streamable 3D terrain preview for landform awareness.",
+    stream_status: "streamable-with-token",
+    download_status: "cache-via-cesium-pipeline",
+    stream_layer: "cesium-world",
+  },
+  {
+    id: "esri_world_elevation",
+    name: "Esri World Elevation Terrain",
+    provider: "Esri ArcGIS Online / Living Atlas",
+    category: "terrain",
+    purpose: "Queryable elevation terrain fallback for AO sampling, slope, hillshade, and viewshed preflight.",
+    stream_status: "queryable-online",
+    download_status: "download-required",
+  },
+  {
+    id: "osm_basemap",
+    name: "OpenStreetMap Basemap",
+    provider: "OpenStreetMap contributors",
+    category: "basemap",
+    purpose: "Streamable orientation map for roads, trails, and place names.",
+    stream_status: "streamable",
+    download_status: "manifest-only",
+    stream_layer: "osm",
+  },
+  {
+    id: "osm_extract",
+    name: "OpenStreetMap PBF Extract",
+    provider: "OpenStreetMap / regional extract",
+    category: "vector",
+    purpose: "Local server extract for roads, trails, waterways, buildings, POIs, and barriers.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "usgs_3dep",
+    name: "USGS 3DEP DEM",
+    provider: "USGS",
+    category: "terrain",
+    purpose: "U.S. elevation dataset for slope, hydrology, viewshed, and cost surfaces.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "copernicus_dem",
+    name: "Copernicus DEM",
+    provider: "Copernicus",
+    category: "terrain",
+    purpose: "Global elevation fallback for slope, viewshed, and terrain-cost analysis.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "nlcd",
+    name: "USGS Annual NLCD",
+    provider: "USGS",
+    category: "land-cover",
+    purpose: "U.S. land-cover baseline for surface friction, wetlands, and vegetation context.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "esa_worldcover",
+    name: "ESA WorldCover",
+    provider: "ESA",
+    category: "land-cover",
+    purpose: "Global land-cover baseline for off-road friction and vegetation screening.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "usgs_3dhp",
+    name: "USGS 3D Hydrography Program / NHD",
+    provider: "USGS",
+    category: "hydrography",
+    purpose: "U.S. hydrography for streams, rivers, water bodies, and crossing context.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "hydrosheds",
+    name: "HydroSHEDS / HydroRIVERS / HydroLAKES",
+    provider: "HydroSHEDS",
+    category: "hydrography",
+    purpose: "Global hydrography baseline for water-source and drainage queries.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "nwis",
+    name: "USGS NWIS",
+    provider: "USGS",
+    category: "water-observation",
+    purpose: "Cached observations for stream gauge and water-availability confidence.",
+    stream_status: "not-streamed",
+    download_status: "cache-feed",
+  },
+  {
+    id: "sentinel_2",
+    name: "Sentinel-2 Multispectral",
+    provider: "ESA Copernicus",
+    category: "imagery-analysis",
+    purpose: "Analysis imagery for vegetation, water, burn, and surface-condition indices.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "naip",
+    name: "NAIP Aerial Imagery",
+    provider: "USDA",
+    category: "imagery-analysis",
+    purpose: "High-resolution U.S. aerial imagery for detailed AO review and feature extraction.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "sentinel_1_sar",
+    name: "Sentinel-1 SAR",
+    provider: "ESA Copernicus",
+    category: "imagery-analysis",
+    purpose: "Radar imagery for cloud/night/flood surface observation.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "nasa_firms",
+    name: "NASA FIRMS",
+    provider: "NASA",
+    category: "hazards",
+    purpose: "Active fire and hotspot feed for wildfire route risk.",
+    stream_status: "not-streamed",
+    download_status: "cache-feed",
+  },
+  {
+    id: "noaa_alerts",
+    name: "NOAA / NWS Alerts",
+    provider: "NOAA",
+    category: "hazards",
+    purpose: "Weather watches, warnings, and advisories for package-time hazards.",
+    stream_status: "not-streamed",
+    download_status: "cache-feed",
+  },
+  {
+    id: "fema_flood",
+    name: "FEMA Flood Products",
+    provider: "FEMA",
+    category: "hazards",
+    purpose: "U.S. floodplain and flood hazard context for route risk.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "pad_us",
+    name: "PAD-US Protected Areas",
+    provider: "USGS",
+    category: "boundaries-access",
+    purpose: "U.S. protected-area and management boundaries for access constraints.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "parcels_boundaries",
+    name: "Parcels / Local Boundaries",
+    provider: "County or local GIS",
+    category: "boundaries-access",
+    purpose: "Ownership and parcel boundaries for restricted or private-land movement.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "viewshed_surfaces",
+    name: "DEM-Derived Viewshed Surfaces",
+    provider: "Derived from package DEM",
+    category: "derived",
+    purpose: "Line-of-sight products for communications, signaling, and observation planning.",
+    stream_status: "derived",
+    download_status: "derived-after-ingest",
+  },
+  {
+    id: "fcc_towers",
+    name: "FCC Antenna / Tower Data",
+    provider: "FCC",
+    category: "communications",
+    purpose: "Tower locations for communications planning context.",
+    stream_status: "not-streamed",
+    download_status: "download-required",
+  },
+  {
+    id: "osm_towers",
+    name: "OSM Towers, Peaks, Lookouts",
+    provider: "OpenStreetMap",
+    category: "communications",
+    purpose: "Mapped towers, peaks, masts, lookouts, and high-ground candidates.",
+    stream_status: "not-streamed",
+    download_status: "derived-from-osm",
+  },
+];
+
+const CHAT_AUTOSCROLL_THRESHOLD_PX = 80;
+
 function setChip(node, text, tone = "") {
   node.textContent = text;
   node.className = `chip${tone ? ` ${tone}` : ""}`;
+}
+
+function setModelProviderButton(text, tone = "") {
+  els.modelProviderBtn.textContent = text;
+  els.modelProviderBtn.className = `chip chip-button${tone ? ` ${tone}` : ""}`;
+}
+
+function getErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function fetchJson(url, options) {
@@ -144,7 +597,517 @@ async function fetchJson(url, options) {
   return data;
 }
 
+function normalizeSearchText(value) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9.+-]+/g, " ").replace(/\s+/g, " ");
+}
+
+function getMatchTokens(value) {
+  return normalizeSearchText(value).split(" ").filter(Boolean);
+}
+
+function editDistance(a, b) {
+  const left = a || "";
+  const right = b || "";
+  if (!left.length) {
+    return right.length;
+  }
+  if (!right.length) {
+    return left.length;
+  }
+
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const current = Array.from({ length: right.length + 1 }, () => 0);
+  for (let i = 1; i <= left.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + cost,
+      );
+    }
+    for (let j = 0; j <= right.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+  return previous[right.length];
+}
+
+function tokenLooksLike(token, target) {
+  if (token === target) {
+    return true;
+  }
+  if (token.length < 4 || target.length < 4) {
+    return false;
+  }
+  if (token.startsWith(target) || target.startsWith(token)) {
+    return true;
+  }
+  const distance = editDistance(token, target);
+  return distance <= Math.max(1, Math.floor(Math.max(token.length, target.length) * 0.28));
+}
+
+function parseCoordinateQuery(query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const numbers = trimmed.match(/[+-]?\d+(?:\.\d+)?/g);
+  if (!numbers || numbers.length < 2) {
+    return null;
+  }
+
+  let lat = Number(numbers[0]);
+  let lon = Number(numbers[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+
+  if (Math.abs(lat) > 90 && Math.abs(lon) <= 90) {
+    [lat, lon] = [lon, lat];
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (/\d(?:\.\d+)?\s*S\b/.test(upper)) {
+    lat = -Math.abs(lat);
+  } else if (/\d(?:\.\d+)?\s*N\b/.test(upper)) {
+    lat = Math.abs(lat);
+  }
+  if (/\d(?:\.\d+)?\s*W\b/.test(upper) || upper.includes(" W")) {
+    lon = -Math.abs(lon);
+  } else if (/\d(?:\.\d+)?\s*E\b/.test(upper) || upper.includes(" E")) {
+    lon = Math.abs(lon);
+  }
+
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return null;
+  }
+
+  return {
+    name: `Coordinates ${lat.toFixed(5)}, ${lon.toFixed(5)}`,
+    detail: "Parsed decimal latitude/longitude",
+    lat,
+    lon,
+    heightM: 12000,
+    source: "coordinate-query",
+  };
+}
+
+function scoreLocationCandidate(candidate, query) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const name = normalizeSearchText(candidate.name);
+  const detail = normalizeSearchText(candidate.detail || "");
+  const aliases = (candidate.aliases || []).map((alias) => normalizeSearchText(alias));
+  let score = 0;
+
+  if (name === normalizedQuery) {
+    score += 120;
+  } else if (name.startsWith(normalizedQuery)) {
+    score += 95;
+  } else if (name.includes(normalizedQuery)) {
+    score += 70;
+  }
+
+  for (const alias of aliases) {
+    if (alias === normalizedQuery) {
+      score += 110;
+    } else if (alias.startsWith(normalizedQuery)) {
+      score += 85;
+    } else if (alias.includes(normalizedQuery)) {
+      score += 60;
+    }
+  }
+
+  const haystackTokens = getMatchTokens(`${candidate.name} ${candidate.detail || ""} ${(candidate.aliases || []).join(" ")}`);
+  const terms = normalizedQuery.split(" ").filter(Boolean);
+  for (const term of terms) {
+    if (name.includes(term)) {
+      score += 15;
+    }
+    if (detail.includes(term)) {
+      score += 8;
+    }
+    if (aliases.some((alias) => alias.includes(term))) {
+      score += 12;
+    }
+    if (haystackTokens.some((token) => tokenLooksLike(token, term))) {
+      score += 18;
+    }
+  }
+
+  return score;
+}
+
+function getLocationSearchSuggestions(query) {
+  const coordinate = parseCoordinateQuery(query);
+  const scored = LOCATION_GAZETTEER
+    .map((candidate) => ({
+      ...candidate,
+      source: "gazetteer",
+      score: scoreLocationCandidate(candidate, query),
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, LOCATION_SEARCH_LIMIT);
+
+  if (coordinate) {
+    return [coordinate, ...scored].slice(0, LOCATION_SEARCH_LIMIT);
+  }
+  return scored;
+}
+
+function normalizeServerLocationSuggestion(suggestion) {
+  return {
+    name: suggestion.name,
+    detail: suggestion.detail || `${Number(suggestion.lat).toFixed(5)}, ${Number(suggestion.lon).toFixed(5)}`,
+    lat: Number(suggestion.lat),
+    lon: Number(suggestion.lon),
+    heightM: Number(suggestion.height_m || suggestion.heightM || 12000),
+    source: suggestion.source || "online-geocoder",
+  };
+}
+
+function mergeLocationSuggestions(primaryMatches, incomingMatches) {
+  const merged = [];
+  const seen = new Set();
+  for (const match of [...primaryMatches, ...incomingMatches]) {
+    if (!Number.isFinite(match.lat) || !Number.isFinite(match.lon)) {
+      continue;
+    }
+    const key = `${Math.round(match.lat * 1000)}:${Math.round(match.lon * 1000)}:${match.name.toLowerCase()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(match);
+  }
+  return merged.slice(0, LOCATION_SEARCH_LIMIT);
+}
+
+async function refreshOnlineLocationSuggestions(query, requestId, localMatches) {
+  try {
+    const data = await fetchJson(`/api/location-search?q=${encodeURIComponent(query)}`);
+    if (requestId !== state.locationSearchRequestId) {
+      return;
+    }
+    const serverMatches = Array.isArray(data.suggestions)
+      ? data.suggestions.map(normalizeServerLocationSuggestion)
+      : [];
+    state.locationSearchMatches = mergeLocationSuggestions(localMatches, serverMatches);
+    renderLocationSearchSuggestions();
+  } catch (_error) {
+    if (requestId === state.locationSearchRequestId && !state.locationSearchMatches.length) {
+      setLocationSearchOpen(false);
+    }
+  }
+}
+
+function setLocationSearchOpen(open) {
+  els.locationSearchSuggestions.classList.toggle("hidden", !open);
+  if (!open) {
+    state.activeLocationSearchIndex = -1;
+  }
+}
+
+function setActiveLocationSuggestion(index) {
+  const maxIndex = state.locationSearchMatches.length - 1;
+  state.activeLocationSearchIndex = maxIndex < 0 ? -1 : clampNumber(index, 0, maxIndex);
+  const options = els.locationSearchSuggestions.querySelectorAll("[data-location-index]");
+  options.forEach((option) => {
+    const isActive = Number(option.dataset.locationIndex) === state.activeLocationSearchIndex;
+    option.classList.toggle("active", isActive);
+    option.setAttribute("aria-selected", String(isActive));
+  });
+}
+
+function renderLocationSearchSuggestions() {
+  els.locationSearchSuggestions.replaceChildren();
+  if (!state.locationSearchMatches.length) {
+    setLocationSearchOpen(false);
+    return;
+  }
+
+  state.locationSearchMatches.forEach((match, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "location-suggestion";
+    button.dataset.locationIndex = String(index);
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", "false");
+
+    const name = document.createElement("span");
+    name.className = "location-suggestion-name";
+    name.textContent = match.name;
+    const detail = document.createElement("span");
+    detail.className = "location-suggestion-detail";
+    detail.textContent = match.detail || `${match.lat.toFixed(5)}, ${match.lon.toFixed(5)}`;
+    button.append(name, detail);
+
+    button.addEventListener("pointerenter", () => setActiveLocationSuggestion(index));
+    button.addEventListener("click", () => {
+      state.activeLocationSearchIndex = index;
+      void commitLocationSearch();
+    });
+
+    els.locationSearchSuggestions.appendChild(button);
+  });
+
+  setLocationSearchOpen(true);
+  setActiveLocationSuggestion(0);
+}
+
+function markMapLocationFocused(label, source) {
+  state.mapFocusLabel = label || "";
+  state.mapFocusSource = source || "";
+  state.mapLocationConfirmed = Boolean(label);
+}
+
+function clearMapLocationFocus() {
+  markMapLocationFocused("", "");
+}
+
+function flyToLocationSuggestion(suggestion) {
+  if (!state.viewer) {
+    els.requestStatus.textContent = "Location search unavailable until the map is ready.";
+    return;
+  }
+
+  const heightM = suggestion.heightM || Math.max(state.config?.default_height_m || 12000, 9000);
+  markMapLocationFocused(suggestion.name, suggestion.source || "location-search");
+  state.viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(suggestion.lon, suggestion.lat, heightM),
+    duration: 1.1,
+    complete: updateCameraText,
+  });
+  els.locationSearchInput.value = suggestion.name;
+  els.requestStatus.textContent = `Map focused: ${suggestion.name}`;
+  setLocationSearchOpen(false);
+}
+
+async function commitLocationSearch() {
+  const query = els.locationSearchInput.value.trim();
+  let matches = state.locationSearchMatches.length
+    ? state.locationSearchMatches
+    : getLocationSearchSuggestions(query);
+  const index = state.activeLocationSearchIndex >= 0 ? state.activeLocationSearchIndex : 0;
+  let suggestion = matches[index] || matches[0];
+  if (!suggestion && query.length >= 2) {
+    try {
+      const data = await fetchJson(`/api/location-search?q=${encodeURIComponent(query)}`);
+      const serverMatches = Array.isArray(data.suggestions)
+        ? data.suggestions.map(normalizeServerLocationSuggestion)
+        : [];
+      matches = mergeLocationSuggestions([], serverMatches);
+      state.locationSearchMatches = matches;
+      suggestion = matches[0];
+    } catch (_error) {
+      suggestion = null;
+    }
+  }
+  if (!suggestion) {
+    els.requestStatus.textContent = "No local match. Paste decimal coordinates or import a KML/KMZ overlay.";
+    setLocationSearchOpen(false);
+    return;
+  }
+  flyToLocationSuggestion(suggestion);
+}
+
+function onLocationSearchInput() {
+  const query = els.locationSearchInput.value.trim();
+  window.clearTimeout(state.locationSearchTimer);
+  state.locationSearchRequestId += 1;
+  if (query.length < 2) {
+    state.locationSearchMatches = [];
+    setLocationSearchOpen(false);
+    return;
+  }
+  const localMatches = getLocationSearchSuggestions(query);
+  state.locationSearchMatches = localMatches;
+  renderLocationSearchSuggestions();
+  const requestId = state.locationSearchRequestId;
+  state.locationSearchTimer = window.setTimeout(() => {
+    void refreshOnlineLocationSuggestions(query, requestId, localMatches);
+  }, 240);
+}
+
+function onLocationSearchKeyDown(event) {
+  if (event.key === "Escape") {
+    setLocationSearchOpen(false);
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void commitLocationSearch();
+    return;
+  }
+  if (!state.locationSearchMatches.length) {
+    return;
+  }
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    const nextIndex = state.activeLocationSearchIndex + 1;
+    setActiveLocationSuggestion(nextIndex > state.locationSearchMatches.length - 1 ? 0 : nextIndex);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    const nextIndex = state.activeLocationSearchIndex - 1;
+    setActiveLocationSuggestion(nextIndex < 0 ? state.locationSearchMatches.length - 1 : nextIndex);
+  }
+}
+
+function onLocationSearchSubmit(event) {
+  event.preventDefault();
+  void commitLocationSearch();
+}
+
+function getMapCenterPoint() {
+  if (!state.viewer) {
+    return null;
+  }
+
+  const rectangle = state.viewer.camera.computeViewRectangle(state.viewer.scene.globe.ellipsoid);
+  if (rectangle) {
+    const west = Cesium.Math.toDegrees(rectangle.west);
+    const east = Cesium.Math.toDegrees(rectangle.east);
+    const south = Cesium.Math.toDegrees(rectangle.south);
+    const north = Cesium.Math.toDegrees(rectangle.north);
+    const centerLon = west <= east ? (west + east) / 2 : ((west + east + 360) / 2) % 360;
+    return {
+      lat: clampNumber((south + north) / 2, -89.9999, 89.9999),
+      lon: centerLon > 180 ? centerLon - 360 : centerLon,
+    };
+  }
+
+  const cartographic = state.viewer.camera.positionCartographic;
+  return {
+    lat: Cesium.Math.toDegrees(cartographic.latitude),
+    lon: Cesium.Math.toDegrees(cartographic.longitude),
+  };
+}
+
+function getUtmZone(lat, lon) {
+  let zone = Math.floor((lon + 180) / 6) + 1;
+  zone = clampNumber(zone, 1, 60);
+  if (lat >= 56 && lat < 64 && lon >= 3 && lon < 12) {
+    zone = 32;
+  }
+  if (lat >= 72 && lat < 84) {
+    if (lon >= 0 && lon < 9) {
+      zone = 31;
+    } else if (lon >= 9 && lon < 21) {
+      zone = 33;
+    } else if (lon >= 21 && lon < 33) {
+      zone = 35;
+    } else if (lon >= 33 && lon < 42) {
+      zone = 37;
+    }
+  }
+  return zone;
+}
+
+function getUtmLatitudeBand(lat) {
+  if (lat >= 84) {
+    return "X";
+  }
+  if (lat < -80) {
+    return "C";
+  }
+  const index = clampNumber(Math.floor((lat + 80) / 8), 0, UTM_LATITUDE_BANDS.length - 1);
+  return UTM_LATITUDE_BANDS[index];
+}
+
+function latLonToUtm(lat, lon) {
+  const a = 6378137.0;
+  const f = 1 / 298.257223563;
+  const k0 = 0.9996;
+  const eSq = f * (2 - f);
+  const ePrimeSq = eSq / (1 - eSq);
+  const zone = getUtmZone(lat, lon);
+  const lonOrigin = (zone - 1) * 6 - 180 + 3;
+  const latRad = Cesium.Math.toRadians(lat);
+  const lonRad = Cesium.Math.toRadians(lon);
+  const lonOriginRad = Cesium.Math.toRadians(lonOrigin);
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const tanLat = Math.tan(latRad);
+  const n = a / Math.sqrt(1 - eSq * sinLat * sinLat);
+  const t = tanLat * tanLat;
+  const c = ePrimeSq * cosLat * cosLat;
+  const aa = cosLat * (lonRad - lonOriginRad);
+  const m = a * (
+    (1 - eSq / 4 - (3 * eSq * eSq) / 64 - (5 * eSq * eSq * eSq) / 256) * latRad
+    - ((3 * eSq) / 8 + (3 * eSq * eSq) / 32 + (45 * eSq * eSq * eSq) / 1024) * Math.sin(2 * latRad)
+    + ((15 * eSq * eSq) / 256 + (45 * eSq * eSq * eSq) / 1024) * Math.sin(4 * latRad)
+    - ((35 * eSq * eSq * eSq) / 3072) * Math.sin(6 * latRad)
+  );
+
+  let easting = k0 * n * (
+    aa
+    + ((1 - t + c) * aa ** 3) / 6
+    + ((5 - 18 * t + t * t + 72 * c - 58 * ePrimeSq) * aa ** 5) / 120
+  ) + 500000.0;
+  let northing = k0 * (
+    m
+    + n * tanLat * (
+      (aa * aa) / 2
+      + ((5 - t + 9 * c + 4 * c * c) * aa ** 4) / 24
+      + ((61 - 58 * t + t * t + 600 * c - 330 * ePrimeSq) * aa ** 6) / 720
+    )
+  );
+
+  if (lat < 0) {
+    northing += 10000000.0;
+  }
+
+  easting = Math.round(easting);
+  northing = Math.round(northing);
+  return {
+    zone,
+    band: getUtmLatitudeBand(lat),
+    easting,
+    northing,
+  };
+}
+
+function updateCenterGrid() {
+  const center = getMapCenterPoint();
+  if (!center) {
+    els.centerGridValue.textContent = "--";
+    els.centerGridLatLon.textContent = "--";
+    return;
+  }
+
+  const utm = latLonToUtm(center.lat, center.lon);
+  els.centerGridValue.textContent = `UTM ${utm.zone}${utm.band} ${utm.easting
+    .toString()
+    .padStart(6, "0")}E ${utm.northing.toString().padStart(7, "0")}N`;
+  els.centerGridLatLon.textContent = `${center.lat.toFixed(5)}, ${center.lon.toFixed(5)}`;
+}
+
+function isChatPinnedToBottom() {
+  const distanceFromBottom = els.chatLog.scrollHeight
+    - els.chatLog.scrollTop
+    - els.chatLog.clientHeight;
+  return distanceFromBottom <= CHAT_AUTOSCROLL_THRESHOLD_PX;
+}
+
+function scrollChatToBottom() {
+  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+}
+
+function maybeScrollChatToBottom(shouldScroll = isChatPinnedToBottom()) {
+  if (shouldScroll) {
+    scrollChatToBottom();
+  }
+}
+
 function appendMessage(role, body, meta = "") {
+  const shouldFollowNewMessage = isChatPinnedToBottom();
   const article = document.createElement("article");
   article.className = `chat-message ${role === "user" ? "user-message" : "assistant-message"}`;
 
@@ -170,7 +1133,7 @@ function appendMessage(role, body, meta = "") {
   els.chatLog.appendChild(article);
   state.chatCount += 1;
   els.chatMeta.textContent = `${state.chatCount} messages`;
-  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  maybeScrollChatToBottom(shouldFollowNewMessage);
   return {
     article,
     bodyNode,
@@ -425,6 +1388,75 @@ function setSettingsMenuOpen(open) {
   els.settingsToggleBtn.setAttribute("aria-expanded", String(open));
 }
 
+function setModelProviderMenuOpen(open) {
+  els.modelProviderMenu.classList.toggle("hidden", !open);
+  els.modelProviderBtn.setAttribute("aria-expanded", String(open));
+}
+
+function syncModelSelects(sourceSelect, targetSelect) {
+  const selectedValue = sourceSelect.value;
+  targetSelect.innerHTML = "";
+  Array.from(sourceSelect.options).forEach((option) => {
+    const clone = option.cloneNode(true);
+    clone.selected = option.value === selectedValue;
+    targetSelect.appendChild(clone);
+  });
+}
+
+function applyProviderVisibility() {
+  const isClaude = state.llmProvider === "claude";
+  els.providerSelect.value = state.llmProvider;
+  els.providerLocalModelRow.classList.toggle("hidden", isClaude);
+  els.providerClaudeModelRow.classList.toggle("hidden", !isClaude);
+  els.providerClaudeKeyRow.classList.toggle("hidden", !isClaude);
+  if (state.claudeApiKey) {
+    els.claudeApiKeyInput.value = state.claudeApiKey;
+  }
+  if (isClaude) {
+    setModelProviderButton(`Claude: ${els.claudeModelSelect.value}`, state.claudeApiKey ? "good" : "warn");
+    els.providerStatus.textContent = state.claudeApiKey ? "Claude API key loaded for this session" : "Claude key required";
+  } else {
+    const label = els.modelSelect.value || els.topModelSelect.value || state.config?.default_model || "local model";
+    const tone = state.localModelAvailable ? "good" : "warn";
+    setModelProviderButton(state.localModelAvailable ? `Local: ${label}` : "Local model offline; rules active", tone);
+    els.providerStatus.textContent = state.localModelAvailable
+      ? "Local Ollama available"
+      : "Local model offline; deterministic planner remains active";
+  }
+}
+
+function applyProviderSelection() {
+  state.llmProvider = els.providerSelect.value;
+  state.claudeApiKey = els.claudeApiKeyInput.value.trim();
+  if (state.llmProvider === "claude" && !state.claudeApiKey) {
+    applyProviderVisibility();
+    els.providerStatus.textContent = "Claude API key required before switching providers";
+    setModelProviderMenuOpen(true);
+    els.claudeApiKeyInput.focus();
+    return;
+  }
+
+  sessionStorage.setItem("teraLlmProvider", state.llmProvider);
+  if (state.claudeApiKey) {
+    sessionStorage.setItem("teraClaudeApiKey", state.claudeApiKey);
+  } else {
+    sessionStorage.removeItem("teraClaudeApiKey");
+  }
+
+  if (state.llmProvider === "ollama") {
+    els.modelSelect.value = els.topModelSelect.value;
+  }
+  applyProviderVisibility();
+  setModelProviderMenuOpen(false);
+}
+
+function clearClaudeKey() {
+  state.claudeApiKey = "";
+  els.claudeApiKeyInput.value = "";
+  sessionStorage.removeItem("teraClaudeApiKey");
+  applyProviderVisibility();
+}
+
 function hasMissionInference() {
   return Boolean(state.sourceInference);
 }
@@ -447,7 +1479,7 @@ function renderClarifyingQuestions() {
   if (!questions.length) {
     const item = document.createElement("li");
     item.textContent = state.sourceInference
-      ? "No additional Socratic question was inferred. Review the working sources or describe a constraint in chat."
+      ? "No additional Socratic question is needed. Review the working sources or describe a constraint in chat."
       : "Socratic source questions will appear after the first mission description.";
     els.clarifyingQuestions.appendChild(item);
     return;
@@ -507,18 +1539,413 @@ function getSelectedSources() {
 }
 
 function formatSourceStatus(source) {
-  const stream = source.stream_status.replace(/-/g, " ");
-  const download = source.download_status.replace(/-/g, " ");
+  const stream = (source.stream_status || "unknown-stream").replace(/-/g, " ");
+  const download = (source.download_status || "unknown-package").replace(/-/g, " ");
   return `${stream} / ${download}`;
+}
+
+function textHasAny(text, terms) {
+  const normalizedText = normalizeSearchText(text);
+  const tokens = getMatchTokens(text);
+  return terms.some((term) => {
+    const expandedTerms = [term, ...(KEYWORD_EXPANSIONS[term] || [])];
+    return expandedTerms.some((expandedTerm) => {
+      const normalizedTerm = normalizeSearchText(expandedTerm);
+      if (!normalizedTerm) {
+        return false;
+      }
+      if (` ${normalizedText} `.includes(` ${normalizedTerm} `)) {
+        return true;
+      }
+      const termTokens = getMatchTokens(normalizedTerm);
+      if (termTokens.length === 1) {
+        return tokens.some((token) => tokenLooksLike(token, termTokens[0]));
+      }
+      return termTokens.every((termToken) => tokens.some((token) => tokenLooksLike(token, termToken)));
+    });
+  });
+}
+
+function findSourceById(sourceId) {
+  return state.dataSources.find((source) => source.id === sourceId)
+    || FALLBACK_SOURCE_CATALOG.find((source) => source.id === sourceId)
+    || null;
+}
+
+function appendUniqueSourceIds(sourceIds, ...newSourceIds) {
+  for (const sourceId of newSourceIds) {
+    if (findSourceById(sourceId) && !sourceIds.includes(sourceId)) {
+      sourceIds.push(sourceId);
+    }
+  }
+}
+
+function mergeSourcesIntoCatalog(sources) {
+  if (!Array.isArray(sources) || !sources.length) {
+    return;
+  }
+
+  const sourcesById = new Map(state.dataSources.map((source) => [source.id, source]));
+  for (const source of sources) {
+    if (source?.id) {
+      sourcesById.set(source.id, source);
+    }
+  }
+  state.dataSources = Array.from(sourcesById.values());
+}
+
+function useFallbackSourceCatalog(message, updateStatus = true) {
+  state.dataSources = FALLBACK_SOURCE_CATALOG.map((source) => ({ ...source }));
+  state.primarySourceIds = [...FALLBACK_PRIMARY_STREAM_SOURCE_IDS];
+  state.sourceCatalogFallback = true;
+  state.sourceCatalogMessage = message;
+
+  if (updateStatus) {
+    setChip(els.packageModeChip, "Catalog fallback", "warn");
+    els.packageStatus.textContent = `Server source catalog unavailable (${message}). Using the embedded fallback catalog.`;
+  }
+}
+
+function isUsMissionContext(promptText, mapContext) {
+  const usTerms = [
+    "united states",
+    "u.s.",
+    " usa",
+    "california",
+    "san francisco",
+    "sf ",
+    "national forest",
+    "blm",
+    "nps",
+    "usfs",
+  ];
+  if (textHasAny(promptText, usTerms)) {
+    return true;
+  }
+
+  const bounds = mapContext?.selected_area || (mapContext?.location_confirmed ? mapContext?.view_bounds : null);
+  const lat = bounds?.center_lat ?? mapContext?.camera?.lat;
+  const lon = bounds?.center_lon ?? mapContext?.camera?.lon;
+  return Number.isFinite(lat) && Number.isFinite(lon)
+    && lat >= 18
+    && lat <= 72
+    && lon >= -170
+    && lon <= -50;
+}
+
+function inferClientMissionFocus(promptText) {
+  const focusKeywords = [
+    ["water-access", ["water", "stream", "river", "spring", "lake", "potable", "hydrate"]],
+    ["sar-planning", ["search", "rescue", "sar", "missing", "lost person", "hasty"]],
+    ["evacuation", ["evac", "evacuation", "exfil", "casualty", "ambulance", "convoy"]],
+    ["signal-planning", ["signal", "radio", "comms", "communications", "line of sight", "relay"]],
+    ["hazard-routing", ["wildfire", "fire", "flood", "storm", "avalanche", "hazard", "closure"]],
+    ["access-control", ["private", "restricted", "public land", "access", "boundary", "parcel"]],
+    ["terrain-routing", ["route", "patrol", "walk", "foot", "trail", "slope", "terrain", "ridge"]],
+    ["imagery-preview", ["imagery", "aerial", "satellite", "visual", "inspect", "preview"]],
+  ];
+
+  let bestFocus = "mission-data-package";
+  let bestScore = 0;
+  for (const [focus, keywords] of focusKeywords) {
+    const score = keywords.reduce((sum, keyword) => sum + (textHasAny(promptText, [keyword]) ? 1 : 0), 0);
+    if (score > bestScore) {
+      bestFocus = focus;
+      bestScore = score;
+    }
+  }
+  return bestFocus;
+}
+
+function sanitizePackageSlug(text) {
+  const slug = text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return (slug || "mission-package").slice(0, 60);
+}
+
+function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMessage) {
+  if (!state.dataSources.length) {
+    useFallbackSourceCatalog(plannerErrorMessage, false);
+  }
+
+  const promptText = missionText.trim().toLowerCase();
+  const missionFocus = inferClientMissionFocus(promptText);
+  const isUsContext = isUsMissionContext(promptText, mapContext);
+  const requiredIds = [];
+  const optionalIds = [];
+  const questions = [];
+  const rationale = [`Planner API unavailable: ${plannerErrorMessage}. Using embedded deterministic source rules.`];
+
+  appendUniqueSourceIds(optionalIds, "esri_world_imagery", "osm_basemap");
+  rationale.push("Esri imagery and OSM basemap stay as lightweight preview/context layers.");
+
+  const needsRouting = textHasAny(promptText, [
+    "route",
+    "routing",
+    "patrol",
+    "walk",
+    "foot",
+    "trail",
+    "road",
+    "evac",
+    "exfil",
+    "nearest",
+    "avoid",
+  ]);
+  const needsTerrain = needsRouting || textHasAny(promptText, [
+    "terrain",
+    "slope",
+    "ridge",
+    "mountain",
+    "valley",
+    "steep",
+    "exposed",
+    "viewshed",
+  ]);
+  const needsWater = textHasAny(promptText, ["water", "stream", "river", "spring", "lake", "potable", "hydrate"]);
+  const needsLandcover = needsRouting || textHasAny(promptText, [
+    "cover",
+    "conceal",
+    "brush",
+    "forest",
+    "canopy",
+    "wetland",
+    "vegetation",
+  ]);
+  const needsHazards = textHasAny(promptText, [
+    "wildfire",
+    "fire",
+    "flood",
+    "storm",
+    "weather",
+    "avalanche",
+    "closure",
+    "hazard",
+  ]);
+  const needsAccess = textHasAny(promptText, [
+    "private",
+    "restricted",
+    "public land",
+    "boundary",
+    "parcel",
+    "permission",
+    "access",
+  ]);
+  const needsSignal = textHasAny(promptText, [
+    "signal",
+    "radio",
+    "comms",
+    "communications",
+    "line of sight",
+    "los",
+    "relay",
+  ]);
+  const needsSar = textHasAny(promptText, ["sar", "search", "rescue", "missing", "lost person"]);
+  const needsCurrentImagery = textHasAny(promptText, [
+    "current",
+    "recent",
+    "latest",
+    "flood",
+    "burn",
+    "changed",
+    "cloud",
+  ]);
+
+  if (needsRouting) {
+    appendUniqueSourceIds(requiredIds, "osm_extract");
+    rationale.push("OSM PBF is required for the local routable graph and feature lookup.");
+  }
+  if (needsTerrain) {
+    appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dep" : "copernicus_dem");
+    appendUniqueSourceIds(requiredIds, "esri_world_elevation");
+    appendUniqueSourceIds(optionalIds, "cesium_world_terrain");
+    rationale.push("Analysis DEM plus queryable Esri terrain fallback is required for slope, exposure, hydrology, and cost surfaces.");
+  }
+  if (needsLandcover) {
+    appendUniqueSourceIds(requiredIds, isUsContext ? "nlcd" : "esa_worldcover");
+    rationale.push("Land cover is included because movement friction, cover, vegetation, or route quality matters.");
+  }
+  if (needsWater) {
+    appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dhp" : "hydrosheds");
+    if (isUsContext) {
+      appendUniqueSourceIds(optionalIds, "nwis");
+    }
+    appendUniqueSourceIds(optionalIds, "sentinel_2");
+    rationale.push("Hydrography is required for water-source and drainage queries.");
+  }
+  if (needsSar) {
+    appendUniqueSourceIds(requiredIds, "osm_extract");
+    appendUniqueSourceIds(optionalIds, isUsContext ? "naip" : "sentinel_2", "noaa_alerts");
+    rationale.push("SAR planning needs access features and usually benefits from detailed imagery and current alerts.");
+  }
+  if (needsHazards) {
+    appendUniqueSourceIds(optionalIds, "noaa_alerts");
+    if (textHasAny(promptText, ["fire", "wildfire"])) {
+      appendUniqueSourceIds(requiredIds, "nasa_firms");
+    }
+    if (textHasAny(promptText, ["flood"])) {
+      appendUniqueSourceIds(requiredIds, isUsContext ? "fema_flood" : "sentinel_1_sar");
+    }
+    rationale.push("Hazard layers are included only because current or baseline risk affects the mission.");
+  }
+  if (needsAccess) {
+    appendUniqueSourceIds(requiredIds, isUsContext ? "pad_us" : "parcels_boundaries");
+    if (isUsContext) {
+      appendUniqueSourceIds(optionalIds, "parcels_boundaries");
+    }
+    rationale.push("Access and boundary layers are included because restricted or legal movement matters.");
+  }
+  if (needsSignal) {
+    appendUniqueSourceIds(requiredIds, "viewshed_surfaces");
+    appendUniqueSourceIds(optionalIds, isUsContext ? "fcc_towers" : "osm_towers", "osm_towers");
+    if (!needsTerrain) {
+      appendUniqueSourceIds(requiredIds, isUsContext ? "usgs_3dep" : "copernicus_dem");
+      appendUniqueSourceIds(requiredIds, "esri_world_elevation");
+    }
+    rationale.push("Signal planning requires DEM-derived viewsheds plus tower or high-ground candidates.");
+  }
+  if (needsCurrentImagery && !needsWater && !needsHazards) {
+    appendUniqueSourceIds(optionalIds, "sentinel_2");
+    if (isUsContext) {
+      appendUniqueSourceIds(optionalIds, "naip");
+    }
+    rationale.push("Recent imagery is optional unless recent conditions drive the mission.");
+  }
+
+  if (!mapContext?.location_confirmed) {
+    questions.push(
+      "Move the map to the mission AO with search, KML/KMZ import, or AO drawing and confirm that view before final source selection.",
+    );
+  }
+
+  if (!requiredIds.length) {
+    questions.push(
+      "Which mission outcome must the database answer first: routing, water lookup, SAR sectors, signal planning, hazards, or access control?",
+    );
+    rationale.push("No analytical source family was identified yet, so the package remains in preview mode.");
+  }
+  if (needsRouting && !textHasAny(promptText, ["foot", "vehicle", "atv", "convoy", "boat", "drone"])) {
+    questions.push("Should movement be optimized for foot, vehicle, ATV, boat, drone, or mixed movement?");
+  }
+  if (needsWater) {
+    questions.push("Do you only need mapped water features, or confidence in current and potable water availability?");
+  }
+  if (needsHazards) {
+    questions.push("Which hazards must be current at package time versus treated as cached baseline risk?");
+  }
+  if (needsSignal) {
+    questions.push("What antenna height and radio role should viewshed or relay analysis assume?");
+  }
+  if (needsAccess) {
+    questions.push("Should the package enforce legal or restricted access boundaries, or only support terrain movement?");
+  }
+  if (!mapContext?.selected_area && !mapContext?.location_confirmed) {
+    questions.push("Is this AO inside the U.S. or outside it?");
+  }
+
+  const selectedIds = [];
+  const previewIds = optionalIds.filter((sourceId) => ["esri_world_imagery", "osm_basemap"].includes(sourceId));
+  appendUniqueSourceIds(selectedIds, ...requiredIds, ...previewIds);
+  const missionSummary = missionText.length > 220 ? `${missionText.slice(0, 217)}...` : missionText;
+
+  return {
+    mission_focus: missionFocus,
+    mission_summary: missionSummary,
+    required_source_ids: requiredIds,
+    optional_source_ids: optionalIds.filter((sourceId) => !requiredIds.includes(sourceId)),
+    selected_source_ids: selectedIds,
+    sources: selectedIds.map((sourceId) => findSourceById(sourceId)).filter(Boolean),
+    clarifying_questions: questions.slice(0, 3),
+    rationale: rationale.slice(0, 5),
+    package_name_suggestion: `tera-${sanitizePackageSlug(missionFocus)}`,
+  };
+}
+
+function applySourceRecommendation(data, missionText, mode = "server", statusMessage = "") {
+  mergeSourcesIntoCatalog(data.sources);
+  state.sourceInference = data;
+  state.lastMissionText = missionText;
+  state.selectedSourceIds = new Set(data.selected_source_ids || []);
+  state.sourceConfirmed = false;
+  state.workflowStageIndex = data.clarifying_questions?.length ? 1 : 2;
+  state.packagePlan = null;
+  state.sourcePlannerFallback = mode === "fallback";
+  state.sourcePlannerMessage = statusMessage;
+  hidePackageOutput();
+
+  if (!els.packageNameInput.value.trim() && data.package_name_suggestion) {
+    els.packageNameInput.value = data.package_name_suggestion;
+  }
+
+  els.inferredMission.textContent = data.mission_summary || missionText;
+  setChip(
+    els.packageModeChip,
+    mode === "fallback" ? "Planner fallback" : data.mission_focus || "Planned",
+    mode === "fallback" ? "warn" : "good",
+  );
+  renderSourceList();
+
+  const questionText = data.clarifying_questions?.length
+    ? ` Next questions: ${data.clarifying_questions.join(" ")}`
+    : "";
+  const fallbackText = mode === "fallback"
+    ? ` Browser fallback used because the planner API is unavailable (${statusMessage}).`
+    : "";
+  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Answer the dialogue questions to broaden or narrow the package.${questionText}`;
+  updateWorkflowPanel();
+}
+
+function formatSourceNameList(sourceIds) {
+  const names = (sourceIds || []).map((sourceId) => findSourceById(sourceId)?.name || sourceId);
+  return names.length ? names.join(", ") : "none";
+}
+
+function buildDeterministicAdvisorResponse(recommendation, mapContext) {
+  const required = formatSourceNameList(recommendation?.required_source_ids || []);
+  const optional = formatSourceNameList(recommendation?.optional_source_ids || []);
+  const selected = formatSourceNameList(recommendation?.selected_source_ids || []);
+  const rationale = (recommendation?.rationale || [])
+    .slice(0, 4)
+    .map((item) => `- ${item}`)
+    .join("\n") || "- The planner could not infer a stronger source rationale yet.";
+  const questions = (recommendation?.clarifying_questions || [])
+    .slice(0, 3)
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n") || "No additional question is required before reviewing the selected source families.";
+  const mapFocus = mapContext?.location_confirmed
+    ? `Confirmed map focus: **${mapContext.location_focus_label || "selected AO"}**.`
+    : "Map focus is not confirmed. Use the search bar, KML/KMZ import, or AO rectangle before finalizing the package.";
+
+  return [
+    "### Mission Read",
+    recommendation?.mission_summary || "Mission description captured.",
+    "",
+    "### Working Source Recommendation",
+    `- **Required:** ${required}`,
+    `- **Optional enhancers:** ${optional}`,
+    `- **Currently selected:** ${selected}`,
+    "",
+    "### Why These Sources",
+    rationale,
+    "",
+    "### Scope Check",
+    questions,
+    "",
+    "### Map Location",
+    mapFocus,
+  ].join("\n");
 }
 
 function updateSourceCount() {
   const selectedCount = state.selectedSourceIds.size;
   const total = state.dataSources.length;
   if (!hasMissionInference()) {
-    els.sourceCount.textContent = total
-      ? "Awaiting mission description"
-      : "Source catalog not loaded";
+    if (state.sourceCatalogFallback) {
+      els.sourceCount.textContent = "Fallback source catalog ready";
+    } else {
+      els.sourceCount.textContent = total
+        ? "Awaiting mission description"
+        : "Source catalog unavailable";
+    }
   } else {
     els.sourceCount.textContent = selectedCount
       ? `${selectedCount} selected from ${total} available sources`
@@ -533,7 +1960,7 @@ function renderSourceList() {
   if (!state.dataSources.length) {
     const empty = document.createElement("div");
     empty.className = "source-empty";
-    empty.textContent = "No source catalog loaded.";
+    empty.textContent = "Source catalog unavailable. The browser planner will fall back if the server route is not ready.";
     els.sourceList.appendChild(empty);
     updateSourceCount();
     return;
@@ -543,7 +1970,7 @@ function renderSourceList() {
   if (!visibleSources.length) {
     const empty = document.createElement("div");
     empty.className = "source-empty";
-    empty.textContent = "Send a mission description in chat. TERA will infer a compact source list here.";
+    empty.textContent = "Send a mission description in chat. TERA will recommend a compact source list here.";
     els.sourceList.appendChild(empty);
     updateSourceCount();
     return;
@@ -616,12 +2043,16 @@ async function loadDataSources() {
     const data = await fetchJson("/api/data-sources");
     state.dataSources = Array.isArray(data.sources) ? data.sources : [];
     state.primarySourceIds = Array.isArray(data.primary_streams) ? data.primary_streams : [];
+    state.sourceCatalogFallback = false;
+    state.sourceCatalogMessage = "";
     state.selectedSourceIds = new Set();
+    if (!state.dataSources.length) {
+      throw new Error("empty catalog response");
+    }
     renderSourceList();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    state.dataSources = [];
-    els.packageStatus.textContent = `Source catalog failed: ${message}`;
+    const message = getErrorMessage(error);
+    useFallbackSourceCatalog(message);
     renderSourceList();
   }
 }
@@ -630,6 +2061,9 @@ function buildMapContext() {
   const context = {
     imagery_source: els.imageryStatus.textContent || null,
     terrain_source: els.terrainStatus.textContent || null,
+    location_focus_label: state.mapFocusLabel || null,
+    location_focus_source: state.mapFocusSource || null,
+    location_confirmed: Boolean(state.mapLocationConfirmed || state.selectedArea),
   };
 
   if (state.selectedArea) {
@@ -670,7 +2104,7 @@ function buildSourceContext() {
   const inference = state.sourceInference;
   const packageSummary = state.packagePlan
     ? `${state.packagePlan.package_name}: ${sourceNames.length} sources, manifest ${state.packagePlan.package_id}`
-    : `${sourceNames.length} sources inferred from chat for ${inference?.mission_focus || "mission-data-package"}`;
+    : `${sourceNames.length} sources planned from chat for ${inference?.mission_focus || "mission-data-package"}`;
 
   return {
     mission_focus: inference?.mission_focus || "mission-data-package",
@@ -709,7 +2143,7 @@ function resetPlannerWorkflow() {
   setChip(els.packageModeChip, "Awaiting mission");
   hidePackageOutput();
   renderSourceList();
-  els.packageStatus.textContent = "No sources selected yet. Send a mission description to infer the needed package.";
+  els.packageStatus.textContent = "No sources selected yet. Send a mission description to plan the needed package.";
   updateWorkflowPanel();
 }
 
@@ -730,7 +2164,7 @@ function clearChat() {
   state.chatCount = 0;
   appendMessage(
     "assistant",
-    "Source planner ready. Describe the mission in chat. I will work through the source package as a short question-driven dialogue.",
+    "Source planner ready. Describe the mission and move the map to the mission area with search, KML/KMZ import, or AO selection. I will keep the source-scope dialogue short.",
   );
 }
 
@@ -822,13 +2256,15 @@ function updateCameraText() {
   state.cameraText = formatPoint(lat, lon, height);
   els.cameraPosition.textContent = state.cameraText;
   updateMapInstruments();
+  updateCenterGrid();
 }
 
 async function loadRuntimeConfig() {
   state.config = await fetchJson("/api/config");
   const hasToken = Boolean(state.config.cesium_ion_token);
   setChip(els.tokenChip, hasToken ? "Cesium token detected" : "Cesium token missing", hasToken ? "good" : "warn");
-  setChip(els.ollamaChip, `Default model: ${state.config.default_model}`, "good");
+  els.claudeModelSelect.value = state.config.claude_default_model || els.claudeModelSelect.value;
+  setModelProviderButton(`Default model: ${state.config.default_model}`, "warn");
   state.imageryMode = "esri";
   state.terrainMode = hasToken ? "cesium-world" : "ellipsoid";
   els.imagerySelect.value = state.imageryMode;
@@ -839,8 +2275,25 @@ async function loadModels() {
   els.modelsStatus.textContent = "Checking Ollama...";
   try {
     const data = await fetchJson("/api/models");
+    state.localModelAvailable = Boolean(data.online);
+    state.localModelDetail = data.detail || "";
     els.modelsList.innerHTML = "";
     els.modelSelect.innerHTML = "";
+
+    if (!data.online) {
+      const option = document.createElement("option");
+      option.value = data.default_model || state.config.default_model;
+      option.textContent = `${option.value} (offline)`;
+      els.modelSelect.appendChild(option);
+      syncModelSelects(els.modelSelect, els.topModelSelect);
+
+      const item = document.createElement("li");
+      item.textContent = data.detail || "Local model is not reachable. Deterministic planner remains available.";
+      els.modelsList.appendChild(item);
+      els.modelsStatus.textContent = "Local model offline; deterministic planner active";
+      applyProviderVisibility();
+      return;
+    }
 
     if (!Array.isArray(data.models) || data.models.length === 0) {
       const option = document.createElement("option");
@@ -852,6 +2305,8 @@ async function loadModels() {
       item.textContent = "No installed models reported by Ollama.";
       els.modelsList.appendChild(item);
       els.modelsStatus.textContent = `Default model: ${data.default_model}`;
+      syncModelSelects(els.modelSelect, els.topModelSelect);
+      applyProviderVisibility();
       return;
     }
 
@@ -876,14 +2331,23 @@ async function loadModels() {
     }
 
     els.modelsStatus.textContent = `${data.models.length} model${data.models.length === 1 ? "" : "s"} available`;
+    syncModelSelects(els.modelSelect, els.topModelSelect);
+    applyProviderVisibility();
   } catch (error) {
-    els.modelSelect.innerHTML = "<option value=''>Could not load models</option>";
+    state.localModelAvailable = false;
+    state.localModelDetail = error instanceof Error ? error.message : String(error);
+    els.modelSelect.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = state.config?.default_model || "";
+    option.textContent = option.value ? `${option.value} (offline)` : "Local model offline";
+    els.modelSelect.appendChild(option);
     els.modelsList.innerHTML = "";
     const item = document.createElement("li");
-    item.textContent = error instanceof Error ? error.message : String(error);
+    item.textContent = state.localModelDetail;
     els.modelsList.appendChild(item);
-    els.modelsStatus.textContent = "Model lookup failed";
-    setChip(els.ollamaChip, "Ollama lookup failed", "bad");
+    els.modelsStatus.textContent = "Local model offline; deterministic planner active";
+    syncModelSelects(els.modelSelect, els.topModelSelect);
+    applyProviderVisibility();
   }
 }
 
@@ -893,57 +2357,45 @@ function makeMapContextAppendix() {
   }
 
   const lines = [];
+  if (state.mapLocationConfirmed) {
+    lines.push(`Mission map focus: ${state.mapFocusLabel} (${state.mapFocusSource}).`);
+  } else {
+    lines.push("Mission map focus is not confirmed; ask the planner to use map search, KML/KMZ import, or AO drawing before final source confirmation.");
+  }
   if (state.selectedArea) {
     lines.push(
       `Selected AO west ${state.selectedArea.west.toFixed(6)}, south ${state.selectedArea.south.toFixed(6)}, east ${state.selectedArea.east.toFixed(6)}, north ${state.selectedArea.north.toFixed(6)}.`,
     );
   }
-  if (!lines.length) {
-    return "";
-  }
   return `\n\nAO context:\n${lines.join("\n")}`;
 }
 
-async function inferSourcesFromMission(missionText, mapContext) {
-  els.packageStatus.textContent = "Inferring compact source package from mission text...";
-  setChip(els.packageModeChip, "Inferring", "warn");
+async function planSourcesFromMission(missionText, mapContext) {
+  els.packageStatus.textContent = "Planning compact source package from mission text...";
+  setChip(els.packageModeChip, "Planning", "warn");
 
-  const data = await fetchJson("/api/source-package/recommend", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mission_text: missionText,
-      map_context: mapContext,
-    }),
-  });
-
-  state.sourceInference = data;
-  state.lastMissionText = missionText;
-  state.selectedSourceIds = new Set(data.selected_source_ids || []);
-  state.sourceConfirmed = false;
-  state.workflowStageIndex = data.clarifying_questions?.length ? 1 : 2;
-  state.packagePlan = null;
-  hidePackageOutput();
-
-  if (!els.packageNameInput.value.trim() && data.package_name_suggestion) {
-    els.packageNameInput.value = data.package_name_suggestion;
+  try {
+    const data = await fetchJson("/api/source-package/recommend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mission_text: missionText,
+        map_context: mapContext,
+      }),
+    });
+    applySourceRecommendation(data, missionText, "server");
+    return data;
+  } catch (error) {
+    const message = getErrorMessage(error);
+    const data = buildClientSourceRecommendation(missionText, mapContext, message);
+    applySourceRecommendation(data, missionText, "fallback", message);
+    return data;
   }
-
-  els.inferredMission.textContent = data.mission_summary || missionText;
-  setChip(els.packageModeChip, data.mission_focus || "Inferred", "good");
-  renderSourceList();
-
-  const questionText = data.clarifying_questions?.length
-    ? ` Next questions: ${data.clarifying_questions.join(" ")}`
-    : "";
-  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources. Answer the dialogue questions to broaden or narrow the package.${questionText}`;
-  updateWorkflowPanel();
-  return data;
 }
 
 async function buildSourcePackage() {
   if (!state.sourceConfirmed) {
-    els.packageStatus.textContent = "Confirm the inferred source list before building the manifest.";
+    els.packageStatus.textContent = "Confirm the recommended source list before building the manifest.";
     setWorkflowStage(2);
     return;
   }
@@ -984,7 +2436,6 @@ async function buildSourcePackage() {
 async function submitPrompt(event) {
   event.preventDefault();
   els.submitBtn.disabled = true;
-  els.requestStatus.textContent = "Connecting to local model...";
 
   const prompt = els.promptInput.value.trim();
   if (!prompt) {
@@ -993,25 +2444,41 @@ async function submitPrompt(event) {
     return;
   }
   const system = els.systemInput.value.trim();
-  const model = els.modelSelect.value.trim();
+  const provider = state.llmProvider;
+  const model = provider === "claude"
+    ? els.claudeModelSelect.value.trim()
+    : els.modelSelect.value.trim();
+  els.requestStatus.textContent = provider === "claude"
+    ? "Connecting to Claude API..."
+    : "Connecting to local model...";
+  if (provider === "claude" && !state.claudeApiKey) {
+    els.submitBtn.disabled = false;
+    els.requestStatus.textContent = "Claude API key required";
+    els.providerStatus.textContent = "Enter a Claude API key to use cloud inference";
+    setModelProviderMenuOpen(true);
+    els.claudeApiKeyInput.focus();
+    return;
+  }
   const agentProfile = els.agentProfileSelect.value;
   const finalPrompt = `${prompt}${makeMapContextAppendix()}`;
   const mapContext = els.includeMapContext.checked ? buildMapContext() : null;
-  els.requestStatus.textContent = "Inferring source package...";
+  els.requestStatus.textContent = "Planning source package...";
   try {
-    await inferSourcesFromMission(prompt, mapContext);
+    await planSourcesFromMission(prompt, mapContext);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    els.packageStatus.textContent = `Source inference failed: ${message}`;
-    setChip(els.packageModeChip, "Inference failed", "bad");
+    const message = getErrorMessage(error);
+    els.packageStatus.textContent = `Source planner unavailable: ${message}`;
+    setChip(els.packageModeChip, "Planner unavailable", "bad");
   }
   const sourceContext = buildSourceContext();
+  const sourceRecommendation = state.sourceInference;
 
   appendMessage(
     "user",
     finalPrompt,
     [
       model ? `model: ${model}` : "default model",
+      `provider: ${provider}`,
       `profile: ${agentProfile}`,
       `focus: ${sourceContext.mission_focus}`,
       `${sourceContext.selected_source_ids.length} sources`,
@@ -1019,6 +2486,18 @@ async function submitPrompt(event) {
   );
 
   let activeAssistantMessage = null;
+
+  if (provider === "ollama" && !state.localModelAvailable) {
+    appendMessage(
+      "assistant",
+      buildDeterministicAdvisorResponse(sourceRecommendation, mapContext),
+      "deterministic source advisor | local model offline",
+    );
+    els.requestStatus.textContent = "Local model offline; deterministic advisor response shown";
+    els.promptInput.value = "";
+    els.submitBtn.disabled = false;
+    return;
+  }
 
   try {
     const assistantMessage = appendMessage(
@@ -1035,6 +2514,9 @@ async function submitPrompt(event) {
         prompt: finalPrompt,
         system: system || null,
         model: model || null,
+        llm_provider: provider,
+        cloud_model: provider === "claude" ? model : null,
+        cloud_api_key: provider === "claude" ? state.claudeApiKey || null : null,
         agent_profile: agentProfile,
         map_context: mapContext,
         source_context: sourceContext,
@@ -1059,8 +2541,9 @@ async function submitPrompt(event) {
       }
       if (eventData.type === "token") {
         streamedText += eventData.text || "";
+        const shouldFollowStream = isChatPinnedToBottom();
         setMessageBody(assistantMessage, streamedText);
-        els.chatLog.scrollTop = els.chatLog.scrollHeight;
+        maybeScrollChatToBottom(shouldFollowStream);
         return;
       }
       if (eventData.type === "status") {
@@ -1076,20 +2559,38 @@ async function submitPrompt(event) {
     });
 
     if (!streamedText.trim()) {
-      throw new Error("The local model returned an empty streamed response.");
+      throw new Error(provider === "claude"
+        ? "Claude returned an empty response."
+        : "The local model returned an empty streamed response.");
     }
 
     els.requestStatus.textContent = `Completed with ${resolvedModel}`;
     els.promptInput.value = "";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (activeAssistantMessage) {
-      setMessageBody(activeAssistantMessage, message);
-      ensureMessageMeta(activeAssistantMessage, "request failed");
+    if (provider === "ollama") {
+      state.localModelAvailable = false;
+      state.localModelDetail = message;
+      applyProviderVisibility();
     } else {
-      appendMessage("assistant", message, "request failed");
+      els.providerStatus.textContent = `Claude request failed: ${message}`;
     }
-    els.requestStatus.textContent = "Request failed";
+    const fallbackMeta = provider === "claude"
+      ? "deterministic fallback | Claude request failed"
+      : "deterministic fallback | local model unavailable";
+    if (activeAssistantMessage) {
+      setMessageBody(activeAssistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
+      ensureMessageMeta(activeAssistantMessage, fallbackMeta);
+    } else {
+      appendMessage(
+        "assistant",
+        buildDeterministicAdvisorResponse(sourceRecommendation, mapContext),
+        fallbackMeta,
+      );
+    }
+    els.requestStatus.textContent = provider === "claude"
+      ? `Claude request failed; deterministic advisor response shown (${message})`
+      : `Local model unavailable; deterministic advisor response shown (${message})`;
   } finally {
     els.submitBtn.disabled = false;
   }
@@ -1337,6 +2838,7 @@ function setAreaEntityBounds(bounds) {
 
 function setSelectedArea(bounds) {
   state.selectedArea = bounds;
+  markMapLocationFocused("Drawn AO rectangle", "drawn-aoi");
   setAreaEntityBounds(bounds);
   updateSelectedArea();
   hidePackageOutput();
@@ -1353,13 +2855,16 @@ function clearSelectedArea() {
   }
   state.areaEntity = null;
   clearAreaHandles();
+  if (state.mapFocusSource === "drawn-aoi") {
+    clearMapLocationFocus();
+  }
   updateSelectedArea();
   hidePackageOutput();
 }
 
 function setAreaSelectMode(active) {
   if (active && !state.sourceConfirmed) {
-    els.packageStatus.textContent = "Confirm the inferred source list before drawing AO coverage.";
+    els.packageStatus.textContent = "Confirm the recommended source list before drawing AO coverage.";
     setWorkflowStage(2);
     return;
   }
@@ -1504,6 +3009,11 @@ async function buildViewer() {
     state.viewer.destroy();
     state.areaEntity = null;
     state.areaHandleEntities = [];
+    state.overlayDataSource = null;
+    state.overlayFileName = "";
+    if (state.mapFocusSource === "kml-kmz-import") {
+      clearMapLocationFocus();
+    }
   }
 
   if (state.config.cesium_ion_token) {
@@ -1571,7 +3081,87 @@ function resetView() {
       state.config.default_height_m,
     ),
     duration: 1.1,
+    complete: updateCameraText,
   });
+  clearMapLocationFocus();
+  els.requestStatus.textContent = "Map reset. Search or import the mission location before source confirmation.";
+}
+
+function isSupportedOverlayFile(file) {
+  return /\.(kml|kmz)$/i.test(file.name);
+}
+
+async function removeCurrentOverlay() {
+  if (!state.viewer || !state.overlayDataSource) {
+    state.overlayDataSource = null;
+    state.overlayFileName = "";
+    if (state.mapFocusSource === "kml-kmz-import") {
+      clearMapLocationFocus();
+    }
+    return;
+  }
+
+  await state.viewer.dataSources.remove(state.overlayDataSource, true);
+  state.overlayDataSource = null;
+  state.overlayFileName = "";
+  if (state.mapFocusSource === "kml-kmz-import") {
+    clearMapLocationFocus();
+  }
+}
+
+async function importMapOverlay(file) {
+  if (!file) {
+    return;
+  }
+  if (!isSupportedOverlayFile(file)) {
+    els.requestStatus.textContent = "Overlay import failed: choose a .kml or .kmz file.";
+    return;
+  }
+  if (!state.viewer) {
+    els.requestStatus.textContent = "Overlay import unavailable until the map is ready.";
+    return;
+  }
+
+  els.importOverlayBtn.disabled = true;
+  els.requestStatus.textContent = `Loading overlay: ${file.name}`;
+
+  try {
+    await removeCurrentOverlay();
+    const dataSource = await Cesium.KmlDataSource.load(file, {
+      camera: state.viewer.scene.camera,
+      canvas: state.viewer.scene.canvas,
+      clampToGround: true,
+      sourceUri: file.name,
+    });
+    state.overlayDataSource = await state.viewer.dataSources.add(dataSource);
+    state.overlayFileName = file.name;
+    markMapLocationFocused(file.name, "kml-kmz-import");
+
+    if (state.overlayDataSource.entities.values.length) {
+      await state.viewer.flyTo(state.overlayDataSource, { duration: 1.1 });
+      updateCameraText();
+      els.requestStatus.textContent = `Overlay loaded: ${file.name}`;
+    } else {
+      els.requestStatus.textContent = `Overlay loaded with no visible features: ${file.name}`;
+    }
+    state.viewer.scene.requestRender();
+  } catch (error) {
+    const message = getErrorMessage(error);
+    await removeCurrentOverlay();
+    els.requestStatus.textContent = `Overlay import failed: ${message}`;
+  } finally {
+    els.importOverlayBtn.disabled = false;
+    els.overlayFileInput.value = "";
+  }
+}
+
+function requestOverlayFile() {
+  els.overlayFileInput.click();
+}
+
+function onOverlayFileSelected(event) {
+  const [file] = Array.from(event.target.files || []);
+  void importMapOverlay(file);
 }
 
 function togglePanel() {
@@ -1585,32 +3175,63 @@ function toggleSettingsMenu() {
 }
 
 function onDocumentPointerDown(event) {
-  if (els.settingsMenu.classList.contains("hidden")) {
-    return;
+  if (
+    !els.locationSearchSuggestions.classList.contains("hidden")
+    && !els.locationSearchPanel.contains(event.target)
+  ) {
+    setLocationSearchOpen(false);
   }
-  if (els.settingsMenu.contains(event.target) || els.settingsToggleBtn.contains(event.target)) {
-    return;
+
+  if (
+    !els.modelProviderMenu.classList.contains("hidden")
+    && !els.modelProviderMenu.contains(event.target)
+    && !els.modelProviderBtn.contains(event.target)
+  ) {
+    setModelProviderMenuOpen(false);
   }
-  setSettingsMenuOpen(false);
+
+  if (!els.settingsMenu.classList.contains("hidden")) {
+    if (els.settingsMenu.contains(event.target) || els.settingsToggleBtn.contains(event.target)) {
+      return;
+    }
+    setSettingsMenuOpen(false);
+  }
+}
+
+function clearDocumentSelection() {
+  const selection = window.getSelection?.();
+  if (selection && !selection.isCollapsed) {
+    selection.removeAllRanges();
+  }
 }
 
 function onResizerPointerDown(event) {
   if (state.panelCollapsed) {
     return;
   }
+  event.preventDefault();
+  clearDocumentSelection();
   state.dragState = {
     startX: event.clientX,
     startWidth: state.panelWidth,
+    pointerId: event.pointerId,
   };
+  document.body.classList.add("is-resizing-panel");
   els.panelResizer.classList.add("is-dragging");
+  if (typeof els.panelResizer.setPointerCapture === "function") {
+    els.panelResizer.setPointerCapture(event.pointerId);
+  }
   window.addEventListener("pointermove", onResizerPointerMove);
   window.addEventListener("pointerup", onResizerPointerUp, { once: true });
+  window.addEventListener("pointercancel", onResizerPointerUp, { once: true });
 }
 
 function onResizerPointerMove(event) {
   if (!state.dragState) {
     return;
   }
+  event.preventDefault();
+  clearDocumentSelection();
   const delta = state.dragState.startX - event.clientX;
   state.panelWidth = clampPanelWidth(state.dragState.startWidth + delta);
   els.workspaceShell.style.setProperty("--panel-width", `${state.panelWidth}px`);
@@ -1620,10 +3241,24 @@ function onResizerPointerMove(event) {
   }
 }
 
-function onResizerPointerUp() {
+function onResizerPointerUp(event) {
+  if (event) {
+    event.preventDefault();
+  }
+  if (
+    state.dragState
+    && typeof els.panelResizer.releasePointerCapture === "function"
+    && els.panelResizer.hasPointerCapture?.(state.dragState.pointerId)
+  ) {
+    els.panelResizer.releasePointerCapture(state.dragState.pointerId);
+  }
   state.dragState = null;
+  document.body.classList.remove("is-resizing-panel");
   els.panelResizer.classList.remove("is-dragging");
   window.removeEventListener("pointermove", onResizerPointerMove);
+  window.removeEventListener("pointerup", onResizerPointerUp);
+  window.removeEventListener("pointercancel", onResizerPointerUp);
+  clearDocumentSelection();
 }
 
 function onPromptInputKeyDown(event) {
@@ -1676,6 +3311,33 @@ async function init() {
     els.clearChatBtn.addEventListener("click", clearChat);
     els.resetViewBtn.addEventListener("click", resetView);
     els.mapResetViewBtn.addEventListener("click", resetView);
+    els.importOverlayBtn.addEventListener("click", requestOverlayFile);
+    els.overlayFileInput.addEventListener("change", onOverlayFileSelected);
+    els.locationSearchForm.addEventListener("submit", onLocationSearchSubmit);
+    els.locationSearchInput.addEventListener("input", onLocationSearchInput);
+    els.locationSearchInput.addEventListener("keydown", onLocationSearchKeyDown);
+    els.modelProviderBtn.addEventListener("click", () => {
+      setModelProviderMenuOpen(els.modelProviderMenu.classList.contains("hidden"));
+    });
+    els.providerSelect.addEventListener("change", (event) => {
+      state.llmProvider = event.target.value;
+      applyProviderVisibility();
+    });
+    els.topModelSelect.addEventListener("change", () => {
+      els.modelSelect.value = els.topModelSelect.value;
+      applyProviderVisibility();
+    });
+    els.modelSelect.addEventListener("change", () => {
+      els.topModelSelect.value = els.modelSelect.value;
+      applyProviderVisibility();
+    });
+    els.claudeModelSelect.addEventListener("change", applyProviderVisibility);
+    els.claudeApiKeyInput.addEventListener("input", () => {
+      state.claudeApiKey = els.claudeApiKeyInput.value.trim();
+      applyProviderVisibility();
+    });
+    els.saveProviderBtn.addEventListener("click", applyProviderSelection);
+    els.clearClaudeKeyBtn.addEventListener("click", clearClaudeKey);
     els.panelToggleBtn.addEventListener("click", togglePanel);
     els.settingsToggleBtn.addEventListener("click", toggleSettingsMenu);
     els.panelResizer.addEventListener("pointerdown", onResizerPointerDown);
