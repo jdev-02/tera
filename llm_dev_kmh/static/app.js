@@ -43,6 +43,8 @@ const state = {
   serverClaudeKeyAvailable: false,
   llmProvider: sessionStorage.getItem("teraLlmProvider") || "auto",
   claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
+  atakAgentActive: false,
+  atakMirrorTimer: null,
   selectedSourceIds: new Set(),
   packagePlan: null,
   packageStatusTimer: null,
@@ -75,6 +77,11 @@ const els = {
   resetViewBtn: document.getElementById("resetViewBtn"),
   importOverlayBtn: document.getElementById("importOverlayBtn"),
   overlayFileInput: document.getElementById("overlayFileInput"),
+  atakAgentBtn: document.getElementById("atakAgentBtn"),
+  atakMirrorPanel: document.getElementById("atakMirrorPanel"),
+  atakMirrorStatus: document.getElementById("atakMirrorStatus"),
+  atakMirrorLog: document.getElementById("atakMirrorLog"),
+  atakMirrorRefreshBtn: document.getElementById("atakMirrorRefreshBtn"),
   panelToggleBtn: document.getElementById("panelToggleBtn"),
   panelResizer: document.getElementById("panelResizer"),
   workspaceShell: document.querySelector(".workspace-shell"),
@@ -694,6 +701,11 @@ function setChip(node, text, tone = "") {
 function setModelProviderButton(text, tone = "") {
   els.modelProviderBtn.textContent = text;
   els.modelProviderBtn.className = `chip chip-button${tone ? ` ${tone}` : ""}`;
+}
+
+function setAtakAgentButton(text, tone = "") {
+  els.atakAgentBtn.textContent = text;
+  els.atakAgentBtn.className = `chip chip-button${tone ? ` ${tone}` : ""}`;
 }
 
 function getErrorMessage(error) {
@@ -2841,6 +2853,140 @@ async function loadModels() {
   }
 }
 
+function ensureLocalModelOption(model) {
+  if (!model) {
+    return;
+  }
+  for (const select of [els.modelSelect, els.topModelSelect]) {
+    const exists = Array.from(select.options).some((option) => option.value === model);
+    if (!exists) {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = `${model} (ATAK local)`;
+      select.appendChild(option);
+    }
+    select.value = model;
+  }
+}
+
+function renderAtakMirror(events = []) {
+  els.atakMirrorLog.innerHTML = "";
+  if (!events.length) {
+    const empty = document.createElement("div");
+    empty.className = "atak-mirror-empty";
+    empty.textContent = "No ATAK plugin conversation mirrored yet.";
+    els.atakMirrorLog.appendChild(empty);
+    return;
+  }
+
+  for (const event of events) {
+    const item = document.createElement("article");
+    item.className = `atak-mirror-event ${event.role === "operator" ? "inbound" : "outbound"}`;
+
+    const header = document.createElement("div");
+    header.className = "atak-mirror-event-header";
+    const source = document.createElement("span");
+    source.textContent = `${event.source || "jetson"} / ${event.role || "event"}`;
+    const stamp = document.createElement("time");
+    stamp.dateTime = event.timestamp || "";
+    stamp.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "";
+    header.append(source, stamp);
+
+    const body = document.createElement("div");
+    body.className = "atak-mirror-event-body";
+    body.textContent = event.text || "";
+
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    meta.textContent = [
+      event.direction,
+      event.provider,
+      event.model,
+    ].filter(Boolean).join(" | ");
+
+    item.append(header, body);
+    if (meta.textContent) {
+      item.appendChild(meta);
+    }
+    els.atakMirrorLog.appendChild(item);
+  }
+  els.atakMirrorLog.scrollTop = els.atakMirrorLog.scrollHeight;
+}
+
+function applyAtakAgentStatus(data) {
+  state.atakAgentActive = Boolean(data.active);
+  els.atakMirrorPanel.classList.toggle("hidden", !state.atakAgentActive);
+  if (state.atakAgentActive) {
+    setAtakAgentButton("ATAK Local: active", data.status === "active" ? "good" : "warn");
+    els.atakMirrorStatus.textContent = data.detail || `Mirroring ${data.model || "local model"}`;
+    renderAtakMirror(data.events || []);
+  } else {
+    setAtakAgentButton("ATAK Local", "");
+  }
+}
+
+async function refreshAtakMirror() {
+  const data = await fetchJson("/api/jetson/atak-agent/mirror");
+  applyAtakAgentStatus(data);
+  return data;
+}
+
+function startAtakMirrorPolling() {
+  if (state.atakMirrorTimer) {
+    window.clearInterval(state.atakMirrorTimer);
+  }
+  state.atakMirrorTimer = window.setInterval(() => {
+    refreshAtakMirror().catch((error) => {
+      els.atakMirrorStatus.textContent = getErrorMessage(error);
+      setAtakAgentButton("ATAK mirror error", "bad");
+    });
+  }, 2000);
+}
+
+async function loadAtakAgentStatus() {
+  try {
+    const data = await fetchJson("/api/jetson/atak-agent/status");
+    applyAtakAgentStatus(data);
+    if (data.active) {
+      ensureLocalModelOption(data.model);
+      startAtakMirrorPolling();
+    }
+  } catch (error) {
+    setAtakAgentButton("ATAK status unknown", "warn");
+  }
+}
+
+async function activateAtakLocalAgent() {
+  els.atakAgentBtn.disabled = true;
+  setAtakAgentButton("Switching ATAK...", "warn");
+  try {
+    const data = await fetchJson("/api/jetson/atak-agent/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemma3:4b",
+        agent_profile: "tera-atak-live",
+      }),
+    });
+
+    ensureLocalModelOption(data.model || "gemma3:4b");
+    state.llmProvider = "ollama";
+    sessionStorage.setItem("teraLlmProvider", "ollama");
+    els.providerSelect.value = "ollama";
+    els.agentProfileSelect.value = data.agent_profile || "tera-atak-live";
+    state.localModelAvailable = true;
+    els.modelsStatus.textContent = `ATAK local model: ${data.model}`;
+    applyProviderVisibility();
+    applyAtakAgentStatus(data);
+    startAtakMirrorPolling();
+  } catch (error) {
+    setAtakAgentButton("ATAK switch failed", "bad");
+    els.requestStatus.textContent = getErrorMessage(error);
+  } finally {
+    els.atakAgentBtn.disabled = false;
+  }
+}
+
 function makeMapContextAppendix() {
   if (!els.includeMapContext.checked) {
     return "";
@@ -4257,6 +4403,12 @@ async function init() {
     els.mapModeToggleBtn.addEventListener("click", toggleMapMode);
     els.importOverlayBtn.addEventListener("click", requestOverlayFile);
     els.overlayFileInput.addEventListener("change", onOverlayFileSelected);
+    els.atakAgentBtn.addEventListener("click", activateAtakLocalAgent);
+    els.atakMirrorRefreshBtn.addEventListener("click", () => {
+      refreshAtakMirror().catch((error) => {
+        els.atakMirrorStatus.textContent = getErrorMessage(error);
+      });
+    });
     els.locationSearchForm.addEventListener("submit", onLocationSearchSubmit);
     els.locationSearchInput.addEventListener("input", onLocationSearchInput);
     els.locationSearchInput.addEventListener("keydown", onLocationSearchKeyDown);
@@ -4335,6 +4487,7 @@ async function init() {
 
   await loadRuntimeConfig();
   await loadModels();
+  await loadAtakAgentStatus();
   await loadDataSources();
   await loadJetsonStorage();
   await buildViewer();

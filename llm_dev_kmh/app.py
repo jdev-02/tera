@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import zipfile
@@ -80,7 +81,7 @@ _load_dotenv_file(BASE_DIR.parent / ".env")
 _load_dotenv_file(BASE_DIR.parent / ".env.local")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma2:2b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 ANTHROPIC_API_URL = os.getenv(
     "ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages"
 )
@@ -88,14 +89,14 @@ ANTHROPIC_MODELS_URL = os.getenv(
     "ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models"
 )
 ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "Claude Sonnet 4.6")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 CLAUDE_MODEL_ALIASES = {
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-sonnet-4.6": "claude-sonnet-4-6",
+    "claude sonnet 4.6": "claude-sonnet-4-6",
+    "sonnet 4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
     "claude-sonnet-4-0": "claude-sonnet-4-20250514",
-    "claude-sonnet-4-6": "claude-sonnet-4-20250514",
-    "claude-sonnet-4.6": "claude-sonnet-4-20250514",
-    "claude sonnet 4.6": "claude-sonnet-4-20250514",
-    "sonnet 4.6": "claude-sonnet-4-20250514",
     "claude-sonnet-4": "claude-sonnet-4-20250514",
     "claude sonnet 4": "claude-sonnet-4-20250514",
     "claude-opus-4-1": "claude-opus-4-1-20250805",
@@ -118,6 +119,7 @@ CLAUDE_MODEL_ALIASES = {
     "claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
 }
 CLAUDE_MODEL_FALLBACKS = (
+    "claude-sonnet-4-6",
     "claude-sonnet-4-20250514",
     "claude-opus-4-1-20250805",
     "claude-opus-4-20250514",
@@ -170,9 +172,24 @@ ESRI_TOKEN_CONFIGURED = bool(
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
+TERA_ATAK_MODEL = os.getenv("TERA_ATAK_MODEL", "gemma3:4b")
+TERA_ATAK_AGENT_PROFILE = os.getenv("TERA_ATAK_AGENT_PROFILE", "tera-atak-live")
+TERA_ATAK_DEVICE_URL = os.getenv("TERA_ATAK_DEVICE_URL", "").strip()
+TERA_ATAK_ACTIVATE_COMMAND = os.getenv("TERA_ATAK_AGENT_COMMAND", "").strip()
 ACTIVE_OLLAMA_BASE_URL: str | None = None
 ACTIVE_OLLAMA_MODEL: str | None = None
 ACTIVE_CLAUDE_MODELS: list[str] | None = None
+JETSON_ATAK_PROCESS: subprocess.Popen[bytes] | None = None
+JETSON_ATAK_MODE: dict[str, Any] = {
+    "active": False,
+    "status": "idle",
+    "detail": "ATAK local agent mode is idle.",
+    "model": TERA_ATAK_MODEL,
+    "provider": "ollama",
+    "agent_profile": TERA_ATAK_AGENT_PROFILE,
+    "atak_device_url": TERA_ATAK_DEVICE_URL or None,
+    "activated_at": None,
+}
 
 app = FastAPI(title="TERA Source Planner", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -226,6 +243,35 @@ class RuntimeConfigResponse(BaseModel):
     default_lat: float
     default_lon: float
     default_height_m: float
+
+
+class JetsonAtakActivateRequest(BaseModel):
+    model: str | None = Field(default=None, max_length=200)
+    atak_device_url: str | None = Field(default=None, max_length=500)
+    agent_profile: str | None = Field(default=None, max_length=80)
+
+
+class JetsonAtakMirrorEvent(BaseModel):
+    id: str
+    timestamp: str
+    source: str
+    role: str
+    text: str
+    model: str | None = None
+    provider: str | None = None
+    direction: str | None = None
+
+
+class JetsonAtakModeResponse(BaseModel):
+    active: bool
+    status: str
+    detail: str
+    model: str
+    provider: str
+    agent_profile: str
+    atak_device_url: str | None = None
+    mirror_url: str
+    events: list[JetsonAtakMirrorEvent] = Field(default_factory=list)
 
 
 class LocationSuggestion(BaseModel):
@@ -2462,6 +2508,131 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _runtime_dir() -> Path:
+    configured = os.getenv("TERA_RUNTIME_DIR", "").strip()
+    runtime_dir = Path(configured).expanduser().resolve() if configured else (
+        _offline_package_root() / "runtime"
+    )
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir
+
+
+def _atak_mirror_log_path() -> Path:
+    configured = os.getenv("TERA_ATAK_MIRROR_LOG", "").strip()
+    return Path(configured).expanduser().resolve() if configured else (
+        _runtime_dir() / "atak_agent_mirror.jsonl"
+    )
+
+
+def _append_atak_mirror_event(
+    *,
+    source: str,
+    role: str,
+    text: str,
+    model: str | None = None,
+    provider: str | None = None,
+    direction: str | None = None,
+) -> JetsonAtakMirrorEvent:
+    event = JetsonAtakMirrorEvent(
+        id=str(uuid4()),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        source=source,
+        role=role,
+        text=text,
+        model=model,
+        provider=provider,
+        direction=direction,
+    )
+    path = _atak_mirror_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(event.model_dump_json() + "\n")
+    return event
+
+
+def _read_atak_mirror_events(limit: int = 80) -> list[JetsonAtakMirrorEvent]:
+    path = _atak_mirror_log_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    events: list[JetsonAtakMirrorEvent] = []
+    for line in lines[-max(1, min(limit, 200)) :]:
+        try:
+            events.append(JetsonAtakMirrorEvent.model_validate_json(line))
+        except ValueError:
+            continue
+    return events
+
+
+def _request_is_atak_mirror_candidate(request: PromptRequest) -> bool:
+    profile = (request.agent_profile or "").strip().lower()
+    return bool(JETSON_ATAK_MODE.get("active")) or "atak" in profile
+
+
+def _mirror_source_for_request(request: PromptRequest) -> str:
+    profile = (request.agent_profile or "").strip().lower()
+    if "atak" in profile:
+        return "atak-plugin"
+    return "web-planner"
+
+
+def _jetson_atak_response(detail: str | None = None) -> JetsonAtakModeResponse:
+    return JetsonAtakModeResponse(
+        active=bool(JETSON_ATAK_MODE.get("active")),
+        status=str(JETSON_ATAK_MODE.get("status") or "idle"),
+        detail=detail or str(JETSON_ATAK_MODE.get("detail") or ""),
+        model=str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
+        provider=str(JETSON_ATAK_MODE.get("provider") or "ollama"),
+        agent_profile=str(
+            JETSON_ATAK_MODE.get("agent_profile") or TERA_ATAK_AGENT_PROFILE
+        ),
+        atak_device_url=JETSON_ATAK_MODE.get("atak_device_url"),
+        mirror_url="/api/jetson/atak-agent/mirror",
+        events=_read_atak_mirror_events(),
+    )
+
+
+def _start_jetson_atak_command(
+    *, model: str, agent_profile: str, atak_device_url: str | None
+) -> str | None:
+    global JETSON_ATAK_PROCESS
+    if not TERA_ATAK_ACTIVATE_COMMAND:
+        return None
+    if JETSON_ATAK_PROCESS and JETSON_ATAK_PROCESS.poll() is None:
+        return f"activation command already running with pid {JETSON_ATAK_PROCESS.pid}"
+
+    args = shlex.split(TERA_ATAK_ACTIVATE_COMMAND)
+    if not args:
+        return None
+
+    command_log_path = _runtime_dir() / "atak_agent_command.log"
+    env = os.environ.copy()
+    env.update(
+        {
+            "OLLAMA_MODEL": model,
+            "TERA_GEMMA_MODEL": model,
+            "TERA_PHASE": "3",
+            "TERA_DEVICE_PROFILE": "austere",
+            "TERA_ATAK_AGENT_PROFILE": agent_profile,
+            "TERA_ATAK_MIRROR_LOG": str(_atak_mirror_log_path()),
+        }
+    )
+    if atak_device_url:
+        env["TERA_ATAK_DEVICE_URL"] = atak_device_url
+
+    with command_log_path.open("ab") as command_log:
+        JETSON_ATAK_PROCESS = subprocess.Popen(
+            args,
+            cwd=str(BASE_DIR.parent),
+            env=env,
+            stdout=command_log,
+            stderr=subprocess.STDOUT,
+        )
+    return f"activation command started with pid {JETSON_ATAK_PROCESS.pid}"
 
 
 def _manifest_path(package_id: str) -> Path:
@@ -5538,6 +5709,8 @@ async def _resolve_ollama_model(request: PromptRequest) -> str:
     requested_model = (request.model or "").strip()
     if requested_model:
         return requested_model
+    if JETSON_ATAK_MODE.get("active"):
+        return str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL)
     if ACTIVE_OLLAMA_MODEL:
         return ACTIVE_OLLAMA_MODEL
 
@@ -5574,6 +5747,8 @@ def _request_llm_provider(request: PromptRequest) -> str:
 
 def _provider_sequence(request: PromptRequest) -> list[str]:
     provider = _request_llm_provider(request)
+    if JETSON_ATAK_MODE.get("active") and provider in {"auto", "ollama"}:
+        return ["ollama"]
     if provider == "ollama":
         return ["ollama"]
     return ["claude", "ollama"]
@@ -6480,6 +6655,90 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "ollama_base_url": OLLAMA_BASE_URL}
 
 
+@app.get("/api/jetson/atak-agent/status", response_model=JetsonAtakModeResponse)
+async def jetson_atak_agent_status() -> JetsonAtakModeResponse:
+    return _jetson_atak_response()
+
+
+@app.get("/api/jetson/atak-agent/mirror", response_model=JetsonAtakModeResponse)
+async def jetson_atak_agent_mirror() -> JetsonAtakModeResponse:
+    return _jetson_atak_response()
+
+
+@app.post("/api/jetson/atak-agent/activate", response_model=JetsonAtakModeResponse)
+async def activate_jetson_atak_agent(
+    request: JetsonAtakActivateRequest,
+) -> JetsonAtakModeResponse:
+    global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
+    model = (request.model or TERA_ATAK_MODEL).strip() or TERA_ATAK_MODEL
+    agent_profile = (
+        request.agent_profile or TERA_ATAK_AGENT_PROFILE
+    ).strip() or TERA_ATAK_AGENT_PROFILE
+    atak_device_url = (request.atak_device_url or TERA_ATAK_DEVICE_URL).strip() or None
+
+    ACTIVE_OLLAMA_MODEL = model
+    JETSON_ATAK_MODE.update(
+        {
+            "active": True,
+            "status": "activating",
+            "detail": "Switching Jetson runtime to local Ollama ATAK agent mode.",
+            "model": model,
+            "provider": "ollama",
+            "agent_profile": agent_profile,
+            "atak_device_url": atak_device_url,
+            "activated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    model_detail = f"Configured local Ollama model {model}."
+    for base_url in _ollama_base_url_candidates():
+        try:
+            models = await _fetch_ollama_models_from(base_url)
+        except httpx.HTTPError:
+            continue
+        ACTIVE_OLLAMA_BASE_URL = base_url
+        if model in models:
+            model_detail = f"Ollama model {model} detected at {base_url}."
+            break
+        model_detail = (
+            f"Ollama is reachable at {base_url}, but {model} was not reported by /api/tags."
+        )
+        break
+
+    command_detail = _start_jetson_atak_command(
+        model=model,
+        agent_profile=agent_profile,
+        atak_device_url=atak_device_url,
+    )
+    details = [model_detail]
+    if command_detail:
+        details.append(command_detail)
+    else:
+        details.append(
+            "No TERA_ATAK_AGENT_COMMAND configured; this server will handle ATAK-profile "
+            "prompt calls directly."
+        )
+    if atak_device_url:
+        details.append(f"ATAK device target configured: {atak_device_url}.")
+    else:
+        details.append("Waiting for the ATAK plugin to POST prompts to this Jetson.")
+
+    detail = " ".join(details)
+    JETSON_ATAK_MODE.update({"status": "active", "detail": detail})
+    _append_atak_mirror_event(
+        source="jetson",
+        role="system",
+        text=(
+            f"Local TERA ATAK agent active on Ollama {model}. "
+            "Mirroring ATAK-profile prompt traffic in this panel."
+        ),
+        model=model,
+        provider="ollama",
+        direction="mode-switch",
+    )
+    return _jetson_atak_response(detail)
+
+
 @app.get("/api/config", response_model=RuntimeConfigResponse)
 async def runtime_config() -> RuntimeConfigResponse:
     return RuntimeConfigResponse(
@@ -7295,11 +7554,42 @@ async def create_package_cot(
 
 @app.post("/api/prompt", response_model=PromptResponse)
 async def prompt_ollama(request: PromptRequest) -> PromptResponse:
-    return await _post_prompt_with_fallback(request)
+    mirror = _request_is_atak_mirror_candidate(request)
+    if mirror:
+        _append_atak_mirror_event(
+            source=_mirror_source_for_request(request),
+            role="operator",
+            text=request.prompt,
+            model=request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
+            provider=_request_llm_provider(request),
+            direction="inbound",
+        )
+    result = await _post_prompt_with_fallback(request)
+    if mirror:
+        _append_atak_mirror_event(
+            source="tera-agent",
+            role="assistant",
+            text=result.response,
+            model=result.model,
+            provider=result.provider,
+            direction="outbound",
+        )
+    return result
 
 
 @app.post("/api/prompt/stream")
 async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
+    mirror = _request_is_atak_mirror_candidate(request)
+    if mirror:
+        _append_atak_mirror_event(
+            source=_mirror_source_for_request(request),
+            role="operator",
+            text=request.prompt,
+            model=request.model or str(JETSON_ATAK_MODE.get("model") or TERA_ATAK_MODEL),
+            provider=_request_llm_provider(request),
+            direction="inbound",
+        )
+
     async def event_stream():
         global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
         failures: list[str] = []
@@ -7348,6 +7638,15 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                         "provider": "claude",
                     }
                 )
+                if mirror:
+                    _append_atak_mirror_event(
+                        source="tera-agent",
+                        role="assistant",
+                        text=result.response,
+                        model=result.model,
+                        provider="claude",
+                        direction="outbound",
+                    )
                 yield _sse_event(
                     {
                         "type": "done",
@@ -7371,6 +7670,7 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
             )
             errors: list[str] = []
             for base_url in _ollama_base_url_candidates():
+                streamed_text = ""
                 try:
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         async with client.stream(
@@ -7404,6 +7704,7 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
 
                                 text = str(chunk.get("response", ""))
                                 if text:
+                                    streamed_text += text
                                     yield _sse_event(
                                         {
                                             "type": "token",
@@ -7414,6 +7715,15 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                     )
 
                                 if chunk.get("done"):
+                                    if mirror:
+                                        _append_atak_mirror_event(
+                                            source="tera-agent",
+                                            role="assistant",
+                                            text=streamed_text,
+                                            model=model,
+                                            provider="ollama",
+                                            direction="outbound",
+                                        )
                                     yield _sse_event(
                                         {
                                             "type": "done",
