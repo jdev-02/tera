@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App -->
-    <string name="app_name">TERA.ai</string>
+    <string name="app_name">TERA</string>
     <!-- description -->
     <string name="app_desc">Tactical Edge Route Agent</string>
     <string name="endpoint_hint">http://127.0.0.1:8000/plan</string>
@@ -29,8 +29,8 @@
     <string name="mic_button">VOICE</string>
     <string name="tts_button">TEXT TO SPEECH</string>
     <string name="info_button">INFO</string>
-    <string name="tera_info_title">About TERA.ai</string>
-    <string name="tera_info_message">TERA.ai is a tactical edge assistant for chat-driven route planning and field decision support. Enter a host, send a message, and review agent responses in the chat transcript.</string>
+    <string name="tera_info_title">About TERA</string>
+    <string name="tera_info_message">TERA is a tactical edge assistant for chat-driven route planning and field decision support. Enter a host, send a message, and review agent responses in the chat transcript.</string>
     <string name="status_sending">Sending message...</string>
     <string name="status_listening">Listening...</string>
 
