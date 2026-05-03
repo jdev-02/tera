@@ -19,7 +19,7 @@ YELLOW=$'\033[33m'; RED=$'\033[31m'; RESET=$'\033[0m'
 say()   { printf "%s\n" "$*"; }
 title() { printf "\n${BOLD}${CYAN}== %s ==${RESET}\n" "$*"; }
 ok()    { printf "  ${GREEN}[ok]${RESET}   %s\n" "$*"; }
-wan()  { printf "  ${YELLOW}[!!]${RESET}   %s\n" "$*"; }
+warn() { printf "  ${YELLOW}[!!]${RESET}   %s\n" "$*"; }
 err()   { printf "  ${RED}[xx]${RESET}   %s\n" "$*" >&2; }
 ask()   { printf "${BOLD}%s${RESET} " "$*"; }
 
@@ -113,35 +113,35 @@ for cand in python3.11 python3 python; do
         PY_CMD="$cand"; break
     fi
 done
-if [[ -n "$PY_CMD" ]]; then ok "Python 3.11 found ($PY_CMD)"; else wan "Python 3.11 not found (try: brew install python@3.11)"; PYOK=0; fi
+if [[ -n "$PY_CMD" ]]; then ok "Python 3.11 found ($PY_CMD)"; else warn "Python 3.11 not found (try: brew install python@3.11)"; PYOK=0; fi
 
 if command -v gh >/dev/null; then
     if gh auth status >/dev/null 2>&1; then ok "gh authed"
-    else wan "gh installed but not authed (run: gh auth login)"; GHOK=0
+    else warn "gh installed but not authed (run: gh auth login)"; GHOK=0
     fi
 else
-    wan "gh not installed (brew install gh, then: gh auth login)"; GHOK=0
+    warn "gh not installed (brew install gh, then: gh auth login)"; GHOK=0
 fi
 
 if command -v lefthook >/dev/null; then
     if [[ -f .git/hooks/pre-push ]]; then ok "lefthook installed (pre-push hook present)"
-    else wan "lefthook found but hooks not installed in this repo (run: lefthook install)"; HOOKOK=0
+    else warn "lefthook found but hooks not installed in this repo (run: lefthook install)"; HOOKOK=0
     fi
 else
-    wan "lefthook not installed (brew install lefthook && lefthook install)"; HOOKOK=0
+    warn "lefthook not installed (brew install lefthook && lefthook install)"; HOOKOK=0
 fi
 
 VENV_OK=1
 if [[ -d .venv ]]; then
-    if [[ -f .venv/bin/uvicon ]]; then ok ".venv exists and looks healthy"
-    else wan ".venv exists but seems incomplete (run: make install)"; VENV_OK=0
+    if [[ -f .venv/bin/uvicorn ]]; then ok ".venv exists and looks healthy"
+    else warn ".venv exists but seems incomplete (run: make install)"; VENV_OK=0
     fi
 else
-    wan ".venv missing. RUN THIS NOW: make install"
+    warn ".venv missing. RUN THIS NOW: make install"
     VENV_OK=0
 fi
 
-if [[ -f .env ]]; then ok ".env exists"; else wan ".env missing. RUN THIS NOW: cp .env.example .env"; fi
+if [[ -f .env ]]; then ok ".env exists"; else warn ".env missing. RUN THIS NOW: cp .env.example .env"; fi
 
 # Lane-specific install hint
 case "$NAME" in
@@ -149,17 +149,17 @@ case "$NAME" in
         if [[ -f .venv/bin/python ]] && .venv/bin/python -c "import oqs" 2>/dev/null; then
             ok "liboqs-python installed (you can run sign-bench)"
         else
-            wan "liboqs-python NOT installed yet. When you start issue #12 (signer), RUN THESE:"
-            wan "    1) brew install liboqs    (macOS)   OR   bash infra/install_liboqs.sh   (Linux)"
-            wan "    2) make install-crypto"
-            wan "(You do NOT need this for issues #2 or #3. Start with those.)"
+            warn "liboqs-python NOT installed yet. When you start issue #12 (signer), RUN THESE:"
+            warn "    1) brew install liboqs    (macOS)   OR   bash infra/install_liboqs.sh   (Linux)"
+            warn "    2) make install-crypto"
+            warn "(You do NOT need this for issues #2 or #3. Start with those.)"
         fi
         ;;
     jon)
         if [[ -f .venv/bin/python ]] && .venv/bin/python -c "import faster_whisper" 2>/dev/null; then
             ok "voice deps installed"
         else
-            wan "voice deps NOT installed yet. When you start voice work (issues #18, #26), RUN: make install-voice"
+            warn "voice deps NOT installed yet. When you start voice work (issues #18, #26), RUN: make install-voice"
         fi
         ;;
 esac
@@ -179,11 +179,11 @@ for i in data:
     if [[ -n "$ISSUES" ]]; then
         echo "$ISSUES"
     else
-        wan "no issues found with labels for your lane"
-        wan "run 'bash scripts/seed-issues.sh' first (Jon / Satriyo do this once at kickoff)"
+        warn "no issues found with labels for your lane"
+        warn "run 'bash scripts/seed-issues.sh' first (Jon / Satriyo do this once at kickoff)"
     fi
 else
-    wan "skipping issue pull (gh not authed)"
+    warn "skipping issue pull (gh not authed)"
 fi
 
 # --- Generate Codex prompt --------------------------------------------------

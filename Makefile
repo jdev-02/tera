@@ -96,7 +96,7 @@ ci: lint test security ## Full CI gate (must pass before push)
 	@echo "[OK] make ci passed"
 
 run: install ## Start the agent service locally (stub)
-	$(VENV_BIN)/uvicon$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
+	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
 
 tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
 	@bash infra/security_demo_monitors.sh
