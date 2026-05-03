@@ -11,7 +11,6 @@ On a dev laptop this is usually < 1 ms (Ed25519 fallback) or < 2 ms (ML-DSA-65).
 
 from __future__ import annotations
 
-import json
 import sys
 import time
 from pathlib import Path
