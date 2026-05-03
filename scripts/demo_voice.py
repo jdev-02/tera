@@ -160,6 +160,27 @@ def _run_bakeoff() -> int:
     print(f"fx:       {intensities}")
     print()
 
+    # On-disk size of each voice model -- feeds Jetson budget tracking (#56).
+    print("voice model sizes (issue #56 budget):")
+    total_mb = 0.0
+    for voice in voices:
+        size_mb = (models_dir / f"{voice}.onnx").stat().st_size / (1024 * 1024)
+        total_mb += size_mb
+        print(f"  {voice:<32s} {size_mb:>6.1f} MB")
+    print(f"  {'TOTAL':<32s} {total_mb:>6.1f} MB on disk")
+    print()
+
+    # Print on-disk size of each voice model -- feeds the Jetson budget
+    # tracking in issue #56.
+    print("voice model sizes (issue #56 budget):")
+    total_mb = 0.0
+    for voice in voices:
+        size_mb = (models_dir / f"{voice}.onnx").stat().st_size / (1024 * 1024)
+        total_mb += size_mb
+        print(f"  {voice:<32s} {size_mb:>6.1f} MB")
+    print(f"  {'TOTAL':<32s} {total_mb:>6.1f} MB on disk")
+    print()
+
     for voice in voices:
         model_path = models_dir / f"{voice}.onnx"
         client = PiperClient(model_path=model_path, length_scale=1.15)
