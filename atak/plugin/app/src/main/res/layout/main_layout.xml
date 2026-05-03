@@ -3,14 +3,14 @@
 
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="match_parent"
     android:layout_marginLeft="3dp"
     android:layout_marginRight="3dp"
     android:orientation="vertical"
     android:paddingLeft="11dp"
     android:paddingTop="9dp"
     android:paddingRight="11dp"
-    android:paddingBottom="11dp">
+    android:paddingBottom="6dp">
 
         <TextView
             android:layout_width="match_parent"
@@ -72,17 +72,17 @@
         <ScrollView
             android:id="@+id/tera_chat_scroll"
             android:layout_width="match_parent"
-            android:layout_height="108dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:fadeScrollbars="false">
 
-            <TextView
+            <LinearLayout
                 android:id="@+id/tera_chat_transcript"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:orientation="vertical"
                 android:gravity="top|start"
-                android:padding="5dp"
-                android:text="@string/chat_empty"
-                android:textSize="13sp" />
+                android:padding="5dp" />
 
         </ScrollView>
 
