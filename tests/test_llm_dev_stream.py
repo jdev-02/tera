@@ -475,6 +475,23 @@ def test_chat_panel_hides_advisor_header_and_status_noise() -> None:
     assert "Deterministic advisor response shown (" not in js
 
 
+def test_advisor_settings_panel_opens_inside_chat_column() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+
+    settings_button_index = html.index('id="settingsToggleBtn"')
+    settings_panel_index = html.index('id="settingsMenu"')
+    chat_log_index = html.index('id="chatLog"')
+    settings_css = css[css.index(".settings-menu {") : css.index(".settings-menu-header {")]
+
+    assert settings_button_index < settings_panel_index < chat_log_index
+    assert ".settings-menu {\n  width: 100%;" in css
+    assert "max-height: min(44vh, 520px);" in css
+    assert "overflow-y: auto;" in css
+    assert "position: absolute;" not in settings_css
+    assert "top:" not in settings_css
+
+
 def test_map_stream_status_does_not_confuse_esri_tiles_with_missing_ion() -> None:
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
     app_source = Path(kmh_app.__file__).read_text(encoding="utf-8")
