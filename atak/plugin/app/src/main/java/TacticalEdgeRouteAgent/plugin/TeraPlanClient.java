@@ -15,8 +15,19 @@ final class TeraPlanClient {
         void onComplete(boolean ok, String message);
     }
 
+    private static final class VerifyResult {
+        final boolean ok;
+        final String message;
+
+        VerifyResult(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
+        }
+    }
+
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final int TIMEOUT_MS = 15000;
+    private static final String REJECTED_SIGNATURE = "Route signature invalid - REJECTED";
 
     private TeraPlanClient() {
     }
@@ -67,8 +78,19 @@ final class TeraPlanClient {
                     result.append(line).append('\n');
                 }
 
-                callback.onComplete(code >= 200 && code < 300,
-                        "HTTP " + code + "\n" + truncate(result.toString()));
+                String responseBody = result.toString();
+                if (code >= 200 && code < 300) {
+                    VerifyResult verify = verifyPlanResponse(endpoint, responseBody);
+                    if (!verify.ok) {
+                        callback.onComplete(false, REJECTED_SIGNATURE + "\n" + verify.message);
+                        return;
+                    }
+                    callback.onComplete(true,
+                            "HTTP " + code + "\nSignature verified\n"
+                                    + truncate(responseBody));
+                } else {
+                    callback.onComplete(false, "HTTP " + code + "\n" + truncate(responseBody));
+                }
             } catch (Exception e) {
                 callback.onComplete(false, e.getClass().getSimpleName() + ": " + e.getMessage());
             } finally {
@@ -77,6 +99,63 @@ final class TeraPlanClient {
                 }
             }
         });
+    }
+
+    private static VerifyResult verifyPlanResponse(String planEndpoint, String planResponseJson) {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(verifyEndpointFor(planEndpoint));
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(TIMEOUT_MS);
+            connection.setReadTimeout(TIMEOUT_MS);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+
+            byte[] body = planResponseJson.getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+
+            int code = connection.getResponseCode();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    code >= 200 && code < 300
+                            ? connection.getInputStream()
+                            : connection.getErrorStream(),
+                    StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                result.append(line).append('\n');
+            }
+
+            String verifyBody = result.toString();
+            boolean valid = code >= 200 && code < 300 && jsonBooleanTrue(verifyBody, "valid");
+            return new VerifyResult(valid, "HTTP " + code + "\n" + truncate(verifyBody));
+        } catch (Exception e) {
+            return new VerifyResult(false, e.getClass().getSimpleName() + ": " + e.getMessage());
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static String verifyEndpointFor(String planEndpoint) {
+        String endpoint = planEndpoint.trim();
+        if (endpoint.endsWith("/plan")) {
+            return endpoint.substring(0, endpoint.length() - "/plan".length()) + "/plan/verify";
+        }
+        if (endpoint.endsWith("/plan/")) {
+            return endpoint.substring(0, endpoint.length() - "/plan/".length()) + "/plan/verify";
+        }
+        return endpoint.endsWith("/") ? endpoint + "plan/verify" : endpoint + "/plan/verify";
+    }
+
+    private static boolean jsonBooleanTrue(String json, String fieldName) {
+        String compact = json.replaceAll("\\s+", "");
+        return compact.contains("\"" + fieldName + "\":true");
     }
 
     private static String escapeJson(String value) {
