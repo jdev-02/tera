@@ -11,6 +11,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -211,7 +212,10 @@ public class TERAPlugin implements IPlugin {
         hostEdit.setText(hostState.toString());
         hostEdit.setTextSize(13);
         hostEdit.setTextColor(Color.WHITE);
-        hostEdit.setHintTextColor(Color.GRAY);
+        hostEdit.setHintTextColor(pluginContext.getResources().getColor(R.color.muted_gray));
+        hostEdit.setBackgroundResource(R.drawable.chat_icon_button_bg);
+        hostEdit.setPadding(dp(10), 0, dp(10), 0);
+        hostEdit.setSelectAllOnFocus(false);
 
         LinearLayout actions = new LinearLayout(hostButton.getContext());
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -239,6 +243,8 @@ public class TERAPlugin implements IPlugin {
         PopupWindow popup = new PopupWindow(content, dp(280),
                 LinearLayout.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
+        popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
+        popup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
 
         apply.setOnClickListener(v -> {
