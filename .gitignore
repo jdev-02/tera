@@ -28,6 +28,8 @@ crypto/keys/
 models/*.gguf
 models/*.bin
 models/*.safetensors
+models/piper/*.onnx
+models/piper/*.onnx.json
 data/runtime/
 data/cache/
 data/extracts/*.osm.pbf
