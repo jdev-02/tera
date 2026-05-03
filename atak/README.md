@@ -34,6 +34,100 @@ Default model:
 gemma3:4b
 ```
 
+## Demo-Day Playbook (after the first deploy)
+
+Once the Jetson has been set up once via the steps below, the **only command Kyle
+needs each time the team merges new work to `main`** is:
+
+```bash
+ssh digitaltrident1@<JETSON_WIFI_IP>
+cd /home/digitaltrident1/Documents/tera_folder/tera
+make jetson-compose-refresh
+```
+
+That single target (added in PR #92) does the full pull / rebuild / smoke-test
+cycle:
+
+1. Refuses if the local repo has uncommitted changes (no surprises).
+2. Switches to `main` and pulls the latest (uses `make catchup` if available).
+3. Stops `tera-planner.service` if it was previously installed via the native
+   systemd path, freeing port 8080 for Docker.
+4. Runs `docker compose down --remove-orphans && docker compose up --build -d
+   llm-dev-kmh` against the repo-root `docker-compose.yml`.
+5. Polls `http://127.0.0.1:8080/` for up to 30 seconds and greps the response
+   for the ATAK Local button (`id="atakAgentBtn"`) to confirm the new build is
+   live.
+
+Verify from the demo laptop on the same WiFi:
+
+```bash
+curl -s http://<JETSON_WIFI_IP>:8080/ | grep atakAgentBtn
+```
+
+Tail logs if anything looks off:
+
+```bash
+docker compose logs -f llm-dev-kmh
+```
+
+### Customization knobs (env vars, all defaulted)
+
+| Var                  | Default                                                | When to override                                       |
+| -------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
+| `REPO_DIR`           | `/home/digitaltrident1/Documents/tera_folder/tera`     | Different clone path on the Jetson                     |
+| `REMOTE`             | `origin`                                               | Mirrored fork                                          |
+| `BRANCH`             | `main`                                                 | Deploying a feature branch for a one-off demo          |
+| `COMPOSE_FILE`       | `docker-compose.yml`                                   | Alternate compose file                                 |
+| `SERVICE_NAME`       | `llm-dev-kmh`                                          | Different compose service                              |
+| `PLANNER_URL`        | `http://127.0.0.1:8080`                                | Healthcheck on a different port                        |
+
+Example one-off demo deploy:
+
+```bash
+BRANCH=khick/source-planner make jetson-compose-refresh
+```
+
+### `.env` Kyle populates once on the Jetson
+
+The compose service reads runtime config from the repo-root `.env`. Put this
+there before the first `make jetson-compose-refresh`:
+
+```env
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=gemma3:4b
+ANTHROPIC_API_KEY=sk-ant-...
+CLAUDE_MODEL=claude-sonnet-4-6
+CESIUM_ION_TOKEN=...
+TERA_ATAK_MODEL=gemma3:4b
+TERA_ATAK_AGENT_PROFILE=tera-atak-live
+TERA_ATAK_DEVICE_URL=
+TERA_ATAK_AGENT_COMMAND=
+REQUEST_TIMEOUT_S=120
+```
+
+### Two refresh paths — pick one as the steady-state runner
+
+The repo ships two ways to keep the Jetson current. **Don't run both at the same
+time** — they will fight over port 8080.
+
+| Path                              | Trigger                                | Where the planner runs                                       |
+| --------------------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| **Native systemd autoupdate**     | `make jetson-autoupdate-install` once; `tera-planner-update.timer` fires every 1 min | `tera-planner.service` runs the FastAPI app **directly on the Jetson** via `deploy/scripts/run_tera_planner.sh` |
+| **Docker compose refresh** (new)  | Manual `make jetson-compose-refresh`   | `docker compose up llm-dev-kmh` runs the planner **inside a container**, isolated from the host Python env |
+
+For the hackathon demo we recommend the **Docker compose** path: reproducible,
+isolated, and the smoke-test prints a green line when the new build is live.
+
+The Docker path's refresh script is smart enough to `systemctl stop
+tera-planner.service` before bringing up the container, so a one-time switch
+from the native path to the Docker path is automatic. Going the other direction
+(disabling Docker, re-enabling systemd) is manual:
+
+```bash
+docker compose -f docker-compose.yml down --remove-orphans
+sudo systemctl start tera-planner.service
+```
+
 ## Jetson Setup
 
 Run these on the Jetson.
