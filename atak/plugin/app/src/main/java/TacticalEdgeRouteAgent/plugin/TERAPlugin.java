@@ -176,7 +176,6 @@ public class TERAPlugin implements IPlugin {
 
             TeraPlanClient.requestPlan(
                     endpoint,
-                    host.isEmpty() ? "local" : host,
                     message,
                     new TeraPlanClient.Callback() {
                         @Override
@@ -413,6 +412,9 @@ public class TERAPlugin implements IPlugin {
 
         String endpoint = host.trim();
         if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
+            if (!endpoint.contains(":")) {
+                endpoint = endpoint + ":8080";
+            }
             endpoint = "http://" + endpoint;
         }
         if (!endpoint.endsWith(pluginContext.getString(R.string.endpoint_path))) {
