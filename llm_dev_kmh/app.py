@@ -6096,6 +6096,21 @@ _DECIMAL_COORD_PAIR_RE = re.compile(
     r"(?<![A-Za-z0-9_.-])(?P<a>[+-]?\d{1,3}\.\d{3,})\s*,\s*"
     r"(?P<b>[+-]?\d{1,3}\.\d{3,})(?![A-Za-z0-9_-])"
 )
+_FULL_MGRS_RE = re.compile(
+    r"^(?P<zone>[1-9]|[1-5]\d|60)(?P<band>[C-HJ-NP-X])\s+"
+    r"(?P<square>[A-HJ-NP-Z]{2})\s+"
+    r"(?P<easting>\d{5})\s+(?P<northing>\d{5})$",
+    re.IGNORECASE,
+)
+_MGRS_LABEL_GRID_RE = re.compile(
+    r"\bMGRS\s+(?P<grid>(?:\d{1,3}[C-HJ-NP-X]\s+)?(?:[A-HJ-NP-Z]{2}\s+)?"
+    r"\d{4,10}(?:\s+\d{4,10})?)\b",
+    re.IGNORECASE,
+)
+_BARE_BAD_MGRS_GRID_RE = re.compile(
+    r"\b(?P<grid>\d{1,3}[C-HJ-NP-X]\s+\d{4,10})\b",
+    re.IGNORECASE,
+)
 
 
 def _mgrs_replacement(lat: float, lon: float) -> str:
@@ -6123,8 +6138,68 @@ def _replace_chat_coordinates_with_mgrs(text: str) -> str:
     return _DECIMAL_COORD_PAIR_RE.sub(replace_decimal_pair, text)
 
 
-def _atak_chat_response_text(text: str, tak_cot: TakCotPayload) -> str:
+def _canonical_full_mgrs(candidate: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", candidate.strip().upper())
+    match = _FULL_MGRS_RE.fullmatch(normalized)
+    if not match:
+        return None
+    return (
+        f"{match.group('zone')}{match.group('band')} {match.group('square')} "
+        f"{match.group('easting')} {match.group('northing')}"
+    )
+
+
+def _tak_cot_primary_mgrs(tak_cot: TakCotPayload) -> str | None:
+    if not tak_cot.items:
+        return None
+    item = tak_cot.items[0]
+    if item.item_type == "route" and item.checkpoints:
+        target = item.checkpoints[-1]
+        return _point_mgrs(target.lat, target.lon)
+    return _point_mgrs(item.lat, item.lon)
+
+
+def _map_context_mgrs(map_context: MapContext | None) -> str | None:
+    if map_context is None:
+        return None
+    if map_context.client_location is not None:
+        return _point_mgrs(map_context.client_location.lat, map_context.client_location.lon)
+    if map_context.camera is not None:
+        return _point_mgrs(map_context.camera.lat, map_context.camera.lon)
+    for bounds in (map_context.view_bounds, map_context.selected_area):
+        if bounds and bounds.center_lat is not None and bounds.center_lon is not None:
+            return _point_mgrs(bounds.center_lat, bounds.center_lon)
+    return None
+
+
+def _replace_bad_mgrs_with_real_grid(text: str, fallback_mgrs: str | None) -> str:
+    if not fallback_mgrs:
+        return text
+
+    def replace_labeled(match: re.Match[str]) -> str:
+        canonical = _canonical_full_mgrs(match.group("grid"))
+        if canonical:
+            return f"MGRS {canonical}"
+        return f"MGRS {fallback_mgrs}"
+
+    def replace_bare(match: re.Match[str]) -> str:
+        canonical = _canonical_full_mgrs(match.group("grid"))
+        if canonical:
+            return canonical
+        return f"MGRS {fallback_mgrs}"
+
+    text = _MGRS_LABEL_GRID_RE.sub(replace_labeled, text)
+    return _BARE_BAD_MGRS_GRID_RE.sub(replace_bare, text)
+
+
+def _atak_chat_response_text(
+    text: str,
+    tak_cot: TakCotPayload,
+    map_context: MapContext | None = None,
+) -> str:
     text = _replace_chat_coordinates_with_mgrs(text)
+    fallback_mgrs = _tak_cot_primary_mgrs(tak_cot) or _map_context_mgrs(map_context)
+    text = _replace_bad_mgrs_with_real_grid(text, fallback_mgrs)
     if tak_cot.items and "TAK grid" not in text:
         grid_text = _tak_item_mgrs_text(tak_cot.items[0])
         if grid_text:
@@ -7087,7 +7162,9 @@ def _build_system_prompt(request: PromptRequest) -> str:
             (
                 "- When speaking to the ATAK operator, express every coordinate or grid "
                 "reference in MGRS only. Do not put decimal latitude/longitude in chat; "
-                "those coordinates belong only inside the TAK CoT/KMZ payload."
+                "those coordinates belong only inside the TAK CoT/KMZ payload. Never "
+                "invent, abbreviate, or truncate MGRS. Use exactly this full format "
+                "`11S AB 12345 67890` from real request, map, route, or point coordinates."
             ),
             (
                 "- For follow-up rejection like 'that route does not work' or 'we cannot "
@@ -9251,7 +9328,11 @@ async def prompt_ollama(request: PromptRequest) -> PromptResponse:
     result.tak_cot = _build_tak_cot_payload(request, result.response)
     result.response = _decisive_tak_response_text(result.response, result.tak_cot)
     if "atak" in (request.agent_profile or "").lower():
-        result.response = _atak_chat_response_text(result.response, result.tak_cot)
+        result.response = _atak_chat_response_text(
+            result.response,
+            result.tak_cot,
+            request.map_context,
+        )
     if mirror:
         outbound_text = _response_text_with_tak_cot_summary(
             result.response,
@@ -9355,7 +9436,11 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                 result.tak_cot = _build_tak_cot_payload(request, result.response)
                 mirror_text = _decisive_tak_response_text(result.response, result.tak_cot)
                 if "atak" in (request.agent_profile or "").lower():
-                    mirror_text = _atak_chat_response_text(mirror_text, result.tak_cot)
+                    mirror_text = _atak_chat_response_text(
+                        mirror_text,
+                        result.tak_cot,
+                        request.map_context,
+                    )
                 if mirror:
                     _append_atak_mirror_event(
                         source="tera-agent",
@@ -9453,6 +9538,7 @@ async def prompt_ollama_stream(request: PromptRequest) -> StreamingResponse:
                                         mirror_text = _atak_chat_response_text(
                                             mirror_text,
                                             tak_cot,
+                                            request.map_context,
                                         )
                                     if mirror:
                                         _append_atak_mirror_event(
