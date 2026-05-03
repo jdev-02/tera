@@ -9,7 +9,7 @@
     <string name="host_input_hint">192.168.4.1</string>
     <string name="host_local">local</string>
     <string name="host_popup_title">Jetson IP</string>
-    <string name="host_popup_apply">APPLY</string>
+    <string name="host_popup_connect">CONNECT</string>
     <string name="host_popup_local">USE LOCAL</string>
     <string name="model_selection_label">Model</string>
     <string name="connection_offline">Offline</string>

@@ -18,10 +18,20 @@
       "type": "object",
       "required": ["scheme", "key_id", "value_b64", "signed_at"],
       "properties": {
-        "scheme": { "type": "string", "enum": ["ML-DSA-65", "ML-DSA-44", "ML-DSA-87"] },
+        "scheme": {
+          "type": "string",
+          "enum": ["ML-DSA-65", "ML-DSA-44", "ML-DSA-87", "Ed25519-fallback"]
+        },
         "key_id": { "type": "string", "minLength": 8 },
         "value_b64": { "type": "string", "minLength": 1 },
-        "signed_at": { "type": "string", "format": "date-time" }
+        "signed_at": { "type": "string", "format": "date-time" },
+        "canonicalization": { "type": "string" },
+        "payload_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "payload_json": {
+          "type": "string",
+          "minLength": 2,
+          "description": "Canonical route payload JSON signed by the device key."
+        }
       },
       "additionalProperties": false
     },
@@ -167,6 +177,27 @@
         "route_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
         "device_signature": { "$ref": "#/definitions/Signature" },
         "operator_signature": { "$ref": "#/definitions/OperatorSignature" }
+      },
+      "additionalProperties": false
+    },
+    "PlanVerifyResponse": {
+      "type": "object",
+      "required": ["valid", "reason"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "key_id": {
+          "oneOf": [{ "type": "null" }, { "type": "string" }]
+        },
+        "scheme": {
+          "oneOf": [{ "type": "null" }, { "type": "string" }]
+        },
+        "route_hash": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 64, "maxLength": 64 }
+          ]
+        }
       },
       "additionalProperties": false
     },

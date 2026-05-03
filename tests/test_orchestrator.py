@@ -20,14 +20,17 @@ from agent.orchestrator import (
     _profile_for,
     _route_hash,
     _run_security_pipeline,
+    _sign_response,
     approve_plan,
     plan,
+    verify_plan_response,
 )
 from agent.schemas import (
     Coord,
     OperatorSignature,
     PlanApprovalRequest,
     PlanRequest,
+    PlanResponse,
     Signature,
     Waypoint,
 )
@@ -551,3 +554,65 @@ def test_approve_plan_returns_operator_commit(monkeypatch: pytest.MonkeyPatch) -
     assert response.route_hash == expected_hash
     assert response.operator_signature.approves_route_hash == expected_hash
     assert response.operator_signature.key_id == "OPERATOR-VEGA-001"
+
+
+def _signed_plan_response() -> PlanResponse:
+    route = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-122.3937, 37.7955], [-122.415, 37.803]],
+        },
+        "properties": {"profile": "foot_covered"},
+    }
+    waypoints = [{"lat": 37.803, "lon": -122.415, "label": "HLZ open field"}]
+    rationale = "Routed to HLZ open field, distance 2.1 kilometers, ETA 30 minutes."
+    signature = _sign_response(
+        request_id="verify-test",
+        feature=route,
+        waypoints=waypoints,
+        rationale=rationale,
+        mission_type="tactical_route",
+    )
+    assert signature is not None
+    assert signature.payload_hash
+    assert signature.payload_json
+    return PlanResponse(
+        request_id="verify-test",
+        route=route,
+        waypoints=[Waypoint(**w) for w in waypoints],
+        rationale=rationale,
+        cost_breakdown={"distance_m": 2100.0, "time_s": 1800.0},
+        trust={"trust_status": "trusted"},
+        signature=signature,
+    )
+
+
+def test_verify_plan_response_accepts_signed_response() -> None:
+    response = _signed_plan_response()
+
+    result = verify_plan_response(response)
+
+    assert result.valid is True
+    assert result.route_hash
+    assert result.reason == "Signature valid - route authentic"
+
+
+def test_verify_plan_response_rejects_tampered_route() -> None:
+    response = _signed_plan_response()
+    tampered = response.model_copy(deep=True)
+    tampered.route["geometry"]["coordinates"][-1][0] = -122.5
+
+    result = verify_plan_response(tampered)
+
+    assert result.valid is False
+    assert "route_hash does not match" in result.reason
+
+
+def test_verify_plan_response_rejects_missing_signature() -> None:
+    response = _signed_plan_response().model_copy(update={"signature": None})
+
+    result = verify_plan_response(response)
+
+    assert result.valid is False
+    assert result.reason == "Route signature missing - REJECTED"
