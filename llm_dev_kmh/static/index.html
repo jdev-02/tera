@@ -33,7 +33,8 @@
               <label>
                 Provider
                 <select id="providerSelect">
-                  <option value="ollama" selected>Local Ollama</option>
+                  <option value="auto" selected>Auto: Claude -> Local</option>
+                  <option value="ollama">Local Ollama</option>
                   <option value="claude">Claude API</option>
                 </select>
               </label>
@@ -46,11 +47,9 @@
               <label id="providerClaudeModelRow" class="hidden">
                 Claude model
                 <select id="claudeModelSelect">
-                  <option value="claude-sonnet-4-20250514" selected>Claude Sonnet 4</option>
-                  <option value="claude-opus-4-7">Claude Opus 4.7</option>
-                  <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                  <option value="claude-sonnet-4-20250514" selected>Claude Sonnet 4.6</option>
                   <option value="claude-opus-4-1-20250805">Claude Opus 4.1</option>
-                  <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+                  <option value="claude-opus-4-20250514">Claude Opus 4</option>
                   <option value="claude-3-7-sonnet-20250219">Claude Sonnet 3.7</option>
                   <option value="claude-3-5-haiku-20241022">Claude Haiku 3.5</option>
                 </select>
