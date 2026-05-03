@@ -382,8 +382,21 @@ final class TeraPlanClient {
             }
             if (code >= 200 && code < 300 && json.has("response")) {
                 String response = json.optString("response", "").trim();
+                JSONObject takCot = json.optJSONObject("tak_cot");
+                int takItemCount = 0;
+                if (takCot != null && takCot.optJSONArray("items") != null) {
+                    takItemCount = takCot.optJSONArray("items").length();
+                }
                 if (!response.isEmpty()) {
+                    if (takItemCount > 0) {
+                        return new PromptResult(
+                                true,
+                                response + "\n\nTAK items: " + takItemCount + " placed/updated.");
+                    }
                     return new PromptResult(true, response);
+                }
+                if (takItemCount > 0) {
+                    return new PromptResult(true, "TAK items: " + takItemCount + " placed/updated.");
                 }
                 return new PromptResult(false, "Jetson returned an empty TERA response.");
             }

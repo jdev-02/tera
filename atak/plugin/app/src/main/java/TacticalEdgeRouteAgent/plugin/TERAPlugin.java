@@ -57,8 +57,10 @@ public class TERAPlugin implements IPlugin {
     Pane templatePane;
     Handler mainHandler = new Handler(Looper.getMainLooper());
     SpeechRecognizer speechRecognizer;
-    Polyline activeRoutePolyline;
+    final List<Polyline> activeRoutePolylines = new ArrayList<>();
     final List<Marker> activeWaypointMarkers = new ArrayList<>();
+    final List<String> activeTeraItemUids = new ArrayList<>();
+    final List<JSONObject> activeTeraItems = new ArrayList<>();
 
     public TERAPlugin(IServiceController serviceController) {
         this.serviceController = serviceController;
@@ -481,23 +483,29 @@ public class TERAPlugin implements IPlugin {
     private void clearActiveRoute() {
         MapView mapView = MapView.getMapView();
         if (mapView == null) return;
-        if (activeRoutePolyline != null) {
-            mapView.getRootGroup().removeItem(activeRoutePolyline);
-            activeRoutePolyline = null;
+        for (Polyline polyline : activeRoutePolylines) {
+            mapView.getRootGroup().removeItem(polyline);
         }
+        activeRoutePolylines.clear();
         for (Marker m : activeWaypointMarkers) {
             mapView.getRootGroup().removeItem(m);
         }
         activeWaypointMarkers.clear();
+        activeTeraItemUids.clear();
+        activeTeraItems.clear();
     }
 
     private void drawRoute(JSONObject planJson) {
         MapView mapView = MapView.getMapView();
         if (mapView == null) return;
 
-        clearActiveRoute();
-
         try {
+            if (applyTakCot(planJson, mapView)) {
+                return;
+            }
+
+            clearActiveRoute();
+
             // Extract LineString coordinates from route.geometry.coordinates
             // GeoJSON format: [[lon, lat], [lon, lat], ...]
             JSONObject route = planJson.optJSONObject("route");
@@ -527,11 +535,12 @@ public class TERAPlugin implements IPlugin {
             }
 
             // Draw blue polyline
-            activeRoutePolyline = new Polyline(UUID.randomUUID().toString());
-            activeRoutePolyline.setPoints(points);
-            activeRoutePolyline.setColor(Color.argb(220, 0, 100, 255));
-            activeRoutePolyline.setStrokeWeight(4.0);
-            mapView.getRootGroup().addItem(activeRoutePolyline);
+            Polyline polyline = new Polyline(UUID.randomUUID().toString());
+            polyline.setPoints(points);
+            polyline.setColor(Color.argb(220, 0, 100, 255));
+            polyline.setStrokeWeight(4.0);
+            mapView.getRootGroup().addItem(polyline);
+            activeRoutePolylines.add(polyline);
 
             // Add waypoint markers from waypoints array
             JSONArray waypoints = planJson.optJSONArray("waypoints");
@@ -540,7 +549,7 @@ public class TERAPlugin implements IPlugin {
                     JSONObject wp = waypoints.getJSONObject(i);
                     double lat = wp.getDouble("lat");
                     double lon = wp.getDouble("lon");
-                    String name = wp.optString("name", "WP-" + (i + 1));
+                    String name = wp.optString("name", wp.optString("label", "WP-" + (i + 1)));
                     GeoPoint gp = new GeoPoint(lat, lon);
                     Marker marker = new Marker(gp, UUID.randomUUID().toString());
                     marker.setTitle(name);
@@ -559,6 +568,133 @@ public class TERAPlugin implements IPlugin {
             Toast.makeText(pluginContext, "Route parse error: " + e.getMessage(),
                     Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private boolean applyTakCot(JSONObject responseJson, MapView mapView) throws JSONException {
+        if (!responseJson.has("tak_cot")) {
+            return false;
+        }
+
+        JSONObject takCot = responseJson.optJSONObject("tak_cot");
+        if (takCot == null) {
+            return true;
+        }
+        JSONArray items = takCot.optJSONArray("items");
+        if (items == null || items.length() == 0) {
+            return true;
+        }
+
+        if (takCot.optBoolean("replace_existing", true)) {
+            clearActiveRoute();
+        }
+
+        double sumLat = 0.0;
+        double sumLon = 0.0;
+        int plottedCount = 0;
+
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.getJSONObject(i);
+            String itemType = item.optString("item_type", "");
+            if ("route".equals(itemType)) {
+                int count = drawTakCotRoute(item, mapView);
+                if (count > 0) {
+                    JSONArray coordinates = item.optJSONArray("coordinates");
+                    for (int j = 0; coordinates != null && j < coordinates.length(); j++) {
+                        JSONArray coord = coordinates.getJSONArray(j);
+                        sumLon += coord.getDouble(0);
+                        sumLat += coord.getDouble(1);
+                        plottedCount += 1;
+                    }
+                }
+            } else if ("point".equals(itemType)) {
+                Marker marker = drawTakCotPoint(item, mapView);
+                if (marker != null) {
+                    GeoPoint point = marker.getPoint();
+                    sumLat += point.getLatitude();
+                    sumLon += point.getLongitude();
+                    plottedCount += 1;
+                }
+            }
+        }
+
+        if (plottedCount > 0) {
+            mapView.getMapController().panTo(
+                    new GeoPoint(sumLat / plottedCount, sumLon / plottedCount),
+                    true);
+        }
+        return true;
+    }
+
+    private int drawTakCotRoute(JSONObject item, MapView mapView) throws JSONException {
+        JSONArray coords = item.optJSONArray("coordinates");
+        if (coords == null || coords.length() < 2) {
+            return 0;
+        }
+
+        GeoPoint[] points = new GeoPoint[coords.length()];
+        for (int i = 0; i < coords.length(); i++) {
+            JSONArray coord = coords.getJSONArray(i);
+            points[i] = new GeoPoint(coord.getDouble(1), coord.getDouble(0));
+        }
+
+        String uid = item.optString("uid", UUID.randomUUID().toString());
+        Polyline polyline = new Polyline(uid);
+        polyline.setPoints(points);
+        polyline.setColor(Color.argb(230, 0, 135, 255));
+        polyline.setStrokeWeight(5.0);
+        mapView.getRootGroup().addItem(polyline);
+        activeRoutePolylines.add(polyline);
+        rememberActiveTeraItem(item, uid);
+
+        JSONArray checkpoints = item.optJSONArray("checkpoints");
+        for (int i = 0; checkpoints != null && i < checkpoints.length(); i++) {
+            JSONObject cp = checkpoints.getJSONObject(i);
+            String cpUid = cp.optString("uid", uid + "-cp-" + i);
+            Marker marker = new Marker(
+                    new GeoPoint(cp.getDouble("lat"), cp.getDouble("lon")),
+                    cpUid);
+            marker.setTitle(cp.optString("label", "CP-" + (i + 1)));
+            marker.setType("a-f-G-U-C");
+            mapView.getRootGroup().addItem(marker);
+            activeWaypointMarkers.add(marker);
+            activeTeraItemUids.add(cpUid);
+        }
+        return coords.length();
+    }
+
+    private Marker drawTakCotPoint(JSONObject item, MapView mapView) throws JSONException {
+        if (!item.has("lat") || !item.has("lon")) {
+            return null;
+        }
+        String uid = item.optString("uid", UUID.randomUUID().toString());
+        Marker marker = new Marker(new GeoPoint(item.getDouble("lat"), item.getDouble("lon")), uid);
+        marker.setTitle(item.optString("title", "TERA point"));
+        marker.setType(item.optString("cot_type", "a-f-G-U-C"));
+        mapView.getRootGroup().addItem(marker);
+        activeWaypointMarkers.add(marker);
+        rememberActiveTeraItem(item, uid);
+        return marker;
+    }
+
+    private void rememberActiveTeraItem(JSONObject item, String uid) throws JSONException {
+        activeTeraItemUids.add(uid);
+
+        JSONObject active = new JSONObject();
+        active.put("uid", uid);
+        active.put("item_type", item.optString("item_type", ""));
+        active.put("title", item.optString("title", ""));
+        active.put("cot_type", item.optString("cot_type", ""));
+        if (item.has("lat") && !item.isNull("lat")) {
+            active.put("lat", item.getDouble("lat"));
+        }
+        if (item.has("lon") && !item.isNull("lon")) {
+            active.put("lon", item.getDouble("lon"));
+        }
+        JSONObject metadata = item.optJSONObject("metadata");
+        if (metadata != null) {
+            active.put("metadata", metadata);
+        }
+        activeTeraItems.add(active);
     }
 
     private JSONObject buildMapContext() {
@@ -601,6 +737,20 @@ public class TERAPlugin implements IPlugin {
                 selectedArea.put("center_lon", selfPoint.getLongitude());
                 context.put("selected_area", selectedArea);
             }
+
+            JSONArray activeItems = new JSONArray();
+            if (!activeTeraItems.isEmpty()) {
+                for (JSONObject activeItem : activeTeraItems) {
+                    activeItems.put(new JSONObject(activeItem.toString()));
+                }
+            } else {
+                for (String uid : activeTeraItemUids) {
+                    JSONObject item = new JSONObject();
+                    item.put("uid", uid);
+                    activeItems.put(item);
+                }
+            }
+            context.put("tera_active_items", activeItems);
 
             return context.length() == 0 ? null : context;
         } catch (JSONException e) {

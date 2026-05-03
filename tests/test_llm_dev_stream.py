@@ -696,6 +696,143 @@ def test_atak_activation_normalizes_gemma3_4_alias() -> None:
     assert kmh_app._normalize_ollama_model_name("gemma3:4b") == "gemma3:4b"
 
 
+def test_tak_cot_payload_generates_route_from_local_osm(monkeypatch: pytest.MonkeyPatch) -> None:
+    from routing import osm_sqlite_features
+
+    def fake_query_osm_features(**kwargs: object) -> list[dict[str, object]]:
+        assert kwargs["target_type"] == "freshwater"
+        return [
+            {
+                "name": "Demo Creek",
+                "lat": 37.795,
+                "lon": -122.392,
+                "distance_m": 420.0,
+                "source_layer": "waterways",
+            }
+        ]
+
+    monkeypatch.setattr(osm_sqlite_features, "query_osm_features", fake_query_osm_features)
+    request = kmh_app.PromptRequest(
+        prompt="Route me to the nearest freshwater within 5km on foot under cover.",
+        llm_provider="ollama",
+        agent_profile="tera-atak-live",
+        map_context=kmh_app.MapContext(
+            selected_area=kmh_app.ViewBounds(
+                west=-122.4,
+                south=37.79,
+                east=-122.4,
+                north=37.79,
+                center_lat=37.79,
+                center_lon=-122.4,
+            )
+        ),
+    )
+
+    payload = kmh_app._build_tak_cot_payload(request, "Routing to nearest water.")
+
+    assert payload.replace_existing is True
+    assert payload.algorithm == "osm_nearest_feature_direct_route"
+    assert len(payload.items) == 1
+    item = payload.items[0]
+    assert item.item_type == "route"
+    assert item.cot_type == "b-m-r"
+    assert item.title == "TERA route to Demo Creek"
+    assert len(item.coordinates) == 3
+    assert [checkpoint.label for checkpoint in item.checkpoints] == [
+        "Start",
+        "Checkpoint 1",
+        "Demo Creek",
+    ]
+    assert "<event" in item.cot_xml
+    assert item.metadata["target"]["source_layer"] == "waterways"
+
+
+def test_tak_cot_payload_uses_second_target_for_reroute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routing import osm_sqlite_features
+
+    def fake_query_osm_features(**_: object) -> list[dict[str, object]]:
+        return [
+            {"name": "Blocked Creek", "lat": 37.791, "lon": -122.401, "distance_m": 100.0},
+            {"name": "Alternate Creek", "lat": 37.792, "lon": -122.402, "distance_m": 250.0},
+        ]
+
+    monkeypatch.setattr(osm_sqlite_features, "query_osm_features", fake_query_osm_features)
+    request = kmh_app.PromptRequest(
+        prompt="That route does not work.",
+        llm_provider="ollama",
+        agent_profile="tera-atak-live",
+        map_context=kmh_app.MapContext(
+            selected_area=kmh_app.ViewBounds(
+                west=-122.4,
+                south=37.79,
+                east=-122.4,
+                north=37.79,
+                center_lat=37.79,
+                center_lon=-122.4,
+            ),
+            tera_active_items=[
+                {
+                    "uid": "TERA-OLD-route",
+                    "item_type": "route",
+                    "metadata": {"target_type": "freshwater"},
+                }
+            ],
+        ),
+    )
+
+    payload = kmh_app._build_tak_cot_payload(request, "Rerouting.")
+
+    assert payload.items[0].title == "TERA route to Alternate Creek"
+
+
+def test_atak_plugin_understands_prompt_tak_cot_payload() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    plugin_source = (
+        repo_root
+        / "atak"
+        / "plugin"
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "TacticalEdgeRouteAgent"
+        / "plugin"
+        / "TERAPlugin.java"
+    ).read_text(encoding="utf-8")
+    client_source = (
+        repo_root
+        / "atak"
+        / "plugin"
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "TacticalEdgeRouteAgent"
+        / "plugin"
+        / "TeraPlanClient.java"
+    ).read_text(encoding="utf-8")
+    strings = (
+        repo_root
+        / "atak"
+        / "plugin"
+        / "app"
+        / "src"
+        / "main"
+        / "res"
+        / "values"
+        / "strings.xml"
+    ).read_text(encoding="utf-8")
+
+    assert "applyTakCot" in plugin_source
+    assert "activeTeraItemUids" in plugin_source
+    assert "activeTeraItems" in plugin_source
+    assert "tera_active_items" in plugin_source
+    assert "tak_cot" in client_source
+    assert "/api/prompt" in strings
+
+
 @pytest.mark.asyncio
 async def test_prepare_ollama_for_atak_requires_successful_warmup(
     monkeypatch: pytest.MonkeyPatch,
