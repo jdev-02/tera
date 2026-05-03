@@ -73,8 +73,8 @@ docker compose up --build
 - `TERA_JETSON_LOCAL_SOURCES_ONLY`: defaults to `1`; skips outbound source downloads and uses staged OSM/NAIP/DTED files.
 - `OFFLINE_PACKAGE_ROOT`: Jetson directory where source packages, status files, terrain rasters, route artifacts, and CoT XML are written; defaults to `llm_dev_kmh/offline_packages`
 - `PACKAGE_MIN_FREE_GB`: disk space reserve enforced before downloads start; defaults to `10`
-- `DEFAULT_LAT`: initial camera latitude, default `37.7749`
-- `DEFAULT_LON`: initial camera longitude, default `-122.4194`
+- `DEFAULT_LAT`: initial camera latitude, default `38.35537339313087` for MGRS `11S KC 79790 48252`
+- `DEFAULT_LON`: initial camera longitude, default `-119.52018528165966` for MGRS `11S KC 79790 48252`
 - `DEFAULT_HEIGHT_M`: initial camera height in meters, default `14000`
 
 ## Notes

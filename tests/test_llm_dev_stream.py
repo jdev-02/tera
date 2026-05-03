@@ -1165,6 +1165,16 @@ def test_runtime_config_advertises_auto_provider_when_claude_key_exists(
     assert kmh_app._default_provider() == "ollama"
 
 
+@pytest.mark.asyncio
+async def test_runtime_config_defaults_to_demo_mgrs_center() -> None:
+    response = await kmh_app.runtime_config()
+
+    assert kmh_app.DEFAULT_CENTER_MGRS == "11S KC 79790 48252"
+    assert response.default_lat == pytest.approx(38.35537339313087)
+    assert response.default_lon == pytest.approx(-119.52018528165966)
+    assert response.default_height_m == pytest.approx(14000)
+
+
 def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
     prompt = (

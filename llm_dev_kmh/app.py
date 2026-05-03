@@ -169,8 +169,9 @@ ESRI_TOKEN_CONFIGURED = bool(
         or ""
     ).strip()
 )
-DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
-DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
+DEFAULT_CENTER_MGRS = "11S KC 79790 48252"
+DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "38.35537339313087"))
+DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-119.52018528165966"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
 TERA_ATAK_MODEL = os.getenv("TERA_ATAK_MODEL", "gemma3:4b")
 TERA_ATAK_AGENT_PROFILE = os.getenv("TERA_ATAK_AGENT_PROFILE", "tera-atak-live")
