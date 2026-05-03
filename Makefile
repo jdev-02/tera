@@ -1,4 +1,4 @@
-.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax ci run run-https gen-cert atak-link-server atak-link-test atak-plugin-build atak-plugin-install tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install jetson-compose-refresh
+.PHONY: help onboard catchup install install-crypto install-voice fmt lint test security shellcheck-syntax model-integrity ci run run-https gen-cert atak-link-server atak-link-test atak-plugin-build atak-plugin-install tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch firewall firewall-remove firewall-status jetson-autoupdate-install jetson-compose-refresh
 .DEFAULT_GOAL := help
 
 ifeq ($(OS),Windows_NT)
@@ -92,7 +92,10 @@ security: install ## Bandit + pip-audit + optional gitleaks
 		echo "[security] gitleaks not installed locally; GitHub Action still runs gitleaks"; \
 	fi
 
-ci: lint test security shellcheck-syntax ## Full CI gate (must pass before push)
+model-integrity: install ## Verify SHA-256 model pins + scan for unsafe torch.load() (issue #57)
+	$(PYTHON) -m security.model_integrity
+
+ci: lint test security shellcheck-syntax model-integrity ## Full CI gate (must pass before push)
 	@echo "[OK] make ci passed"
 
 
