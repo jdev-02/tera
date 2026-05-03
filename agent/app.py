@@ -1,10 +1,14 @@
-"""TERA agent HTTP service.
+"""TERA Jetson-side HTTP service.
 
-POST /plan: operator natural-language route request -> validated, signed route.
+POST /plan: ATAK plugin text/STT request -> validated route intent -> signed response.
 GET  /health: liveness + which mode is the default.
 
 The orchestrator (`agent.orchestrator.plan`) does the actual work; this
-module is just the FastAPI wrapper.
+module is just the FastAPI wrapper. The deployed path is:
+
+ATAK plugin on the TAK device -> local IP -> Jetson TERA app -> local Gemma
+intent translation + geo tools -> route/control measures/chat response/signed
+CoT -> local IP -> ATAK plugin render.
 """
 
 from __future__ import annotations
