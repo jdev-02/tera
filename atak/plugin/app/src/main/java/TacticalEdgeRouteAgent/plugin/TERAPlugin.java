@@ -314,16 +314,24 @@ public class TERAPlugin implements IPlugin {
             String host = hostEdit.getText().toString().trim();
             String port = normalizedPort(portEdit.getText().toString());
             String endpoint = buildEndpoint(host, port);
+            hideKeyboard(hostEdit);
+            test.setEnabled(false);
+            test.setText("...");
             connectionStatus.setText(R.string.connection_connecting);
             status.setText("Testing Jetson connection...");
             TeraPlanClient.checkJetson(endpoint, new TeraPlanClient.Callback() {
                 @Override
                 public void onComplete(boolean ok, String message) {
                     mainHandler.post(() -> {
+                        test.setEnabled(true);
+                        test.setText(R.string.host_popup_test);
                         connectionStatus.setText(ok
                                 ? R.string.connection_online
                                 : R.string.connection_error);
                         status.setText(message);
+                        showMessagePopup(hostButton.getRootView(),
+                                ok ? "Jetson Connected" : "Jetson Connection Failed",
+                                message + "\n\nEndpoint:\n" + endpoint);
                     });
                 }
             });
@@ -544,6 +552,11 @@ public class TERAPlugin implements IPlugin {
     }
 
     private void showInfoPopup(View anchor) {
+        showMessagePopup(anchor, pluginContext.getString(R.string.tera_info_title),
+                pluginContext.getString(R.string.tera_info_message));
+    }
+
+    private void showMessagePopup(View anchor, String titleText, String messageText) {
         LinearLayout content = new LinearLayout(anchor.getContext());
         content.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(12);
@@ -551,24 +564,41 @@ public class TERAPlugin implements IPlugin {
         content.setBackgroundResource(R.drawable.status_bar_bg);
 
         TextView title = new TextView(anchor.getContext());
-        title.setText(R.string.tera_info_title);
+        title.setText(titleText);
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
 
         TextView message = new TextView(anchor.getContext());
-        message.setText(R.string.tera_info_message);
+        message.setText(messageText);
         message.setTextColor(Color.WHITE);
-        message.setTextSize(13);
+        message.setTextSize(14);
+        message.setLineSpacing(dp(2), 1.0f);
         message.setPadding(0, dp(8), 0, 0);
+
+        Button close = new Button(anchor.getContext());
+        close.setText("OK");
+        close.setTextSize(12);
 
         content.addView(title);
         content.addView(message);
+        content.addView(close, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        PopupWindow popup = new PopupWindow(content, dp(260), LinearLayout.LayoutParams.WRAP_CONTENT, true);
+        PopupWindow popup = new PopupWindow(content, dp(320), LinearLayout.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-        popup.showAsDropDown(anchor, -dp(226), dp(6));
+        close.setOnClickListener(v -> popup.dismiss());
+        popup.showAtLocation(anchor.getRootView(), Gravity.CENTER, 0, 0);
+    }
+
+    private void hideKeyboard(View view) {
+        InputMethodManager imm = (InputMethodManager) pluginContext.getSystemService(
+                Context.INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+        }
     }
 
     private int dp(int value) {
