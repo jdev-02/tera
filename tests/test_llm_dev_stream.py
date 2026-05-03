@@ -602,19 +602,37 @@ async def test_atak_activation_forces_auto_prompts_to_local_gemma(
     original_active_model = kmh_app.ACTIVE_OLLAMA_MODEL
     original_active_base_url = kmh_app.ACTIVE_OLLAMA_BASE_URL
 
-    async def fake_fetch_models(_base_url: str) -> list[str]:
-        return ["gemma3:4b"]
+    async def fake_prepare(model: str, agent_profile: str) -> dict[str, object]:
+        assert model == "gemma3:4b"
+        assert agent_profile == "tera-atak-live"
+        return {
+            "ready": True,
+            "base_url": "http://host.docker.internal:11434",
+            "detail": "Ollama warmed for ATAK.",
+        }
 
     monkeypatch.setenv("TERA_ATAK_MIRROR_LOG", str(tmp_path / "atak-mirror.jsonl"))
     monkeypatch.setattr(kmh_app, "TERA_ATAK_ACTIVATE_COMMAND", "")
-    monkeypatch.setattr(kmh_app, "_fetch_ollama_models_from", fake_fetch_models)
+    monkeypatch.setattr(kmh_app, "_prepare_ollama_for_atak", fake_prepare)
+
+    class FakeUrl:
+        scheme = "http"
+
+    class FakeRequest:
+        headers = {"host": "10.1.63.96:8080"}
+        url = FakeUrl()
 
     try:
         response = await kmh_app.activate_jetson_atak_agent(
-            kmh_app.JetsonAtakActivateRequest()
+            kmh_app.JetsonAtakActivateRequest(),
+            FakeRequest(),  # type: ignore[arg-type]
         )
 
         assert response.active is True
+        assert response.status == "active"
+        assert response.ollama_ready is True
+        assert response.ollama_base_url == "http://host.docker.internal:11434"
+        assert response.plugin_endpoint == "http://10.1.63.96:8080/api/prompt"
         assert response.model == "gemma3:4b"
         assert response.provider == "ollama"
         assert response.events
@@ -629,6 +647,40 @@ async def test_atak_activation_forces_auto_prompts_to_local_gemma(
         kmh_app.JETSON_ATAK_MODE.update(original_mode)
         kmh_app.ACTIVE_OLLAMA_MODEL = original_active_model
         kmh_app.ACTIVE_OLLAMA_BASE_URL = original_active_base_url
+
+
+def test_atak_live_profile_uses_tactical_plugin_prompt() -> None:
+    prompt = kmh_app._build_system_prompt(
+        kmh_app.PromptRequest(
+            prompt="Route me to water.",
+            llm_provider="ollama",
+            agent_profile="tera-atak-live",
+        )
+    )
+
+    assert "live ATAK plugin agent" in prompt
+    assert "Samsung ATAK end-user device" in prompt
+    assert "supplied map context" in prompt
+    assert "local imagery and geospatial data sourcing assistant" not in prompt
+
+
+def test_atak_activation_normalizes_gemma3_4_alias() -> None:
+    assert kmh_app._normalize_ollama_model_name("gemma3:4") == "gemma3:4b"
+    assert kmh_app._normalize_ollama_model_name("gemma3:4b") == "gemma3:4b"
+
+
+def test_jetson_refresh_prepares_ollama_for_atak_mode() -> None:
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "deploy"
+        / "scripts"
+        / "jetson_compose_refresh.sh"
+    )
+    script = script_path.read_text(encoding="utf-8")
+
+    assert "start_ollama_for_atak" in script
+    assert "ollama pull \"$model\"" in script
+    assert "ollama run \"$model\"" in script
 
 
 class _ClaudeInvalidModelResponse:

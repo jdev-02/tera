@@ -4,9 +4,9 @@ This lane currently contains the LAN test harness for proving that a Samsung
 device running ATAK/TERA can reach the Jetson over WiFi and receive a response
 from the local Gemma/Ollama path.
 
-The Android ATAK plugin skeleton is not present in this checkout beyond
-`.gitkeep`, so these scripts are the reproducible connectivity probe and the
-request shape the plugin should issue once the Java/Gradle files are restored.
+The Android ATAK plugin skeleton lives under `atak/plugin/`. These scripts are
+the reproducible connectivity probe and the request shape the plugin issues to
+the Jetson.
 
 ## What Was Added
 
@@ -53,7 +53,30 @@ Run these on the Jetson.
    ollama pull gemma3:4b
    ```
 
-4. From the repo root, install Python dependencies if needed:
+4. If you are running the Docker planner, refresh it from the repo root. This
+   starts Ollama if possible, pulls `gemma3:4b` when missing, warms the model,
+   and restarts the web app on `0.0.0.0:8080`.
+
+   ```bash
+   make jetson-compose-refresh
+   ```
+
+5. Open the web app from the Windows machine:
+
+   ```text
+   http://<JETSON_WIFI_IP>:8080
+   ```
+
+   Click `ATAK Local`. The button calls `/api/jetson/atak-agent/activate`,
+   verifies Ollama, pulls/warms `gemma3:4b` with the `tera-atak-live` profile,
+   and reports the Samsung plugin endpoint in the ATAK mirror panel:
+
+   ```text
+   http://<JETSON_WIFI_IP>:8080/api/prompt
+   ```
+
+6. From the repo root, install Python dependencies if you are running without
+   Docker:
 
    ```bash
    python3.11 -m venv .venv
@@ -62,7 +85,7 @@ Run these on the Jetson.
    python -m pip install -e .
    ```
 
-5. Start the Jetson link server:
+7. Start the non-Docker Jetson link server:
 
    ```bash
    bash atak/scripts/run_jetson_gemma_server.sh
@@ -74,7 +97,7 @@ Run these on the Jetson.
    make atak-link-server
    ```
 
-6. Find the Jetson WiFi IP:
+8. Find the Jetson WiFi IP:
 
    ```bash
    hostname -I
@@ -83,18 +106,18 @@ Run these on the Jetson.
 
    Use the address on the WiFi interface, for example `192.168.1.42`.
 
-7. Verify locally on the Jetson:
+9. Verify locally on the Jetson:
 
    ```bash
    curl -s http://127.0.0.1:8080/health
    ```
 
-8. Verify the Gemma endpoint locally:
+10. Verify the Gemma endpoint locally:
 
    ```bash
    curl -s -X POST http://127.0.0.1:8080/api/prompt \
      -H "Content-Type: application/json" \
-     -d '{"prompt":"TERA ATAK link test. Reply briefly.","model":"gemma3:4b","llm_provider":"ollama","agent_profile":"tera-atak-link-test"}'
+     -d '{"prompt":"TERA ATAK link test. Reply briefly.","model":"gemma3:4b","llm_provider":"ollama","agent_profile":"tera-atak-live"}'
    ```
 
 ## ATAK Device Setup
@@ -135,6 +158,7 @@ proves the same network path the ATAK plugin will use.
    Port: 8080
    Endpoint: /api/prompt
    Model: gemma3:4b
+   Agent profile: tera-atak-live
    ```
 
 6. The plugin should POST this JSON:
@@ -144,7 +168,7 @@ proves the same network path the ATAK plugin will use.
      "prompt": "TERA ATAK link test. Reply with JSON containing status, model, and one short readiness sentence.",
      "model": "gemma3:4b",
      "llm_provider": "ollama",
-     "agent_profile": "tera-atak-link-test"
+     "agent_profile": "tera-atak-live"
    }
    ```
 
