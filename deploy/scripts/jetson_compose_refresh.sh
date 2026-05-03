@@ -41,6 +41,7 @@ start_ollama_for_atak() {
   local model="${TERA_ATAK_MODEL:-gemma3:4b}"
   local ollama_url="${TERA_HOST_OLLAMA_URL:-http://127.0.0.1:11434}"
   local runtime_dir="${TERA_RUNTIME_DIR:-$REPO_DIR/llm_dev_kmh/offline_packages/runtime}"
+  local warm_timeout="${TERA_ATAK_WARMUP_TIMEOUT_S:-45}"
   mkdir -p "$runtime_dir"
 
   echo "[jetson-refresh] preparing Ollama model for TERA ATAK mode: $model"
@@ -76,9 +77,22 @@ start_ollama_for_atak() {
     ollama pull "$model"
   fi
 
-  echo "[jetson-refresh] warming $model with TERA ATAK prompt"
-  timeout 180 ollama run "$model" "TERA ATAK readiness check. Reply READY in one short sentence." >/dev/null 2>&1 || \
-    echo "[jetson-refresh] warning: Ollama warmup did not complete; first ATAK prompt may be slow" >&2
+  echo "[jetson-refresh] warming $model with TERA ATAK prompt in background"
+  (
+    ollama run "$model" "TERA ATAK readiness check. Reply READY in one short sentence." &
+    warm_pid="$!"
+    (
+      sleep "$warm_timeout"
+      if kill -0 "$warm_pid" >/dev/null 2>&1; then
+        echo "[jetson-refresh] warning: Ollama warmup exceeded ${warm_timeout}s; stopping warmup"
+        kill "$warm_pid" >/dev/null 2>&1 || true
+      fi
+    ) &
+    watchdog_pid="$!"
+    wait "$warm_pid" >/dev/null 2>&1 || true
+    kill "$watchdog_pid" >/dev/null 2>&1 || true
+  ) >"$runtime_dir/ollama-warmup.log" 2>&1 &
+  echo "[jetson-refresh] Ollama warmup background pid $!; continuing with web app restart"
 }
 
 echo "[jetson-refresh] repo: $REPO_DIR"

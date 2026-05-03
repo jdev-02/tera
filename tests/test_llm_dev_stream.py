@@ -681,6 +681,8 @@ def test_jetson_refresh_prepares_ollama_for_atak_mode() -> None:
     assert "start_ollama_for_atak" in script
     assert "ollama pull \"$model\"" in script
     assert "ollama run \"$model\"" in script
+    assert "ollama-warmup.log" in script
+    assert "continuing with web app restart" in script
 
 
 class _ClaudeInvalidModelResponse:
