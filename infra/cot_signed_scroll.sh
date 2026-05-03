@@ -14,7 +14,7 @@ OK_COLOR="\033[32m"
 WARN_COLOR="\033[33m"
 RESET="\033[0m"
 
-mkdir -p "$(diname "$AUDIT_LOG")"
+mkdir -p "$(dirname "$AUDIT_LOG")"
 touch "$AUDIT_LOG"
 
 echo "======================================================"
