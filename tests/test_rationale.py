@@ -23,7 +23,7 @@ _CASES: list[tuple[str, str, str]] = [
     ("12.345", "one two point three four five", "multi-digit decimal"),
 
     # Plain integer expansion (digit-by-digit)
-    ("ETA 38 minutes", "E T A three eight minutes", "two-digit count + acronym"),
+    ("ETA 38 minutes", "echo tango alpha three eight minutes", "two-digit count + acronym"),
     ("over 4 kilometers per hour", "over four kilometers per hour", "single digit"),
 
     # Unit expansion
@@ -54,24 +54,24 @@ _CASES: list[tuple[str, str, str]] = [
         "MGRS no-space 8-digit precision",
     ),
 
-    # Acronym expansion -- spelled letter-by-letter.
+    # Acronym expansion -- NATO phonetic (Piper-safe; can't swallow letters).
     (
         "ETA 5 minutes.",
-        "E T A five minutes.",
-        "ETA -> 'E T A'",
+        "echo tango alpha five minutes.",
+        "ETA -> 'echo tango alpha'",
     ),
     (
         "HLZ at grid 11SMS1234.",
-        "H L Z at grid one one sierra, mike, sierra one two, three four.",
-        "HLZ -> 'H L Z'",
+        "hotel lima zulu at grid one one sierra, mike, sierra one two, three four.",
+        "HLZ -> 'hotel lima zulu'",
     ),
     (
         "Identify CP and TOC.",
-        "Identify C P and T O C.",
-        "multiple acronyms in one line",
+        "Identify charlie papa and tock.",
+        "multiple acronyms in one line (mix of spell + word forms)",
     ),
 
-    # Acronym expansion -- read as a word with hyphen hint.
+    # Acronym expansion -- read as a word with hyphen hint or natural syllables.
     (
         "CASEVAC inbound.",
         "case-vac inbound.",
@@ -86,7 +86,7 @@ _CASES: list[tuple[str, str, str]] = [
     # Clause-comma promotion -- ', ETA' -> '. ETA' for radio cadence.
     (
         "Distance 2.1 km, ETA 38 minutes.",
-        "Distance two point one kilometers. E T A three eight minutes.",
+        "Distance two point one kilometers. echo tango alpha three eight minutes.",
         "comma before ETA promoted to period",
     ),
     (
@@ -97,12 +97,13 @@ _CASES: list[tuple[str, str, str]] = [
 
     # The flagship rationale from PRD §6 (hero scenario A). Note: ', distance'
     # is also promoted to '. distance' (clause-comma rule), and ', ETA' to
-    # '. ETA'. Result: three full-sentence beats between the elements.
+    # '. ETA'. Result: three full-sentence beats between the elements, ETA
+    # spelled out NATO-phonetic.
     (
         "Routed to Lobos Creek, distance 2.1 kilometers, ETA 38 minutes on foot covered.",
         (
             "Routed to Lobos Creek. distance two point one kilometers. "
-            "E T A three eight minutes on foot covered."
+            "echo tango alpha three eight minutes on foot covered."
         ),
         "PRD scenario A canonical rationale",
     ),
@@ -111,7 +112,7 @@ _CASES: list[tuple[str, str, str]] = [
     # not promoted -- the rule only promotes ', ' (comma+space) before cues.
     (
         "Selected creek 2.1 km NE; ETA 38 min.",
-        "Selected creek two point one kilometers northeast; E T A three eight min.",
+        "Selected creek two point one kilometers northeast; echo tango alpha three eight min.",
         "multiple transforms in one string",
     ),
 ]

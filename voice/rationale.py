@@ -122,34 +122,41 @@ _UNIT_FULL = {
 
 # ---------------------------------------------------------------------------
 # Acronyms. Two flavors:
-#   _ACRONYM_SPELL  -- read letter-by-letter ("ETA" -> "E T A").
+#   _ACRONYM_SPELL  -- expand to NATO phonetic words ("ETA" -> "echo tango
+#                      alpha"). Operator note 17:24 #1: Piper drops the
+#                      trailing "A" in space-separated forms ("E T A" reads
+#                      as "E tay"). NATO phonetics are mil-correct AND
+#                      physically impossible for Piper to swallow because
+#                      every letter becomes a multi-syllable word.
 #   _ACRONYM_WORD   -- read as a word, with hyphens hinting syllable splits
-#                      ("CASEVAC" -> "case-vac"). Operators say these as words.
-# Order: _SPELL first (longer abbreviations take precedence), then _WORD.
-# Word-boundary anchored so we don't touch sub-words.
+#                      ("CASEVAC" -> "case-vac"). Operators say these as
+#                      words on net, not as letters.
+# Order: _WORD first (so e.g. "MEDEVAC" doesn't get partially-matched by an
+# acronym in _SPELL), then _SPELL. Word-boundary anchored.
 # ---------------------------------------------------------------------------
 
 _ACRONYM_SPELL = {
-    "ETA": "E T A",
-    "HLZ": "H L Z",
-    "LZ": "L Z",
-    "PZ": "P Z",
-    "IED": "I E D",
-    "EOD": "E O D",
-    "AO": "A O",
-    "CP": "C P",
-    "OP": "O P",
-    "TOC": "T O C",
-    "POI": "P O I",
-    "MGRS": "M G R S",
-    "QRF": "Q R F",
-    "TRP": "T R P",
+    "ETA": "echo tango alpha",
+    "HLZ": "hotel lima zulu",
+    "LZ": "lima zulu",
+    "PZ": "papa zulu",
+    "IED": "india echo delta",
+    "EOD": "echo oscar delta",
+    "AO": "alpha oscar",
+    "CP": "charlie papa",
+    "OP": "oscar papa",
+    "POI": "papa oscar india",
+    "MGRS": "mike golf romeo sierra",
+    "QRF": "quebec romeo foxtrot",
+    "TRP": "tango romeo papa",
 }
 
 _ACRONYM_WORD = {
     "CASEVAC": "case-vac",
     "MEDEVAC": "med-evac",
     "RECON": "ree-kon",
+    # TOC is universally pronounced 'tock' on net, not letters.
+    "TOC": "tock",
 }
 
 
