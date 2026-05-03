@@ -86,7 +86,7 @@ def test_render_includes_reading_first() -> None:
     entry = glossary.explain("HLZ")
     assert entry is not None
     text = glossary.render_explanation_text(entry)
-    assert text.startswith("hotel lima zulu stands for ")
+    assert text.startswith("hotel lee-mah zulu stands for ")
     assert "Helicopter Landing Zone" in text
     assert "rotary-wing landing" in text  # context appended
     assert text.endswith(".")

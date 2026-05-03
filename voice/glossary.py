@@ -95,7 +95,9 @@ GLOSSARY: dict[str, GlossaryEntry] = {
         full="Estimated Time of Arrival",
     ),
     "HLZ": GlossaryEntry(
-        reading="hotel lima zulu",
+        # 'lima' alone gets the trailing-vowel swallow; 'lee-mah' forces both
+        # syllables (op note 17:41). Same trick as case-vac / med-evac.
+        reading="hotel lee-mah zulu",
         reading_kind="spell",
         full="Helicopter Landing Zone",
         context="an area suitable for rotary-wing landing",
@@ -108,7 +110,7 @@ GLOSSARY: dict[str, GlossaryEntry] = {
         source="JP 3-15.1",
     ),
     "LZ": GlossaryEntry(
-        reading="lima zulu",
+        reading="lee-mah zulu",
         reading_kind="spell",
         full="Landing Zone",
         context="a specified ground area for landing aircraft",
