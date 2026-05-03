@@ -15,6 +15,7 @@ const state = {
   chatCount: 0,
   imageryMode: "esri",
   terrainMode: "cesium-world",
+  mapMode: "2d",
   panelWidth: 520,
   panelCollapsed: false,
   dragState: null,
@@ -27,7 +28,9 @@ const state = {
   sourcePlannerMessage: "",
   overlayDataSource: null,
   overlayFileName: "",
+  overlayFeatureCount: 0,
   locationSearchMatches: [],
+  locationSearchDetail: "",
   activeLocationSearchIndex: -1,
   mapFocusLabel: "",
   mapFocusSource: "",
@@ -36,6 +39,7 @@ const state = {
   locationSearchRequestId: 0,
   localModelAvailable: false,
   localModelDetail: "",
+  serverClaudeKeyAvailable: false,
   llmProvider: sessionStorage.getItem("teraLlmProvider") || "ollama",
   claudeApiKey: sessionStorage.getItem("teraClaudeApiKey") || "",
   selectedSourceIds: new Set(),
@@ -75,6 +79,7 @@ const els = {
   sourcePanel: document.getElementById("sourcePanel"),
   mapStage: document.querySelector(".map-stage"),
   mapResetViewBtn: document.getElementById("mapResetViewBtn"),
+  mapModeToggleBtn: document.getElementById("mapModeToggleBtn"),
   locationSearchPanel: document.getElementById("locationSearchPanel"),
   locationSearchForm: document.getElementById("locationSearchForm"),
   locationSearchInput: document.getElementById("locationSearchInput"),
@@ -374,6 +379,7 @@ const LOCATION_GAZETTEER = [
 const LOCATION_SEARCH_LIMIT = 6;
 const LOCATION_SOURCE_PRIORITY = {
   "coordinate-query": 500,
+  "google-places": 260,
   gazetteer: 180,
   "local-gazetteer": 180,
   "online-geocoder": 0,
@@ -694,9 +700,46 @@ function cleanLocationSearchQuery(query) {
   return cleaned;
 }
 
+function parseGoogleMapsCoordinateQuery(query) {
+  const patterns = [
+    /!3d([+-]?\d+(?:\.\d+)?)!4d([+-]?\d+(?:\.\d+)?)/i,
+    /@([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)/i,
+    /[?&](?:q|ll|center)=([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = query.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const lat = Number(match[1]);
+    const lon = Number(match[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      return {
+        name: `Coordinates ${lat.toFixed(5)}, ${lon.toFixed(5)}`,
+        detail: "Parsed from Google Maps link or coordinate query",
+        lat,
+        lon,
+        heightM: 12000,
+        source: "coordinate-query",
+        score: LOCATION_SOURCE_PRIORITY["coordinate-query"],
+      };
+    }
+  }
+  return null;
+}
+
 function parseCoordinateQuery(query) {
   const trimmed = cleanLocationSearchQuery(query);
   if (!trimmed) {
+    return null;
+  }
+
+  const googleMapsCoordinate = parseGoogleMapsCoordinateQuery(trimmed);
+  if (googleMapsCoordinate) {
+    return googleMapsCoordinate;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
     return null;
   }
 
@@ -880,33 +923,44 @@ function buildLocationSearchUrl(query) {
   return `/api/location-search?${params.toString()}`;
 }
 
+function googleMapsSearchUrl(query) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanLocationSearchQuery(query))}`;
+}
+
 async function fetchLocationSearchSuggestions(query) {
   const cleanedQuery = cleanLocationSearchQuery(query);
-  if (cleanedQuery.length < 2) {
-    return [];
+  if (cleanedQuery.length < 1) {
+    return { suggestions: [], detail: "" };
   }
   const data = await fetchJson(buildLocationSearchUrl(cleanedQuery));
-  return Array.isArray(data.suggestions)
-    ? data.suggestions.map(normalizeServerLocationSuggestion)
-    : [];
+  return {
+    suggestions: Array.isArray(data.suggestions)
+      ? data.suggestions.map(normalizeServerLocationSuggestion)
+      : [],
+    detail: data.detail || "",
+    online: Boolean(data.online),
+  };
 }
 
 async function refreshOnlineLocationSuggestions(query, requestId, localMatches) {
   try {
     const cleanedQuery = cleanLocationSearchQuery(query);
-    const serverMatches = await fetchLocationSearchSuggestions(cleanedQuery);
+    const result = await fetchLocationSearchSuggestions(cleanedQuery);
     if (requestId !== state.locationSearchRequestId) {
       return;
     }
+    state.locationSearchDetail = result.detail || "";
+    const serverMatches = result.suggestions || [];
     state.locationSearchMatches = mergeLocationSuggestions(localMatches, serverMatches, cleanedQuery);
     if (state.locationSearchMatches.length) {
       renderLocationSearchSuggestions();
     } else {
-      renderLocationSearchEmpty(cleanedQuery);
+      renderLocationSearchEmpty(cleanedQuery, state.locationSearchDetail);
     }
   } catch (_error) {
     if (requestId === state.locationSearchRequestId && !state.locationSearchMatches.length) {
-      renderLocationSearchEmpty(query);
+      state.locationSearchDetail = getErrorMessage(_error);
+      renderLocationSearchEmpty(query, state.locationSearchDetail);
     }
   }
 }
@@ -929,26 +983,40 @@ function setActiveLocationSuggestion(index) {
   });
 }
 
-function renderLocationSearchStatus(message) {
+function renderLocationSearchStatus(message, query = "") {
   els.locationSearchSuggestions.replaceChildren();
   const status = document.createElement("div");
   status.className = "location-suggestion-status";
-  status.textContent = message;
+  const text = document.createElement("span");
+  text.textContent = message;
+  status.appendChild(text);
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  if (cleanedQuery) {
+    const externalLink = document.createElement("a");
+    externalLink.className = "location-suggestion-external";
+    externalLink.href = googleMapsSearchUrl(cleanedQuery);
+    externalLink.target = "_blank";
+    externalLink.rel = "noreferrer";
+    externalLink.textContent = "Open Google Maps search";
+    status.appendChild(externalLink);
+  }
   els.locationSearchSuggestions.appendChild(status);
   setLocationSearchOpen(true);
 }
 
 function renderLocationSearchLoading(query) {
   const cleanedQuery = cleanLocationSearchQuery(query);
-  renderLocationSearchStatus(`Searching ${cleanedQuery}...`);
+  renderLocationSearchStatus(`Searching ${cleanedQuery}...`, cleanedQuery);
 }
 
-function renderLocationSearchEmpty(query) {
+function renderLocationSearchEmpty(query, detail = "") {
   const cleanedQuery = cleanLocationSearchQuery(query);
+  const detailText = detail ? ` ${detail}` : "";
   renderLocationSearchStatus(
     cleanedQuery
-      ? `No location match for "${cleanedQuery}". Try a more specific place, coordinates, or KML/KMZ.`
+      ? `No in-map coordinate match for "${cleanedQuery}".${detailText}`
       : "Enter a mission location, coordinates, or KML/KMZ overlay.",
+    cleanedQuery,
   );
 }
 
@@ -1020,6 +1088,7 @@ async function commitLocationSearch() {
   const query = cleanLocationSearchQuery(els.locationSearchInput.value);
   window.clearTimeout(state.locationSearchTimer);
   state.locationSearchRequestId += 1;
+  state.locationSearchDetail = "";
 
   const coordinate = parseCoordinateQuery(query);
   if (coordinate) {
@@ -1027,13 +1096,13 @@ async function commitLocationSearch() {
     return;
   }
 
-  if (query.length < 2) {
+  if (query.length < 1) {
     renderLocationSearchEmpty(query);
     return;
   }
 
   const localMatches = getLocationSearchSuggestions(query);
-  const selectedBeforeFetch = state.activeLocationSearchIndex > 0
+  const selectedBeforeFetch = state.activeLocationSearchIndex >= 0
     ? state.locationSearchMatches[state.activeLocationSearchIndex]
     : null;
   if (localMatches.length) {
@@ -1045,9 +1114,12 @@ async function commitLocationSearch() {
 
   let serverMatches = [];
   try {
-    serverMatches = await fetchLocationSearchSuggestions(query);
-  } catch (_error) {
+    const result = await fetchLocationSearchSuggestions(query);
+    serverMatches = result.suggestions || [];
+    state.locationSearchDetail = result.detail || "";
+  } catch (error) {
     serverMatches = [];
+    state.locationSearchDetail = getErrorMessage(error);
   }
 
   const matches = mergeLocationSuggestions(localMatches, serverMatches, query);
@@ -1063,7 +1135,7 @@ async function commitLocationSearch() {
 
   if (!suggestion) {
     els.requestStatus.textContent = "Location not resolved. Try a more specific place, coordinates, or KML/KMZ.";
-    renderLocationSearchEmpty(query);
+    renderLocationSearchEmpty(query, state.locationSearchDetail);
     return;
   }
 
@@ -1077,7 +1149,8 @@ function onLocationSearchInput() {
   const query = cleanLocationSearchQuery(els.locationSearchInput.value);
   window.clearTimeout(state.locationSearchTimer);
   state.locationSearchRequestId += 1;
-  if (query.length < 2) {
+  state.locationSearchDetail = "";
+  if (query.length < 1) {
     state.locationSearchMatches = [];
     setLocationSearchOpen(false);
     return;
@@ -1579,6 +1652,7 @@ function syncModelSelects(sourceSelect, targetSelect) {
 
 function applyProviderVisibility() {
   const isClaude = state.llmProvider === "claude";
+  const hasClaudeKey = Boolean(state.claudeApiKey || state.serverClaudeKeyAvailable);
   els.providerSelect.value = state.llmProvider;
   els.providerLocalModelRow.classList.toggle("hidden", isClaude);
   els.providerClaudeModelRow.classList.toggle("hidden", !isClaude);
@@ -1587,8 +1661,12 @@ function applyProviderVisibility() {
     els.claudeApiKeyInput.value = state.claudeApiKey;
   }
   if (isClaude) {
-    setModelProviderButton(`Claude: ${els.claudeModelSelect.value}`, state.claudeApiKey ? "good" : "warn");
-    els.providerStatus.textContent = state.claudeApiKey ? "Claude API key loaded for this session" : "Claude key required";
+    setModelProviderButton(`Claude: ${els.claudeModelSelect.value}`, hasClaudeKey ? "good" : "warn");
+    els.providerStatus.textContent = state.claudeApiKey
+      ? "Claude API key loaded for this browser session"
+      : state.serverClaudeKeyAvailable
+        ? "Server ANTHROPIC_API_KEY will be used"
+        : "Claude key required";
   } else {
     const label = els.modelSelect.value || els.topModelSelect.value || state.config?.default_model || "local model";
     const tone = state.localModelAvailable ? "good" : "warn";
@@ -1602,9 +1680,9 @@ function applyProviderVisibility() {
 function applyProviderSelection() {
   state.llmProvider = els.providerSelect.value;
   state.claudeApiKey = els.claudeApiKeyInput.value.trim();
-  if (state.llmProvider === "claude" && !state.claudeApiKey) {
+  if (state.llmProvider === "claude" && !state.claudeApiKey && !state.serverClaudeKeyAvailable) {
     applyProviderVisibility();
-    els.providerStatus.textContent = "Claude API key required before switching providers";
+    els.providerStatus.textContent = "Claude API key required here or ANTHROPIC_API_KEY on the server";
     setModelProviderMenuOpen(true);
     els.claudeApiKeyInput.focus();
     return;
@@ -2055,7 +2133,7 @@ function applySourceRecommendation(data, missionText, mode = "server", statusMes
   const fallbackText = mode === "fallback"
     ? ` Browser fallback used because the planner API is unavailable (${statusMessage}).`
     : "";
-  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Use the advisor response to scope, then confirm sources.`;
+  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Confirm sources when ready.`;
   updateWorkflowPanel();
 }
 
@@ -2406,9 +2484,56 @@ function updateCameraText() {
   updateCenterGrid();
 }
 
+function updateMapModeControl() {
+  if (!els.mapModeToggleBtn) {
+    return;
+  }
+  const is3d = state.mapMode === "3d";
+  els.mapModeToggleBtn.textContent = is3d ? "2D View" : "3D View";
+  els.mapModeToggleBtn.setAttribute("aria-pressed", String(is3d));
+}
+
+function applyMapModeCameraControls() {
+  if (!state.viewer) {
+    return;
+  }
+  const controller = state.viewer.scene.screenSpaceCameraController;
+  const is3d = state.mapMode === "3d";
+  controller.enableTranslate = true;
+  controller.enableZoom = true;
+  controller.enableRotate = is3d;
+  controller.enableTilt = is3d;
+  controller.enableLook = is3d;
+  controller.enableCollisionDetection = true;
+  updateMapModeControl();
+}
+
+function setMapMode(mode, { animate = true } = {}) {
+  if (!state.viewer) {
+    state.mapMode = mode;
+    updateMapModeControl();
+    return;
+  }
+  const nextMode = mode === "3d" ? "3d" : "2d";
+  state.mapMode = nextMode;
+  const duration = animate ? 0.45 : 0;
+  if (nextMode === "3d") {
+    state.viewer.scene.morphTo3D(duration);
+  } else {
+    state.viewer.scene.morphTo2D(duration);
+  }
+  applyMapModeCameraControls();
+  state.viewer.scene.requestRender();
+}
+
+function toggleMapMode() {
+  setMapMode(state.mapMode === "3d" ? "2d" : "3d");
+}
+
 async function loadRuntimeConfig() {
   state.config = await fetchJson("/api/config");
   const hasToken = Boolean(state.config.cesium_ion_token);
+  state.serverClaudeKeyAvailable = Boolean(state.config.anthropic_api_key_configured);
   setChip(els.tokenChip, hasToken ? "Cesium token detected" : "Cesium token missing", hasToken ? "good" : "warn");
   els.claudeModelSelect.value = state.config.claude_default_model || els.claudeModelSelect.value;
   setModelProviderButton(`Default model: ${state.config.default_model}`, "warn");
@@ -2753,13 +2878,14 @@ async function submitPrompt(event) {
           });
         } catch (error) {
           claudeError = getErrorMessage(error);
-          els.providerStatus.textContent = `Claude request failed: ${claudeError}`;
-          els.requestStatus.textContent = "Claude failed; trying local Ollama fallback...";
+          console.warn("Claude request failed; trying local Ollama fallback.", claudeError);
+          els.providerStatus.textContent = "Claude request failed. Check key, model access, or network.";
+          els.requestStatus.textContent = "Trying local model fallback...";
         }
       } else {
-        claudeError = "Claude API key is not set for this browser session.";
-        els.providerStatus.textContent = "Claude API key missing; trying local Ollama fallback";
-        els.requestStatus.textContent = "Claude key missing; trying local Ollama fallback...";
+        claudeError = "Claude API key is not set in this browser session or on the server.";
+        els.providerStatus.textContent = "Claude API key missing";
+        els.requestStatus.textContent = "Trying local model fallback...";
       }
     }
 
@@ -2775,7 +2901,6 @@ async function submitPrompt(event) {
           agentProfile,
           mapContext,
           sourceContext,
-          metaPrefix: provider === "claude" ? "local fallback after Claude failure" : "",
         });
       } catch (error) {
         localError = getErrorMessage(error);
@@ -2798,14 +2923,18 @@ async function submitPrompt(event) {
       claudeError ? `Claude: ${claudeError}` : "",
       localError ? `local Ollama: ${localError}` : "",
     ].filter(Boolean).join(" | ");
+    if (failureSummary) {
+      console.warn("Model providers unavailable; deterministic planner response shown.", failureSummary);
+    }
     setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
-    ensureMessageMeta(assistantMessage, `deterministic fallback | ${failureSummary || "model providers unavailable"}`);
-    els.requestStatus.textContent = `Model providers unavailable; deterministic advisor response shown (${failureSummary})`;
+    ensureMessageMeta(assistantMessage, "deterministic planner response");
+    els.requestStatus.textContent = "Deterministic planner response shown.";
   } catch (error) {
     const message = getErrorMessage(error);
+    console.warn("Prompt request failed; deterministic planner response shown.", message);
     setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
-    ensureMessageMeta(assistantMessage, `deterministic fallback | ${message}`);
-    els.requestStatus.textContent = `Deterministic advisor response shown (${message})`;
+    ensureMessageMeta(assistantMessage, "deterministic planner response");
+    els.requestStatus.textContent = "Deterministic planner response shown.";
   } finally {
     els.submitBtn.disabled = false;
   }
@@ -3094,10 +3223,11 @@ function setCameraDragEnabled(enabled) {
     return;
   }
   const controller = state.viewer.scene.screenSpaceCameraController;
-  controller.enableRotate = enabled;
   controller.enableTranslate = enabled;
-  controller.enableTilt = enabled;
-  controller.enableLook = enabled;
+  controller.enableZoom = true;
+  controller.enableRotate = enabled && state.mapMode === "3d";
+  controller.enableTilt = enabled && state.mapMode === "3d";
+  controller.enableLook = enabled && state.mapMode === "3d";
 }
 
 function finishAreaResize(position) {
@@ -3210,6 +3340,13 @@ function wireMapInteraction() {
     finishAreaDrawing(movement.position);
   }, Cesium.ScreenSpaceEventType.LEFT_UP);
 
+  handler.setInputAction(() => {
+    if (state.areaDrawing || state.areaResizeHandle) {
+      return;
+    }
+    setMapMode("3d");
+  }, Cesium.ScreenSpaceEventType.MIDDLE_DOWN);
+
   state.viewer.camera.changed.addEventListener(updateCameraText);
   updateCameraText();
 }
@@ -3226,6 +3363,7 @@ async function buildViewer() {
     state.areaHandleEntities = [];
     state.overlayDataSource = null;
     state.overlayFileName = "";
+    state.overlayFeatureCount = 0;
     if (state.mapFocusSource === "kml-kmz-import") {
       clearMapLocationFocus();
     }
@@ -3243,6 +3381,7 @@ async function buildViewer() {
     homeButton: false,
     infoBox: false,
     navigationHelpButton: false,
+    sceneMode: Cesium.SceneMode.SCENE2D,
     sceneModePicker: false,
     selectionIndicator: false,
     terrainProvider: new Cesium.EllipsoidTerrainProvider(),
@@ -3258,8 +3397,12 @@ async function buildViewer() {
   state.viewer.terrainProvider = terrain.provider;
 
   state.viewer.scene.globe.depthTestAgainstTerrain = false;
-  state.viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+  applyMapModeCameraControls();
   state.viewer.camera.percentageChanged = 0.01;
+  state.viewer.scene.morphComplete.addEventListener(() => {
+    applyMapModeCameraControls();
+    updateCameraText();
+  });
 
   const target = state.lastCamera || {
     lat: state.config.default_lat,
@@ -3278,6 +3421,7 @@ async function buildViewer() {
   state.viewer.resize();
   state.viewer.scene.requestRender();
   wireMapInteraction();
+  setMapMode(state.mapMode, { animate: false });
   if (state.selectedArea) {
     setAreaEntityBounds(state.selectedArea);
   }
@@ -3302,6 +3446,276 @@ function resetView() {
   els.requestStatus.textContent = "Map reset. Search or import the mission location before source confirmation.";
 }
 
+function kmlDescendants(root, localName) {
+  return Array.from(root.getElementsByTagName("*")).filter((node) => node.localName === localName);
+}
+
+function firstKmlDescendant(root, localName) {
+  return kmlDescendants(root, localName)[0] || null;
+}
+
+function readKmlText(root, localName) {
+  const node = firstKmlDescendant(root, localName);
+  return node?.textContent?.trim() || "";
+}
+
+function parseKmlCoordinateText(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .map((tuple) => tuple.split(",").map((value) => Number.parseFloat(value)))
+    .filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat))
+    .map(([lon, lat, height]) => (
+      Number.isFinite(height) ? [lon, lat, height] : [lon, lat]
+    ));
+}
+
+function parseKmlGxCoordinateText(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .map((value) => Number.parseFloat(value))
+    .filter((value) => Number.isFinite(value));
+}
+
+function closeLinearRing(points) {
+  if (points.length < 3) {
+    return points;
+  }
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first[0] === last[0] && first[1] === last[1]) {
+    return points;
+  }
+  return [...points, [...first]];
+}
+
+function parseKmlPointGeometry(node) {
+  const coordinates = parseKmlCoordinateText(readKmlText(node, "coordinates"))[0];
+  return coordinates ? { type: "Point", coordinates } : null;
+}
+
+function parseKmlLineGeometry(node) {
+  const coordinates = parseKmlCoordinateText(readKmlText(node, "coordinates"));
+  return coordinates.length >= 2 ? { type: "LineString", coordinates } : null;
+}
+
+function parseKmlTrackGeometry(node) {
+  const coordinates = kmlDescendants(node, "coord")
+    .map((coordNode) => parseKmlGxCoordinateText(coordNode.textContent))
+    .filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat))
+    .map(([lon, lat, height]) => (
+      Number.isFinite(height) ? [lon, lat, height] : [lon, lat]
+    ));
+  return coordinates.length >= 2 ? { type: "LineString", coordinates } : null;
+}
+
+function parseKmlPolygonGeometry(node) {
+  const outerBoundary = firstKmlDescendant(node, "outerBoundaryIs") || node;
+  const outerRing = firstKmlDescendant(outerBoundary, "LinearRing");
+  const outerCoordinates = closeLinearRing(parseKmlCoordinateText(readKmlText(outerRing || outerBoundary, "coordinates")));
+  if (outerCoordinates.length < 4) {
+    return null;
+  }
+
+  const innerCoordinates = kmlDescendants(node, "innerBoundaryIs")
+    .map((innerBoundary) => {
+      const innerRing = firstKmlDescendant(innerBoundary, "LinearRing");
+      return closeLinearRing(parseKmlCoordinateText(readKmlText(innerRing || innerBoundary, "coordinates")));
+    })
+    .filter((ring) => ring.length >= 4);
+
+  return { type: "Polygon", coordinates: [outerCoordinates, ...innerCoordinates] };
+}
+
+function extractKmlGeometries(root) {
+  const geometries = [];
+  for (const node of kmlDescendants(root, "Point")) {
+    const geometry = parseKmlPointGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  for (const node of kmlDescendants(root, "LineString")) {
+    const geometry = parseKmlLineGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  for (const node of kmlDescendants(root, "Track")) {
+    const geometry = parseKmlTrackGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  for (const node of kmlDescendants(root, "Polygon")) {
+    const geometry = parseKmlPolygonGeometry(node);
+    if (geometry) {
+      geometries.push(geometry);
+    }
+  }
+  return geometries;
+}
+
+function parseKmlToGeoJson(kmlText, sourceName) {
+  const xml = new DOMParser().parseFromString(kmlText, "application/xml");
+  if (xml.querySelector("parsererror")) {
+    throw new Error(`${sourceName} is not valid KML XML.`);
+  }
+
+  const placemarks = kmlDescendants(xml, "Placemark");
+  const features = [];
+  const roots = placemarks.length ? placemarks : [xml.documentElement];
+
+  roots.forEach((root, index) => {
+    const name = readKmlText(root, "name") || `${sourceName} feature ${index + 1}`;
+    const description = readKmlText(root, "description");
+    for (const geometry of extractKmlGeometries(root)) {
+      features.push({
+        type: "Feature",
+        properties: {
+          name,
+          description,
+          source: sourceName,
+        },
+        geometry,
+      });
+    }
+  });
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
+
+function sortKmlArchiveEntries(a, b) {
+  const aName = a.name.toLowerCase();
+  const bName = b.name.toLowerCase();
+  const aDepth = aName.split("/").length;
+  const bDepth = bName.split("/").length;
+  if (aDepth !== bDepth) {
+    return aDepth - bDepth;
+  }
+  if (aName.endsWith("doc.kml") && !bName.endsWith("doc.kml")) {
+    return -1;
+  }
+  if (bName.endsWith("doc.kml") && !aName.endsWith("doc.kml")) {
+    return 1;
+  }
+  return aName.localeCompare(bName);
+}
+
+async function readOverlayFileText(file) {
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith(".kml")) {
+    return [{ name: file.name, text: await file.text() }];
+  }
+
+  if (!lowerName.endsWith(".kmz")) {
+    throw new Error(`Unsupported overlay format: ${file.name}`);
+  }
+  if (!window.JSZip) {
+    throw new Error("KMZ import requires JSZip to finish loading. Try again after the page is ready.");
+  }
+
+  const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+  const entries = Object.values(zip.files)
+    .filter((entry) => !entry.dir && entry.name.toLowerCase().endsWith(".kml"))
+    .sort(sortKmlArchiveEntries);
+  if (!entries.length) {
+    throw new Error(`No KML document found inside ${file.name}.`);
+  }
+
+  const texts = [];
+  for (const entry of entries) {
+    texts.push({
+      name: entry.name,
+      text: await entry.async("text"),
+    });
+  }
+  return texts;
+}
+
+async function loadParsedOverlayDataSource(file) {
+  const entries = await readOverlayFileText(file);
+  const features = [];
+  for (const entry of entries) {
+    const collection = parseKmlToGeoJson(entry.text, entry.name);
+    for (const feature of collection.features) {
+      features.push({
+        ...feature,
+        properties: {
+          ...(feature.properties || {}),
+          package: file.name,
+        },
+      });
+    }
+  }
+  if (!features.length) {
+    throw new Error(`No supported point, line, track, or polygon features were found in ${file.name}.`);
+  }
+
+  const dataSource = await Cesium.GeoJsonDataSource.load({
+    type: "FeatureCollection",
+    features,
+  }, {
+    clampToGround: true,
+    markerColor: cesiumCssColor("--color-accent-gold"),
+    stroke: cesiumCssColor("--color-accent-gold"),
+    fill: cesiumCssColor("--color-accent-gold").withAlpha(0.2),
+    strokeWidth: 3,
+  });
+  dataSource.name = file.name;
+  styleOverlayDataSource(dataSource);
+  state.overlayFeatureCount = features.length;
+  return dataSource;
+}
+
+async function loadNativeOverlayDataSource(file) {
+  const dataSource = await Cesium.KmlDataSource.load(file, {
+    camera: state.viewer.scene.camera,
+    canvas: state.viewer.scene.canvas,
+    clampToGround: true,
+    sourceUri: file.name,
+  });
+  state.overlayFeatureCount = dataSource.entities.values.length;
+  return dataSource;
+}
+
+function styleOverlayDataSource(dataSource) {
+  const gold = cesiumCssColor("--color-accent-gold");
+  const background = cesiumCssColor("--color-bg-primary");
+  const fill = gold.withAlpha(0.22);
+
+  for (const entity of dataSource.entities.values) {
+    if (entity.position) {
+      entity.billboard = undefined;
+      entity.point = new Cesium.PointGraphics({
+        pixelSize: 11,
+        color: gold,
+        outlineColor: background,
+        outlineWidth: 2,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      });
+    }
+    if (entity.polyline) {
+      entity.polyline.width = 3;
+      entity.polyline.material = gold;
+      entity.polyline.depthFailMaterial = gold.withAlpha(0.55);
+      entity.polyline.clampToGround = true;
+    }
+    if (entity.polygon) {
+      entity.polygon.material = fill;
+      entity.polygon.outline = true;
+      entity.polygon.outlineColor = gold;
+      entity.polygon.outlineWidth = 2;
+      entity.polygon.perPositionHeight = false;
+    }
+  }
+}
+
 function isSupportedOverlayFile(file) {
   return /\.(kml|kmz)$/i.test(file.name);
 }
@@ -3310,6 +3724,7 @@ async function removeCurrentOverlay() {
   if (!state.viewer || !state.overlayDataSource) {
     state.overlayDataSource = null;
     state.overlayFileName = "";
+    state.overlayFeatureCount = 0;
     if (state.mapFocusSource === "kml-kmz-import") {
       clearMapLocationFocus();
     }
@@ -3319,6 +3734,7 @@ async function removeCurrentOverlay() {
   await state.viewer.dataSources.remove(state.overlayDataSource, true);
   state.overlayDataSource = null;
   state.overlayFileName = "";
+  state.overlayFeatureCount = 0;
   if (state.mapFocusSource === "kml-kmz-import") {
     clearMapLocationFocus();
   }
@@ -3342,12 +3758,13 @@ async function importMapOverlay(file) {
 
   try {
     await removeCurrentOverlay();
-    const dataSource = await Cesium.KmlDataSource.load(file, {
-      camera: state.viewer.scene.camera,
-      canvas: state.viewer.scene.canvas,
-      clampToGround: true,
-      sourceUri: file.name,
-    });
+    let dataSource;
+    try {
+      dataSource = await loadParsedOverlayDataSource(file);
+    } catch (parseError) {
+      console.warn("Parsed KML/KMZ rendering failed; trying Cesium native loader.", parseError);
+      dataSource = await loadNativeOverlayDataSource(file);
+    }
     state.overlayDataSource = await state.viewer.dataSources.add(dataSource);
     state.overlayFileName = file.name;
     markMapLocationFocused(file.name, "kml-kmz-import");
@@ -3355,7 +3772,7 @@ async function importMapOverlay(file) {
     if (state.overlayDataSource.entities.values.length) {
       await state.viewer.flyTo(state.overlayDataSource, { duration: 1.1 });
       updateCameraText();
-      els.requestStatus.textContent = `Overlay loaded: ${file.name}`;
+      els.requestStatus.textContent = `Overlay loaded: ${file.name} (${state.overlayFeatureCount} features)`;
     } else {
       els.requestStatus.textContent = `Overlay loaded with no visible features: ${file.name}`;
     }
@@ -3526,6 +3943,7 @@ async function init() {
     els.clearChatBtn.addEventListener("click", clearChat);
     els.resetViewBtn.addEventListener("click", resetView);
     els.mapResetViewBtn.addEventListener("click", resetView);
+    els.mapModeToggleBtn.addEventListener("click", toggleMapMode);
     els.importOverlayBtn.addEventListener("click", requestOverlayFile);
     els.overlayFileInput.addEventListener("change", onOverlayFileSelected);
     els.locationSearchForm.addEventListener("submit", onLocationSearchSubmit);
