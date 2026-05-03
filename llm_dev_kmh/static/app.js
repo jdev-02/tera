@@ -1509,6 +1509,20 @@ function renderClarifyingQuestions() {
   }
 }
 
+function ensureClarifyingQuestions(recommendation) {
+  if (!recommendation) {
+    return [];
+  }
+  if (Array.isArray(recommendation.clarifying_questions) && recommendation.clarifying_questions.length) {
+    return recommendation.clarifying_questions;
+  }
+
+  const focus = recommendation.mission_focus || "mission-data-package";
+  return [
+    `Confirm the ${focus} scope in one pass: mission outcome, movement mode, time window, and any must-avoid constraints. This decides whether to add current imagery, hazards, access, or communications layers.`,
+  ];
+}
+
 function setWorkflowStage(index) {
   state.workflowStageIndex = clampNumber(index, 0, WORKFLOW_STAGES.length - 1);
   updateWorkflowPanel();
@@ -1879,11 +1893,12 @@ function buildClientSourceRecommendation(missionText, mapContext, plannerErrorMe
 
 function applySourceRecommendation(data, missionText, mode = "server", statusMessage = "") {
   mergeSourcesIntoCatalog(data.sources);
+  data.clarifying_questions = ensureClarifyingQuestions(data);
   state.sourceInference = data;
   state.lastMissionText = missionText;
   state.selectedSourceIds = new Set(data.selected_source_ids || []);
   state.sourceConfirmed = false;
-  state.workflowStageIndex = data.clarifying_questions?.length ? 1 : 2;
+  state.workflowStageIndex = 1;
   state.packagePlan = null;
   state.sourcePlannerFallback = mode === "fallback";
   state.sourcePlannerMessage = statusMessage;
@@ -1901,13 +1916,10 @@ function applySourceRecommendation(data, missionText, mode = "server", statusMes
   );
   renderSourceList();
 
-  const questionText = data.clarifying_questions?.length
-    ? ` Next questions: ${data.clarifying_questions.join(" ")}`
-    : "";
   const fallbackText = mode === "fallback"
     ? ` Browser fallback used because the planner API is unavailable (${statusMessage}).`
     : "";
-  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Answer the dialogue questions to broaden or narrow the package.${questionText}`;
+  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Use Questions to scope, then confirm sources.`;
   updateWorkflowPanel();
 }
 
@@ -1995,8 +2007,9 @@ function renderSourceList() {
 
   for (const source of visibleSources) {
     const article = document.createElement("article");
-    article.className = "source-item";
+    article.className = "source-item compact-source-item";
     article.dataset.selected = String(state.selectedSourceIds.has(source.id));
+    article.title = `${source.category} | ${formatSourceStatus(source)}`;
 
     const header = document.createElement("label");
     header.className = "source-item-header";
@@ -2021,27 +2034,8 @@ function renderSourceList() {
     title.className = "source-title";
     title.textContent = source.name;
 
-    const category = document.createElement("span");
-    category.className = "source-category";
-    category.textContent = source.category;
-
-    header.append(checkbox, title, category);
-
-    const purpose = document.createElement("p");
-    purpose.className = "source-purpose";
-    purpose.textContent = source.purpose;
-
-    const meta = document.createElement("div");
-    meta.className = "source-meta";
-
-    const provider = document.createElement("span");
-    provider.textContent = source.provider;
-
-    const status = document.createElement("span");
-    status.textContent = formatSourceStatus(source);
-
-    meta.append(provider, status);
-    article.append(header, purpose, meta);
+    header.append(checkbox, title);
+    article.append(header);
     els.sourceList.appendChild(article);
   }
 
