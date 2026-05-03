@@ -1,15 +1,30 @@
 .PHONY: help onboard catchup install install-crypto install-voice fmt lint test security ci run tcpdump-demo audit-log demo-proofs inject-demo sign-bench demo eval clean protect-branch
 .DEFAULT_GOAL := help
 
-PY := python3.11
+ifeq ($(OS),Windows_NT)
+SHELL := C:/PROGRA~1/Git/bin/bash.exe
+else
+SHELL := /bin/bash
+endif
+.SHELLFLAGS := -eu -o pipefail -c
+
 VENV := .venv
-PIP := $(VENV)/bin/pip
-PYTHON := $(VENV)/bin/python
-RUFF := $(VENV)/bin/ruff
-MYPY := $(VENV)/bin/mypy
-PYTEST := $(VENV)/bin/pytest
-BANDIT := $(VENV)/bin/bandit
-PIPAUDIT := $(VENV)/bin/pip-audit
+ifeq ($(OS),Windows_NT)
+PY := py.exe -3.11
+VENV_BIN := $(VENV)/Scripts
+EXE := .exe
+else
+PY := python3.11
+VENV_BIN := $(VENV)/bin
+EXE :=
+endif
+PIP := $(VENV_BIN)/pip$(EXE)
+PYTHON := $(VENV_BIN)/python$(EXE)
+RUFF := $(VENV_BIN)/ruff$(EXE)
+MYPY := $(VENV_BIN)/mypy$(EXE)
+PYTEST := $(VENV_BIN)/pytest$(EXE)
+BANDIT := $(VENV_BIN)/bandit$(EXE)
+PIPAUDIT := $(VENV_BIN)/pip-audit$(EXE)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -20,13 +35,13 @@ onboard: ## "I am Ben, get me ready to party." (interactive). Pass NAME=ben to s
 catchup: ## Resume work after a sync break: pull main, refresh deps, summarize what changed
 	@bash scripts/catchup.sh
 
-$(VENV)/bin/activate: pyproject.toml requirements-ci.txt ## Create venv if missing
+$(VENV_BIN)/activate: pyproject.toml requirements-ci.txt ## Create venv if missing
 	$(PY) -m venv $(VENV)
-	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements-ci.txt
-	$(PIP) install -e ".[dev]"
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements-ci.txt
+	$(PYTHON) -m pip install -e ".[dev]"
 
-install: $(VENV)/bin/activate ## Install core deps into venv (everyone runs this first)
+install: $(VENV_BIN)/activate ## Install core deps into venv (everyone runs this first)
 
 install-crypto: install ## Install ML-DSA / liboqs deps. ONLY for Satriyo (P2). Requires `liboqs` system lib first.
 	@if ! pkg-config --exists liboqs 2>/dev/null && [ ! -f /usr/local/lib/liboqs.dylib ] && [ ! -f /usr/local/lib/liboqs.so ] && [ ! -f /opt/homebrew/lib/liboqs.dylib ]; then \
@@ -39,11 +54,11 @@ install-crypto: install ## Install ML-DSA / liboqs deps. ONLY for Satriyo (P2). 
 		echo "After installing liboqs, run 'make install-crypto' again."; \
 		exit 1; \
 	fi
-	$(PIP) install -e ".[crypto]"
+	$(PYTHON) -m pip install -e ".[crypto]"
 	@echo "[OK] crypto deps installed. You can now: make sign-bench"
 
 install-voice: install ## Install Whisper + Piper deps. ONLY for Jon (P1).
-	$(PIP) install -e ".[voice]"
+	$(PYTHON) -m pip install -e ".[voice]"
 	@echo "[OK] voice deps installed."
 
 fmt: install ## Format code with ruff
@@ -81,7 +96,7 @@ ci: lint test security ## Full CI gate (must pass before push)
 	@echo "[OK] make ci passed"
 
 run: install ## Start the agent service locally (stub)
-	$(VENV)/bin/uvicorn agent.app:app --host 0.0.0.0 --port 8000 --reload
+	$(VENV_BIN)/uvicorn$(EXE) agent.app:app --host 0.0.0.0 --port 8000 --reload
 
 tcpdump-demo: ## Open tcpdump no-outbound monitor + audit log scroll for the security proof
 	@bash infra/security_demo_monitors.sh
@@ -98,7 +113,7 @@ inject-demo: install ## Demo pitch beat: unsigned CoT rejected, signed CoT accep
 sign-bench: install ## Sign + verify 1000 CoT round-trips, assert < 5 ms avg (issue #12)
 	$(PYTHON) crypto/sign_bench.py
 
-protect-branch: ## Lock main branch protection via GitHub API (needs GITHUB_TOKEN env var)
+protect-branch: ## Lock main branch protection via GitHub API (GITHUB_TOKEN or gh auth)
 	@bash infra/protect_branch.sh
 
 demo: install ## Run the hero scenario end-to-end (lands by Sun 0500)
