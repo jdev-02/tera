@@ -5,12 +5,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.text.InputType;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -21,6 +23,7 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.atak.plugins.impl.PluginContextProvider;
 import com.atak.plugins.impl.PluginLayoutInflater;
@@ -35,6 +38,9 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -500,6 +506,12 @@ public class TERAPlugin implements IPlugin {
         if (mapView == null) return;
 
         try {
+            String savedPackage = saveTakPackage(planJson);
+            if (savedPackage != null) {
+                Toast.makeText(pluginContext, "Saved TERA TAK package: " + savedPackage,
+                        Toast.LENGTH_LONG).show();
+            }
+
             if (applyTakCot(planJson, mapView)) {
                 return;
             }
@@ -568,6 +580,54 @@ public class TERAPlugin implements IPlugin {
             Toast.makeText(pluginContext, "Route parse error: " + e.getMessage(),
                     Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private String saveTakPackage(JSONObject responseJson) {
+        JSONObject takCot = responseJson.optJSONObject("tak_cot");
+        if (takCot == null) {
+            return null;
+        }
+        JSONObject pkg = takCot.optJSONObject("package");
+        if (pkg == null) {
+            return null;
+        }
+
+        String contentB64 = pkg.optString("content_b64", "");
+        if (contentB64.trim().isEmpty()) {
+            return null;
+        }
+
+        String fileName = sanitizeTakPackageFileName(pkg.optString("file_name", "TERA-TAK.kmz"));
+        File outputDir = new File(Environment.getExternalStorageDirectory(), "fromTERA");
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            Toast.makeText(pluginContext, "Could not create /sdcard/fromTERA",
+                    Toast.LENGTH_LONG).show();
+            return null;
+        }
+
+        File outputFile = new File(outputDir, fileName);
+        try (FileOutputStream output = new FileOutputStream(outputFile)) {
+            output.write(Base64.decode(contentB64, Base64.DEFAULT));
+            output.flush();
+            return outputFile.getAbsolutePath();
+        } catch (IllegalArgumentException | IOException e) {
+            Toast.makeText(pluginContext, "TAK package write failed: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+            return null;
+        }
+    }
+
+    private String sanitizeTakPackageFileName(String rawName) {
+        String name = rawName == null ? "" : rawName.replaceAll("[^A-Za-z0-9._-]", "_");
+        name = name.replaceAll("^[._-]+", "").replaceAll("[._-]+$", "");
+        if (name.isEmpty()) {
+            name = "TERA-TAK";
+        }
+        String lower = name.toLowerCase(java.util.Locale.US);
+        if (!lower.endsWith(".kmz") && !lower.endsWith(".kml") && !lower.endsWith(".zip")) {
+            name = name + ".kmz";
+        }
+        return name;
     }
 
     private boolean applyTakCot(JSONObject responseJson, MapView mapView) throws JSONException {
