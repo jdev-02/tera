@@ -15,12 +15,55 @@
   <div class="app-shell">
     <header class="top-bar">
       <div>
-        <div class="eyebrow">Mission data sourcing workspace</div>
         <h1>TERA Source Planner</h1>
+        <div class="eyebrow">Mission data sourcing workspace</div>
       </div>
       <div class="top-bar-controls">
+        <button id="importOverlayBtn" class="ghost-button" type="button">Import KML/KMZ</button>
+        <input id="overlayFileInput" class="file-input" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" />
         <span class="chip" id="tokenChip">Cesium token: checking</span>
-        <span class="chip" id="ollamaChip">Ollama: checking</span>
+        <div class="top-provider-shell">
+          <button id="modelProviderBtn" class="chip chip-button" type="button" aria-expanded="false" aria-controls="modelProviderMenu">Model: checking</button>
+          <div id="modelProviderMenu" class="provider-menu hidden">
+            <div class="settings-menu-header">
+              <strong>Model Provider</strong>
+              <span id="providerStatus" class="section-meta">Checking</span>
+            </div>
+            <div class="settings-grid">
+              <label>
+                Provider
+                <select id="providerSelect">
+                  <option value="ollama" selected>Local Ollama</option>
+                  <option value="claude">Claude API</option>
+                </select>
+              </label>
+              <label id="providerLocalModelRow">
+                Local model
+                <select id="topModelSelect">
+                  <option value="">Loading models...</option>
+                </select>
+              </label>
+              <label id="providerClaudeModelRow" class="hidden">
+                Claude model
+                <select id="claudeModelSelect">
+                  <option value="claude-sonnet-4-20250514" selected>Claude Sonnet 4</option>
+                  <option value="claude-opus-4-1-20250805">Claude Opus 4.1</option>
+                  <option value="claude-3-7-sonnet-20250219">Claude Sonnet 3.7</option>
+                  <option value="claude-3-5-haiku-20241022">Claude Haiku 3.5</option>
+                </select>
+              </label>
+              <label id="providerClaudeKeyRow" class="span-2 hidden">
+                Claude API key
+                <input id="claudeApiKeyInput" type="password" autocomplete="off" placeholder="sk-ant-..." />
+              </label>
+            </div>
+            <div class="provider-actions">
+              <button id="saveProviderBtn" class="primary-button" type="button">Use Provider</button>
+              <button id="clearClaudeKeyBtn" class="ghost-button" type="button">Clear Key</button>
+            </div>
+            <div class="section-meta">Claude keys stay in this browser session and are sent only with prompt requests.</div>
+          </div>
+        </div>
         <button id="panelToggleBtn" class="ghost-button" type="button" aria-expanded="true">Collapse Planner</button>
       </div>
     </header>
@@ -28,6 +71,21 @@
     <div class="workspace-shell">
       <main class="map-stage">
         <div id="cesiumContainer" class="map-canvas"></div>
+        <div id="locationSearchPanel" class="map-overlay top-left map-search-panel" role="search">
+          <form id="locationSearchForm" class="location-search-form">
+            <label class="visually-hidden" for="locationSearchInput">Mission location search</label>
+            <input
+              id="locationSearchInput"
+              type="search"
+              autocomplete="off"
+              placeholder="Search mission location or paste lat, lon"
+              aria-autocomplete="list"
+              aria-controls="locationSearchSuggestions"
+            />
+            <button class="ghost-button" type="submit">Go</button>
+          </form>
+          <div id="locationSearchSuggestions" class="location-suggestions hidden" role="listbox"></div>
+        </div>
         <div class="map-overlay top-right">
           <div class="map-instruments" aria-label="Map orientation controls">
             <div class="instrument-row">
@@ -52,6 +110,11 @@
             </div>
             <button id="mapResetViewBtn" class="map-reset-button" type="button">Reset View</button>
           </div>
+        </div>
+        <div class="map-overlay bottom-left center-grid-panel" aria-live="polite">
+          <div class="section-subtitle">Center Grid</div>
+          <div id="centerGridValue" class="center-grid-value">--</div>
+          <div id="centerGridLatLon" class="center-grid-latlon">--</div>
         </div>
       </main>
 
@@ -131,7 +194,7 @@
             </div>
           </div>
 
-          <div id="packageStatus" class="section-meta">No sources selected yet. Send a mission description to infer the needed package.</div>
+          <div id="packageStatus" class="section-meta">No sources selected yet. Send a mission description to plan the needed package.</div>
           <pre id="packageManifest" class="package-output hidden"></pre>
           <a id="downloadManifestLink" class="download-link hidden" href="#" download>Download manifest JSON</a>
         </section>
