@@ -1,7 +1,8 @@
 services:
   llm-dev-kmh:
     build:
-      context: ./llm_dev_kmh
+      context: .
+      dockerfile: llm_dev_kmh/Dockerfile
     ports:
       - "8080:8080"
     environment:

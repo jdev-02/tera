@@ -867,8 +867,9 @@ textarea {
 
 .source-list {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--space-1);
-  max-height: min(18vh, 180px);
+  max-height: min(11vh, 92px);
   overflow: auto;
   margin: var(--space-1) 0;
   padding-right: var(--space-1);
@@ -877,7 +878,13 @@ textarea {
 .source-item {
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  padding: 5px var(--space-2);
+}
+
+.source-chip {
+  min-width: 0;
+  min-height: 30px;
+  align-content: center;
 }
 
 .source-item[data-selected="true"] {
@@ -892,7 +899,7 @@ textarea {
   align-items: center;
   color: var(--color-text-primary);
   cursor: pointer;
-  min-height: 22px;
+  min-height: 20px;
 }
 
 .source-item-header input,
@@ -978,15 +985,14 @@ textarea {
 }
 
 .settings-shell {
-  position: relative;
+  display: inline-flex;
 }
 
 .settings-menu {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 20;
-  width: min(430px, calc(100vw - 52px));
+  width: 100%;
+  max-height: min(44vh, 520px);
+  margin-bottom: var(--space-2);
+  overflow-y: auto;
   padding: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: 0;
