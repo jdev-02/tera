@@ -94,7 +94,7 @@ Run these on the Jetson.
    ```bash
    curl -s -X POST http://127.0.0.1:8080/api/prompt \
      -H "Content-Type: application/json" \
-     -d '{"prompt":"TERA ATAK link test. Reply briefly.","model":"gemma3:4b","llm_provider":"ollama","agent_profile":"tera-atak-link-test"}'
+     -d '{"prompt":"TERA ATAK link test. Reply briefly.","model":"gemma3:4b","llm_provider":"ollama","agent_profile":"tera-atak-live"}'
    ```
 
 ## ATAK Device Setup
@@ -144,7 +144,7 @@ proves the same network path the ATAK plugin will use.
      "prompt": "TERA ATAK link test. Reply with JSON containing status, model, and one short readiness sentence.",
      "model": "gemma3:4b",
      "llm_provider": "ollama",
-     "agent_profile": "tera-atak-link-test"
+     "agent_profile": "tera-atak-live"
    }
    ```
 

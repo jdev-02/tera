@@ -59,7 +59,7 @@ if ! curl -fsS --connect-timeout "${CONNECT_TIMEOUT}" --max-time 10 "${HEALTH_UR
   exit 1
 fi
 
-BODY="$(printf '{"prompt":%s,"model":%s,"llm_provider":"ollama","agent_profile":"tera-atak-link-test"}' \
+BODY="$(printf '{"prompt":%s,"model":%s,"llm_provider":"ollama","agent_profile":"tera-atak-live"}' \
   "$(printf '%s' "${PROMPT}" | "${PYTHON_BIN}" -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
   "$(printf '%s' "${MODEL}" | "${PYTHON_BIN}" -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
 

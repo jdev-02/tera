@@ -229,6 +229,33 @@ def test_imagery_sourcing_prompt_uses_socratic_dialogue() -> None:
     assert "Socratic questions to ask next" in system_prompt
 
 
+def test_tera_atak_live_profile_uses_routing_prompt_and_keeps_mirror_flow() -> None:
+    """Regression: the ATAK plugin sends ``tera-atak-live``; that string must
+    resolve to a routing-flavored system prompt (not the imagery-sourcing
+    fallback) *and* still route through the ATAK mirror flow because
+    ``_request_is_atak_mirror_candidate`` substring-matches on ``"atak"``.
+    Follow-up to #94.
+    """
+    assert "tera-atak-live" in kmh_app.AGENT_PROFILE_PROMPTS
+    profile_prompt = kmh_app.AGENT_PROFILE_PROMPTS["tera-atak-live"]
+    fallback_prompt = kmh_app.AGENT_PROFILE_PROMPTS["imagery-sourcing"]
+    assert profile_prompt != fallback_prompt
+    assert "routing" in profile_prompt.lower()
+
+    request = kmh_app.PromptRequest(
+        prompt="Plan a low-exposure route to the ridge.",
+        agent_profile="tera-atak-live",
+    )
+    system_prompt = kmh_app._build_system_prompt(request)
+    assert profile_prompt in system_prompt
+    # The imagery-sourcing fallback prompt content must NOT be substituted in
+    # place of the ATAK profile prompt (the bug the review flagged).
+    assert fallback_prompt not in system_prompt
+    # Mirror flow still triggers for this profile string (substring "atak").
+    assert kmh_app._request_is_atak_mirror_candidate(request) is True
+    assert kmh_app._mirror_source_for_request(request) == "atak-plugin"
+
+
 def test_manifest_bounds_falls_back_to_view_bounds_when_selected_area_is_null() -> None:
     """Regression: the ATAK plugin no longer stuffs the operator self-marker
     into ``selected_area`` as a zero-area rectangle (#94 follow-up). Confirm
