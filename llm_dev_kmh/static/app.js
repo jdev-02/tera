@@ -110,7 +110,6 @@ const els = {
   workflowStageMeta: document.getElementById("workflowStageMeta"),
   workflowDots: document.getElementById("workflowDots"),
   workflowSlides: Array.from(document.querySelectorAll("[data-workflow-slide]")),
-  clarifyingQuestions: document.getElementById("clarifyingQuestions"),
   sourceList: document.getElementById("sourceList"),
   packageModeChip: document.getElementById("packageModeChip"),
   inferredMission: document.getElementById("inferredMission"),
@@ -135,11 +134,6 @@ const WORKFLOW_STAGES = [
     key: "mission",
     label: "Mission",
     meta: "Review extracted mission",
-  },
-  {
-    key: "questions",
-    label: "Questions",
-    meta: "Broaden or limit scope",
   },
   {
     key: "sources",
@@ -171,6 +165,8 @@ const FALLBACK_PRIMARY_STREAM_SOURCE_IDS = [
   "cesium_world_terrain",
   "osm_basemap",
 ];
+
+const LOCATION_INTENT_PREFIX_PATTERN = /^(go to|goto|navigate to|take me to|move map to|move to|search for|find|show me|zoom to|center on|focus on)\s+/i;
 
 const LOCATION_GAZETTEER = [
   {
@@ -236,6 +232,38 @@ const LOCATION_GAZETTEER = [
     lon: -120.0324,
     heightM: 18000,
     aliases: ["tahoe", "south lake tahoe"],
+  },
+  {
+    name: "Cascade Range, WA/OR/BC",
+    detail: "Pacific Northwest mountain range, national forests, volcanoes, SAR and terrain-routing context",
+    lat: 45.6500,
+    lon: -121.7000,
+    heightM: 26000,
+    aliases: ["cascades", "the cascades", "cascade mountains", "cascade range", "pnw cascades"],
+  },
+  {
+    name: "North Cascades National Park, WA",
+    detail: "High alpine terrain, glaciers, steep valleys, trails, and SAR access constraints",
+    lat: 48.7718,
+    lon: -121.2985,
+    heightM: 22000,
+    aliases: ["north cascades", "north cascades np", "noca"],
+  },
+  {
+    name: "Olympic National Park, WA",
+    detail: "Dense forest, mountains, river valleys, coastline, and SAR mission terrain",
+    lat: 47.8021,
+    lon: -123.6044,
+    heightM: 22000,
+    aliases: ["olympic", "olympic peninsula", "olympics"],
+  },
+  {
+    name: "Mount Rainier National Park, WA",
+    detail: "Volcanic alpine terrain, glaciers, roads, trails, and high-risk weather",
+    lat: 46.8523,
+    lon: -121.7603,
+    heightM: 20000,
+    aliases: ["rainier", "mount rainier", "mt rainier"],
   },
   {
     name: "Joshua Tree National Park, CA",
@@ -344,6 +372,12 @@ const LOCATION_GAZETTEER = [
 ];
 
 const LOCATION_SEARCH_LIMIT = 6;
+const LOCATION_SOURCE_PRIORITY = {
+  "coordinate-query": 500,
+  gazetteer: 180,
+  "local-gazetteer": 180,
+  "online-geocoder": 0,
+};
 const UTM_LATITUDE_BANDS = "CDEFGHJKLMNPQRSTUVWXX";
 const MGRS_COLUMN_LETTER_SETS = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"];
 const MGRS_ROW_LETTER_SETS = ["ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE"];
@@ -650,8 +684,18 @@ function tokenLooksLike(token, target) {
   return distance <= Math.max(1, Math.floor(Math.max(token.length, target.length) * 0.28));
 }
 
+function cleanLocationSearchQuery(query) {
+  let cleaned = query.trim().replace(/\s+/g, " ");
+  let previous = "";
+  while (cleaned && cleaned !== previous) {
+    previous = cleaned;
+    cleaned = cleaned.replace(LOCATION_INTENT_PREFIX_PATTERN, "").trim();
+  }
+  return cleaned;
+}
+
 function parseCoordinateQuery(query) {
-  const trimmed = query.trim();
+  const trimmed = cleanLocationSearchQuery(query);
   if (!trimmed) {
     return null;
   }
@@ -698,7 +742,7 @@ function parseCoordinateQuery(query) {
 }
 
 function scoreLocationCandidate(candidate, query) {
-  const normalizedQuery = normalizeSearchText(query);
+  const normalizedQuery = normalizeSearchText(cleanLocationSearchQuery(query));
   if (!normalizedQuery) {
     return 0;
   }
@@ -718,7 +762,7 @@ function scoreLocationCandidate(candidate, query) {
 
   for (const alias of aliases) {
     if (alias === normalizedQuery) {
-      score += 110;
+      score += 145;
     } else if (alias.startsWith(normalizedQuery)) {
       score += 85;
     } else if (alias.includes(normalizedQuery)) {
@@ -747,13 +791,17 @@ function scoreLocationCandidate(candidate, query) {
 }
 
 function getLocationSearchSuggestions(query) {
-  const coordinate = parseCoordinateQuery(query);
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  const coordinate = parseCoordinateQuery(cleanedQuery);
   const scored = LOCATION_GAZETTEER
-    .map((candidate) => ({
-      ...candidate,
-      source: "gazetteer",
-      score: scoreLocationCandidate(candidate, query),
-    }))
+    .map((candidate) => {
+      const matchScore = scoreLocationCandidate(candidate, cleanedQuery);
+      return {
+        ...candidate,
+        source: "gazetteer",
+        score: matchScore > 0 ? matchScore + LOCATION_SOURCE_PRIORITY.gazetteer : 0,
+      };
+    })
     .filter((candidate) => candidate.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, LOCATION_SEARCH_LIMIT);
@@ -765,6 +813,7 @@ function getLocationSearchSuggestions(query) {
 }
 
 function normalizeServerLocationSuggestion(suggestion) {
+  const serverScore = Number(suggestion.score);
   return {
     name: suggestion.name,
     detail: suggestion.detail || `${Number(suggestion.lat).toFixed(5)}, ${Number(suggestion.lon).toFixed(5)}`,
@@ -772,10 +821,20 @@ function normalizeServerLocationSuggestion(suggestion) {
     lon: Number(suggestion.lon),
     heightM: Number(suggestion.height_m || suggestion.heightM || 12000),
     source: suggestion.source || "online-geocoder",
+    score: Number.isFinite(serverScore) ? serverScore : 0,
   };
 }
 
-function mergeLocationSuggestions(primaryMatches, incomingMatches) {
+function scoreMergedLocation(match, query) {
+  const providedScore = Number(match.score);
+  if (Number.isFinite(providedScore) && providedScore > 0) {
+    return providedScore;
+  }
+  return scoreLocationCandidate(match, query)
+    + (LOCATION_SOURCE_PRIORITY[match.source] || 0);
+}
+
+function mergeLocationSuggestions(primaryMatches, incomingMatches, query = "") {
   const merged = [];
   const seen = new Set();
   for (const match of [...primaryMatches, ...incomingMatches]) {
@@ -787,25 +846,67 @@ function mergeLocationSuggestions(primaryMatches, incomingMatches) {
       continue;
     }
     seen.add(key);
-    merged.push(match);
+    merged.push({
+      ...match,
+      score: scoreMergedLocation(match, query),
+    });
   }
-  return merged.slice(0, LOCATION_SEARCH_LIMIT);
+  return merged
+    .sort((a, b) => {
+      const scoreDelta = scoreMergedLocation(b, query) - scoreMergedLocation(a, query);
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      return (LOCATION_SOURCE_PRIORITY[b.source] || 0) - (LOCATION_SOURCE_PRIORITY[a.source] || 0);
+    })
+    .slice(0, LOCATION_SEARCH_LIMIT);
+}
+
+function buildLocationSearchUrl(query) {
+  const params = new URLSearchParams({ q: cleanLocationSearchQuery(query) });
+  const center = getMapCenterPoint();
+  if (center) {
+    params.set("lat", center.lat.toFixed(6));
+    params.set("lon", center.lon.toFixed(6));
+  }
+
+  const bounds = buildMapContext().view_bounds;
+  if (bounds) {
+    params.set("west", bounds.west.toFixed(6));
+    params.set("south", bounds.south.toFixed(6));
+    params.set("east", bounds.east.toFixed(6));
+    params.set("north", bounds.north.toFixed(6));
+  }
+  return `/api/location-search?${params.toString()}`;
+}
+
+async function fetchLocationSearchSuggestions(query) {
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  if (cleanedQuery.length < 2) {
+    return [];
+  }
+  const data = await fetchJson(buildLocationSearchUrl(cleanedQuery));
+  return Array.isArray(data.suggestions)
+    ? data.suggestions.map(normalizeServerLocationSuggestion)
+    : [];
 }
 
 async function refreshOnlineLocationSuggestions(query, requestId, localMatches) {
   try {
-    const data = await fetchJson(`/api/location-search?q=${encodeURIComponent(query)}`);
+    const cleanedQuery = cleanLocationSearchQuery(query);
+    const serverMatches = await fetchLocationSearchSuggestions(cleanedQuery);
     if (requestId !== state.locationSearchRequestId) {
       return;
     }
-    const serverMatches = Array.isArray(data.suggestions)
-      ? data.suggestions.map(normalizeServerLocationSuggestion)
-      : [];
-    state.locationSearchMatches = mergeLocationSuggestions(localMatches, serverMatches);
-    renderLocationSearchSuggestions();
+    state.locationSearchMatches = mergeLocationSuggestions(localMatches, serverMatches, cleanedQuery);
+    if (state.locationSearchMatches.length) {
+      renderLocationSearchSuggestions();
+    } else {
+      renderLocationSearchEmpty(cleanedQuery);
+    }
   } catch (_error) {
     if (requestId === state.locationSearchRequestId && !state.locationSearchMatches.length) {
-      setLocationSearchOpen(false);
+      renderLocationSearchEmpty(query);
     }
   }
 }
@@ -826,6 +927,29 @@ function setActiveLocationSuggestion(index) {
     option.classList.toggle("active", isActive);
     option.setAttribute("aria-selected", String(isActive));
   });
+}
+
+function renderLocationSearchStatus(message) {
+  els.locationSearchSuggestions.replaceChildren();
+  const status = document.createElement("div");
+  status.className = "location-suggestion-status";
+  status.textContent = message;
+  els.locationSearchSuggestions.appendChild(status);
+  setLocationSearchOpen(true);
+}
+
+function renderLocationSearchLoading(query) {
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  renderLocationSearchStatus(`Searching ${cleanedQuery}...`);
+}
+
+function renderLocationSearchEmpty(query) {
+  const cleanedQuery = cleanLocationSearchQuery(query);
+  renderLocationSearchStatus(
+    cleanedQuery
+      ? `No location match for "${cleanedQuery}". Try a more specific place, coordinates, or KML/KMZ.`
+      : "Enter a mission location, coordinates, or KML/KMZ overlay.",
+  );
 }
 
 function renderLocationSearchSuggestions() {
@@ -854,7 +978,7 @@ function renderLocationSearchSuggestions() {
     button.addEventListener("pointerenter", () => setActiveLocationSuggestion(index));
     button.addEventListener("click", () => {
       state.activeLocationSearchIndex = index;
-      void commitLocationSearch();
+      flyToLocationSuggestion(match);
     });
 
     els.locationSearchSuggestions.appendChild(button);
@@ -893,35 +1017,64 @@ function flyToLocationSuggestion(suggestion) {
 }
 
 async function commitLocationSearch() {
-  const query = els.locationSearchInput.value.trim();
-  let matches = state.locationSearchMatches.length
-    ? state.locationSearchMatches
-    : getLocationSearchSuggestions(query);
-  const index = state.activeLocationSearchIndex >= 0 ? state.activeLocationSearchIndex : 0;
-  let suggestion = matches[index] || matches[0];
-  if (!suggestion && query.length >= 2) {
-    try {
-      const data = await fetchJson(`/api/location-search?q=${encodeURIComponent(query)}`);
-      const serverMatches = Array.isArray(data.suggestions)
-        ? data.suggestions.map(normalizeServerLocationSuggestion)
-        : [];
-      matches = mergeLocationSuggestions([], serverMatches);
-      state.locationSearchMatches = matches;
-      suggestion = matches[0];
-    } catch (_error) {
-      suggestion = null;
-    }
-  }
-  if (!suggestion) {
-    els.requestStatus.textContent = "No local match. Paste decimal coordinates or import a KML/KMZ overlay.";
-    setLocationSearchOpen(false);
+  const query = cleanLocationSearchQuery(els.locationSearchInput.value);
+  window.clearTimeout(state.locationSearchTimer);
+  state.locationSearchRequestId += 1;
+
+  const coordinate = parseCoordinateQuery(query);
+  if (coordinate) {
+    flyToLocationSuggestion(coordinate);
     return;
+  }
+
+  if (query.length < 2) {
+    renderLocationSearchEmpty(query);
+    return;
+  }
+
+  const localMatches = getLocationSearchSuggestions(query);
+  const selectedBeforeFetch = state.activeLocationSearchIndex > 0
+    ? state.locationSearchMatches[state.activeLocationSearchIndex]
+    : null;
+  if (localMatches.length) {
+    state.locationSearchMatches = localMatches;
+    renderLocationSearchSuggestions();
+  } else {
+    renderLocationSearchLoading(query);
+  }
+
+  let serverMatches = [];
+  try {
+    serverMatches = await fetchLocationSearchSuggestions(query);
+  } catch (_error) {
+    serverMatches = [];
+  }
+
+  const matches = mergeLocationSuggestions(localMatches, serverMatches, query);
+  state.locationSearchMatches = matches;
+  const selectedKey = selectedBeforeFetch
+    ? `${Math.round(selectedBeforeFetch.lat * 1000)}:${Math.round(selectedBeforeFetch.lon * 1000)}:${selectedBeforeFetch.name.toLowerCase()}`
+    : "";
+  const suggestion = selectedKey
+    ? matches.find((match) => (
+      `${Math.round(match.lat * 1000)}:${Math.round(match.lon * 1000)}:${match.name.toLowerCase()}`
+    ) === selectedKey) || selectedBeforeFetch
+    : matches[0];
+
+  if (!suggestion) {
+    els.requestStatus.textContent = "Location not resolved. Try a more specific place, coordinates, or KML/KMZ.";
+    renderLocationSearchEmpty(query);
+    return;
+  }
+
+  if (matches.length) {
+    renderLocationSearchSuggestions();
   }
   flyToLocationSuggestion(suggestion);
 }
 
 function onLocationSearchInput() {
-  const query = els.locationSearchInput.value.trim();
+  const query = cleanLocationSearchQuery(els.locationSearchInput.value);
   window.clearTimeout(state.locationSearchTimer);
   state.locationSearchRequestId += 1;
   if (query.length < 2) {
@@ -931,11 +1084,15 @@ function onLocationSearchInput() {
   }
   const localMatches = getLocationSearchSuggestions(query);
   state.locationSearchMatches = localMatches;
-  renderLocationSearchSuggestions();
+  if (localMatches.length) {
+    renderLocationSearchSuggestions();
+  } else {
+    renderLocationSearchLoading(query);
+  }
   const requestId = state.locationSearchRequestId;
   state.locationSearchTimer = window.setTimeout(() => {
     void refreshOnlineLocationSuggestions(query, requestId, localMatches);
-  }, 240);
+  }, 180);
 }
 
 function onLocationSearchKeyDown(event) {
@@ -1437,7 +1594,7 @@ function applyProviderVisibility() {
     const tone = state.localModelAvailable ? "good" : "warn";
     setModelProviderButton(state.localModelAvailable ? `Local: ${label}` : "Local model offline; rules active", tone);
     els.providerStatus.textContent = state.localModelAvailable
-      ? "Local Ollama available"
+      ? `Using detected local model: ${label}`
       : "Local model offline; deterministic planner remains active";
   }
 }
@@ -1487,26 +1644,6 @@ function renderWorkflowDots() {
     dot.title = stage.label;
     els.workflowDots.appendChild(dot);
   });
-}
-
-function renderClarifyingQuestions() {
-  els.clarifyingQuestions.replaceChildren();
-  const questions = state.sourceInference?.clarifying_questions || [];
-
-  if (!questions.length) {
-    const item = document.createElement("li");
-    item.textContent = state.sourceInference
-      ? "No additional Socratic question is needed. Review the working sources or describe a constraint in chat."
-      : "Socratic source questions will appear after the first mission description.";
-    els.clarifyingQuestions.appendChild(item);
-    return;
-  }
-
-  for (const question of questions) {
-    const item = document.createElement("li");
-    item.textContent = question;
-    els.clarifyingQuestions.appendChild(item);
-  }
 }
 
 function ensureClarifyingQuestions(recommendation) {
@@ -1561,7 +1698,6 @@ function updateWorkflowPanel() {
   els.buildPackageBtn.disabled = selectedCount === 0 || !state.sourceConfirmed;
   els.streamSelectedBtn.disabled = selectedCount === 0;
 
-  renderClarifyingQuestions();
   renderWorkflowDots();
 }
 
@@ -1919,7 +2055,7 @@ function applySourceRecommendation(data, missionText, mode = "server", statusMes
   const fallbackText = mode === "fallback"
     ? ` Browser fallback used because the planner API is unavailable (${statusMessage}).`
     : "";
-  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Use Questions to scope, then confirm sources.`;
+  els.packageStatus.textContent = `Drafted ${state.selectedSourceIds.size} working sources.${fallbackText} Use the advisor response to scope, then confirm sources.`;
   updateWorkflowPanel();
 }
 
@@ -2165,7 +2301,7 @@ function confirmSources() {
   }
   state.sourceConfirmed = true;
   hidePackageOutput();
-  setWorkflowStage(3);
+  setWorkflowStage(2);
   els.packageStatus.textContent = "Sources confirmed. Draw or adjust the AO rectangle for the data package.";
 }
 
@@ -2303,7 +2439,7 @@ async function loadModels() {
       els.modelsList.appendChild(item);
       els.modelsStatus.textContent = "Local model offline; deterministic planner active";
       applyProviderVisibility();
-      return;
+      return data;
     }
 
     if (!Array.isArray(data.models) || data.models.length === 0) {
@@ -2318,7 +2454,7 @@ async function loadModels() {
       els.modelsStatus.textContent = `Default model: ${data.default_model}`;
       syncModelSelects(els.modelSelect, els.topModelSelect);
       applyProviderVisibility();
-      return;
+      return data;
     }
 
     for (const model of data.models) {
@@ -2341,9 +2477,10 @@ async function loadModels() {
       els.modelSelect.appendChild(option);
     }
 
-    els.modelsStatus.textContent = `${data.models.length} model${data.models.length === 1 ? "" : "s"} available`;
+    els.modelsStatus.textContent = `Detected local model: ${data.default_model}`;
     syncModelSelects(els.modelSelect, els.topModelSelect);
     applyProviderVisibility();
+    return data;
   } catch (error) {
     state.localModelAvailable = false;
     state.localModelDetail = error instanceof Error ? error.message : String(error);
@@ -2359,6 +2496,7 @@ async function loadModels() {
     els.modelsStatus.textContent = "Local model offline; deterministic planner active";
     syncModelSelects(els.modelSelect, els.topModelSelect);
     applyProviderVisibility();
+    return null;
   }
 }
 
@@ -2407,7 +2545,7 @@ async function planSourcesFromMission(missionText, mapContext) {
 async function buildSourcePackage() {
   if (!state.sourceConfirmed) {
     els.packageStatus.textContent = "Confirm the recommended source list before building the manifest.";
-    setWorkflowStage(2);
+    setWorkflowStage(1);
     return;
   }
 
@@ -2444,6 +2582,104 @@ async function buildSourcePackage() {
   }
 }
 
+function providerDisplayName(provider) {
+  return provider === "claude" ? "Claude" : "local Ollama";
+}
+
+async function resolveLocalModelForFallback() {
+  const modelData = await loadModels();
+  return (
+    els.modelSelect.value.trim()
+    || els.topModelSelect.value.trim()
+    || modelData?.default_model
+    || state.config?.default_model
+    || ""
+  );
+}
+
+async function streamAssistantProvider({
+  assistantMessage,
+  provider,
+  model,
+  finalPrompt,
+  system,
+  agentProfile,
+  mapContext,
+  sourceContext,
+  metaPrefix = "",
+}) {
+  const providerLabel = providerDisplayName(provider);
+  const baseMeta = metaPrefix ? `${metaPrefix} | ${providerLabel}` : providerLabel;
+  let streamedText = "";
+  let resolvedModel = model || "default model";
+
+  setMessagePending(assistantMessage, `${providerLabel} is thinking`);
+  ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${resolvedModel} | streaming`);
+  els.requestStatus.textContent = provider === "claude"
+    ? "Streaming Claude response..."
+    : "Streaming local Ollama response...";
+
+  const response = await fetch("/api/prompt/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: finalPrompt,
+      system: system || null,
+      model: provider === "claude" ? null : model || null,
+      llm_provider: provider,
+      cloud_model: provider === "claude" ? model || null : null,
+      cloud_api_key: provider === "claude" ? state.claudeApiKey || null : null,
+      agent_profile: agentProfile,
+      map_context: mapContext,
+      source_context: sourceContext,
+    }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `${response.status} ${response.statusText}`);
+  }
+
+  await readEventStream(response, (eventData) => {
+    if (eventData.type === "start") {
+      resolvedModel = eventData.model || resolvedModel;
+      ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${resolvedModel} | streaming`);
+      return;
+    }
+    if (eventData.type === "token") {
+      streamedText += eventData.text || "";
+      const shouldFollowStream = isChatPinnedToBottom();
+      setMessageBody(assistantMessage, streamedText);
+      maybeScrollChatToBottom(shouldFollowStream);
+      return;
+    }
+    if (eventData.type === "status") {
+      els.requestStatus.textContent = eventData.detail || `Streaming ${providerLabel} response...`;
+      return;
+    }
+    if (eventData.type === "error") {
+      throw new Error(eventData.detail || `${providerLabel} request failed.`);
+    }
+    if (eventData.type === "done") {
+      ensureMessageMeta(assistantMessage, `provider: ${baseMeta} | model: ${eventData.model || resolvedModel}`);
+    }
+  });
+
+  if (!streamedText.trim()) {
+    throw new Error(provider === "claude"
+      ? "Claude returned an empty response."
+      : "The local Ollama model returned an empty streamed response.");
+  }
+
+  if (provider === "ollama") {
+    state.localModelAvailable = true;
+    state.localModelDetail = "";
+    applyProviderVisibility();
+  }
+
+  return { provider, model: resolvedModel, text: streamedText };
+}
+
 async function submitPrompt(event) {
   event.preventDefault();
   els.submitBtn.disabled = true;
@@ -2462,17 +2698,10 @@ async function submitPrompt(event) {
   els.requestStatus.textContent = provider === "claude"
     ? "Connecting to Claude API..."
     : "Connecting to local model...";
-  if (provider === "claude" && !state.claudeApiKey) {
-    els.submitBtn.disabled = false;
-    els.requestStatus.textContent = "Claude API key required";
-    els.providerStatus.textContent = "Enter a Claude API key to use cloud inference";
-    setModelProviderMenuOpen(true);
-    els.claudeApiKeyInput.focus();
-    return;
-  }
   const agentProfile = els.agentProfileSelect.value;
   const finalPrompt = `${prompt}${makeMapContextAppendix()}`;
   const mapContext = els.includeMapContext.checked ? buildMapContext() : null;
+  els.promptInput.value = "";
   els.requestStatus.textContent = "Planning source package...";
   try {
     await planSourcesFromMission(prompt, mapContext);
@@ -2496,112 +2725,87 @@ async function submitPrompt(event) {
     ].join(" | "),
   );
 
-  let activeAssistantMessage = null;
-
-  if (provider === "ollama" && !state.localModelAvailable) {
-    appendMessage(
-      "assistant",
-      buildDeterministicAdvisorResponse(sourceRecommendation, mapContext),
-      "deterministic source advisor | local model offline",
-    );
-    els.requestStatus.textContent = "Local model offline; deterministic advisor response shown";
-    els.promptInput.value = "";
-    els.submitBtn.disabled = false;
-    return;
-  }
+  const assistantMessage = appendMessage(
+    "assistant",
+    "",
+    provider === "claude"
+      ? `provider: Claude | model: ${model || "default"} | queued`
+      : `provider: local Ollama | model: ${model || "auto-detect"} | queued`,
+  );
 
   try {
-    const assistantMessage = appendMessage(
-      "assistant",
-      "",
-      model ? `model: ${model} | streaming` : "streaming",
-    );
-    activeAssistantMessage = assistantMessage;
-    setMessagePending(assistantMessage);
-    const response = await fetch("/api/prompt/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: finalPrompt,
-        system: system || null,
-        model: model || null,
-        llm_provider: provider,
-        cloud_model: provider === "claude" ? model : null,
-        cloud_api_key: provider === "claude" ? state.claudeApiKey || null : null,
-        agent_profile: agentProfile,
-        map_context: mapContext,
-        source_context: sourceContext,
-      }),
-    });
+    let claudeError = null;
+    let localError = null;
+    let result = null;
 
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.detail || `${response.status} ${response.statusText}`);
+    if (provider === "claude") {
+      if (state.claudeApiKey) {
+        try {
+          result = await streamAssistantProvider({
+            assistantMessage,
+            provider: "claude",
+            model,
+            finalPrompt,
+            system,
+            agentProfile,
+            mapContext,
+            sourceContext,
+          });
+        } catch (error) {
+          claudeError = getErrorMessage(error);
+          els.providerStatus.textContent = `Claude request failed: ${claudeError}`;
+          els.requestStatus.textContent = "Claude failed; trying local Ollama fallback...";
+        }
+      } else {
+        claudeError = "Claude API key is not set for this browser session.";
+        els.providerStatus.textContent = "Claude API key missing; trying local Ollama fallback";
+        els.requestStatus.textContent = "Claude key missing; trying local Ollama fallback...";
+      }
     }
 
-    let streamedText = "";
-    let resolvedModel = model || "default model";
-
-    els.requestStatus.textContent = "Streaming response...";
-
-    await readEventStream(response, (eventData) => {
-      if (eventData.type === "start") {
-        resolvedModel = eventData.model || resolvedModel;
-        ensureMessageMeta(assistantMessage, `model: ${resolvedModel} | streaming`);
-        return;
+    if (!result) {
+      const localModel = await resolveLocalModelForFallback();
+      try {
+        result = await streamAssistantProvider({
+          assistantMessage,
+          provider: "ollama",
+          model: localModel,
+          finalPrompt,
+          system,
+          agentProfile,
+          mapContext,
+          sourceContext,
+          metaPrefix: provider === "claude" ? "local fallback after Claude failure" : "",
+        });
+      } catch (error) {
+        localError = getErrorMessage(error);
       }
-      if (eventData.type === "token") {
-        streamedText += eventData.text || "";
-        const shouldFollowStream = isChatPinnedToBottom();
-        setMessageBody(assistantMessage, streamedText);
-        maybeScrollChatToBottom(shouldFollowStream);
-        return;
-      }
-      if (eventData.type === "status") {
-        els.requestStatus.textContent = eventData.detail || "Streaming response...";
-        return;
-      }
-      if (eventData.type === "error") {
-        throw new Error(eventData.detail || "Streaming request failed.");
-      }
-      if (eventData.type === "done") {
-        ensureMessageMeta(assistantMessage, `model: ${eventData.model || resolvedModel}`);
-      }
-    });
-
-    if (!streamedText.trim()) {
-      throw new Error(provider === "claude"
-        ? "Claude returned an empty response."
-        : "The local model returned an empty streamed response.");
     }
 
-    els.requestStatus.textContent = `Completed with ${resolvedModel}`;
-    els.promptInput.value = "";
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (provider === "ollama") {
+    if (result) {
+      els.requestStatus.textContent = result.provider === "claude"
+        ? `Completed with Claude ${result.model}`
+        : `Completed with local Ollama ${result.model}`;
+      return;
+    }
+
+    if (localError) {
       state.localModelAvailable = false;
-      state.localModelDetail = message;
+      state.localModelDetail = localError;
       applyProviderVisibility();
-    } else {
-      els.providerStatus.textContent = `Claude request failed: ${message}`;
     }
-    const fallbackMeta = provider === "claude"
-      ? "deterministic fallback | Claude request failed"
-      : "deterministic fallback | local model unavailable";
-    if (activeAssistantMessage) {
-      setMessageBody(activeAssistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
-      ensureMessageMeta(activeAssistantMessage, fallbackMeta);
-    } else {
-      appendMessage(
-        "assistant",
-        buildDeterministicAdvisorResponse(sourceRecommendation, mapContext),
-        fallbackMeta,
-      );
-    }
-    els.requestStatus.textContent = provider === "claude"
-      ? `Claude request failed; deterministic advisor response shown (${message})`
-      : `Local model unavailable; deterministic advisor response shown (${message})`;
+    const failureSummary = [
+      claudeError ? `Claude: ${claudeError}` : "",
+      localError ? `local Ollama: ${localError}` : "",
+    ].filter(Boolean).join(" | ");
+    setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
+    ensureMessageMeta(assistantMessage, `deterministic fallback | ${failureSummary || "model providers unavailable"}`);
+    els.requestStatus.textContent = `Model providers unavailable; deterministic advisor response shown (${failureSummary})`;
+  } catch (error) {
+    const message = getErrorMessage(error);
+    setMessageBody(assistantMessage, buildDeterministicAdvisorResponse(sourceRecommendation, mapContext));
+    ensureMessageMeta(assistantMessage, `deterministic fallback | ${message}`);
+    els.requestStatus.textContent = `Deterministic advisor response shown (${message})`;
   } finally {
     els.submitBtn.disabled = false;
   }
@@ -2876,7 +3080,7 @@ function clearSelectedArea() {
 function setAreaSelectMode(active) {
   if (active && !state.sourceConfirmed) {
     els.packageStatus.textContent = "Confirm the recommended source list before drawing AO coverage.";
-    setWorkflowStage(2);
+    setWorkflowStage(1);
     return;
   }
   state.areaSelectActive = active;
@@ -3328,11 +3532,18 @@ async function init() {
     els.locationSearchInput.addEventListener("input", onLocationSearchInput);
     els.locationSearchInput.addEventListener("keydown", onLocationSearchKeyDown);
     els.modelProviderBtn.addEventListener("click", () => {
-      setModelProviderMenuOpen(els.modelProviderMenu.classList.contains("hidden"));
+      const shouldOpen = els.modelProviderMenu.classList.contains("hidden");
+      setModelProviderMenuOpen(shouldOpen);
+      if (shouldOpen && state.llmProvider === "ollama") {
+        void loadModels();
+      }
     });
     els.providerSelect.addEventListener("change", (event) => {
       state.llmProvider = event.target.value;
       applyProviderVisibility();
+      if (state.llmProvider === "ollama") {
+        void loadModels();
+      }
     });
     els.topModelSelect.addEventListener("change", () => {
       els.modelSelect.value = els.topModelSelect.value;
