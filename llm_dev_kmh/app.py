@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from difflib import SequenceMatcher
@@ -37,11 +38,17 @@ LOCATION_SEARCH_TIMEOUT_S = float(os.getenv("LOCATION_SEARCH_TIMEOUT_S", "4"))
 LOCATION_SEARCH_URL = os.getenv(
     "LOCATION_SEARCH_URL", "https://nominatim.openstreetmap.org/search"
 )
+LOCATION_INTENT_PREFIX_RE = re.compile(
+    r"^(?:go to|goto|navigate to|take me to|move map to|move to|search for|"
+    r"find|show me|zoom to|center on|focus on|look up|open)\s+",
+    re.IGNORECASE,
+)
 CESIUM_ION_TOKEN = os.getenv("CESIUM_ION_TOKEN", "")
 DEFAULT_LAT = float(os.getenv("DEFAULT_LAT", "37.7749"))
 DEFAULT_LON = float(os.getenv("DEFAULT_LON", "-122.4194"))
 DEFAULT_HEIGHT_M = float(os.getenv("DEFAULT_HEIGHT_M", "14000"))
 ACTIVE_OLLAMA_BASE_URL: str | None = None
+ACTIVE_OLLAMA_MODEL: str | None = None
 
 app = FastAPI(title="TERA Source Planner", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -99,6 +106,7 @@ class LocationSuggestion(BaseModel):
     lon: float
     height_m: float = 12000
     source: str
+    score: float = 0
 
 
 class LocationSearchResponse(BaseModel):
@@ -707,6 +715,71 @@ US_CONTEXT_TERMS = (
 )
 
 LOCAL_LOCATION_GAZETTEER: tuple[dict[str, object], ...] = (
+    {
+        "name": "Cascade Range, WA/OR/BC",
+        "detail": (
+            "Pacific Northwest mountain range, national forests, volcanoes, "
+            "SAR and terrain-routing context."
+        ),
+        "lat": 45.6500,
+        "lon": -121.7000,
+        "height_m": 26000,
+        "aliases": (
+            "cascades",
+            "the cascades",
+            "cascade mountains",
+            "cascade range",
+            "pnw cascades",
+        ),
+    },
+    {
+        "name": "North Cascades National Park, WA",
+        "detail": "High alpine terrain, glaciers, steep valleys, trails, and SAR access constraints.",
+        "lat": 48.7718,
+        "lon": -121.2985,
+        "height_m": 22000,
+        "aliases": ("north cascades", "north cascades np", "cascades national park", "noca"),
+    },
+    {
+        "name": "Olympic National Park, WA",
+        "detail": "Dense forest, mountains, river valleys, coastline, and SAR mission terrain.",
+        "lat": 47.8021,
+        "lon": -123.6044,
+        "height_m": 22000,
+        "aliases": ("olympic", "olympics", "olympic peninsula", "olympic national park"),
+    },
+    {
+        "name": "Mount Rainier National Park, WA",
+        "detail": "Volcanic alpine terrain, glaciers, roads, trails, and high-risk weather.",
+        "lat": 46.8523,
+        "lon": -121.7603,
+        "height_m": 20000,
+        "aliases": ("rainier", "mount rainier", "mt rainier", "rainier national park"),
+    },
+    {
+        "name": "Sierra Nevada, CA/NV",
+        "detail": "Mountain range with alpine terrain, forest roads, trails, water, and winter hazards.",
+        "lat": 38.9000,
+        "lon": -120.0000,
+        "height_m": 26000,
+        "aliases": ("sierra", "sierras", "sierra nevada", "eastern sierra"),
+    },
+    {
+        "name": "Rocky Mountains, CO/WY/MT",
+        "detail": "Western mountain terrain, high elevation, passes, ridges, and SAR context.",
+        "lat": 40.3772,
+        "lon": -105.5250,
+        "height_m": 30000,
+        "aliases": ("rockies", "rocky mountains", "front range"),
+    },
+    {
+        "name": "Appalachian Trail",
+        "detail": "Long-distance eastern trail corridor with forest, ridges, road crossings, and shelters.",
+        "lat": 39.0000,
+        "lon": -77.9000,
+        "height_m": 26000,
+        "aliases": ("appalachian", "appalachians", "appalachian trail", "at trail"),
+    },
     {
         "name": "Joshua Tree National Park, CA",
         "detail": "Desert terrain, trails, dry washes, roads, climbing areas, and water scarcity.",
@@ -1709,7 +1782,7 @@ def _build_system_prompt(request: PromptRequest) -> str:
 
 
 def _build_ollama_payload(request: PromptRequest, *, stream: bool) -> tuple[str, dict[str, object]]:
-    model = request.model or OLLAMA_MODEL
+    model = request.model or ACTIVE_OLLAMA_MODEL or OLLAMA_MODEL
     payload: dict[str, object] = {
         "model": model,
         "stream": stream,
@@ -1852,8 +1925,71 @@ async def _fetch_ollama_models_from(base_url: str) -> list[str]:
     ]
 
 
+def _score_ollama_model_for_default(model: str, configured_model: str) -> int:
+    normalized = model.lower()
+    score = 0
+    if model == configured_model:
+        score += 500
+    if "gemma" in normalized:
+        score += 300
+    if "gemma4" in normalized or "gemma-4" in normalized:
+        score += 80
+    elif "gemma3" in normalized or "gemma-3" in normalized:
+        score += 60
+    elif "gemma2" in normalized or "gemma-2" in normalized:
+        score += 20
+    if "e4b" in normalized:
+        score += 50
+    if "/gemma" in normalized or normalized.startswith("hf.co/"):
+        score -= 20
+    return score
+
+
+def _select_ollama_default_model(models: list[str]) -> str:
+    if not models:
+        return OLLAMA_MODEL
+    if OLLAMA_MODEL in models:
+        return OLLAMA_MODEL
+    return max(
+        models,
+        key=lambda model: (_score_ollama_model_for_default(model, OLLAMA_MODEL), -len(model)),
+    )
+
+
+def _clean_location_query(query: str) -> str:
+    cleaned = re.sub(r"\s+", " ", query.strip())
+    previous = None
+    while cleaned and cleaned != previous:
+        previous = cleaned
+        cleaned = LOCATION_INTENT_PREFIX_RE.sub("", cleaned).strip()
+    return cleaned
+
+
+def _distance_km(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float:
+    radius_km = 6371.0088
+    lat1 = math.radians(lat_a)
+    lat2 = math.radians(lat_b)
+    delta_lat = math.radians(lat_b - lat_a)
+    delta_lon = math.radians(lon_b - lon_a)
+    sin_lat = math.sin(delta_lat / 2)
+    sin_lon = math.sin(delta_lon / 2)
+    a = sin_lat * sin_lat + math.cos(lat1) * math.cos(lat2) * sin_lon * sin_lon
+    return radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _safe_float(value: object, default: float = 0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isfinite(number):
+        return number
+    return default
+
+
 def _score_local_location(query: str, item: dict[str, object]) -> int:
-    query_tokens = _tokens_for_match(query)
+    cleaned_query = _clean_location_query(query)
+    query_tokens = _tokens_for_match(cleaned_query)
     if not query_tokens:
         return 0
     haystack = " ".join(
@@ -1868,13 +2004,58 @@ def _score_local_location(query: str, item: dict[str, object]) -> int:
     for query_token in query_tokens:
         if any(_token_matches(token, query_token) for token in haystack_tokens):
             score += 20
-    normalized_query = _normalize_for_match(query)
+    normalized_query = _normalize_for_match(cleaned_query)
     normalized_name = _normalize_for_match(str(item.get("name", "")))
+    normalized_aliases = [
+        _normalize_for_match(str(alias)) for alias in item.get("aliases", ())
+    ]
     if normalized_name.startswith(normalized_query):
         score += 60
     elif normalized_query in normalized_name:
         score += 40
+    for alias in normalized_aliases:
+        if alias == normalized_query:
+            score += 130
+        elif alias.startswith(normalized_query):
+            score += 65
+        elif normalized_query in alias:
+            score += 45
     return score
+
+
+def _score_online_location(
+    query: str,
+    suggestion: LocationSuggestion,
+    *,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    importance: float = 0,
+    category: str = "",
+    place_type: str = "",
+) -> float:
+    item = {
+        "name": suggestion.name,
+        "detail": suggestion.detail,
+        "aliases": (),
+    }
+    score = float(_score_local_location(query, item))
+    score += max(0, min(1, importance)) * 65
+
+    category_type = f"{category}/{place_type}".lower()
+    if any(token in category_type for token in ("city", "town", "village", "hamlet")):
+        score += 8
+    if any(token in category_type for token in ("national_park", "protected_area", "park")):
+        score += 24
+    if any(token in category_type for token in ("mountain", "peak", "natural", "water")):
+        score += 18
+    if "administrative" in category_type:
+        score -= 8
+
+    if center_lat is not None and center_lon is not None:
+        distance = _distance_km(center_lat, center_lon, suggestion.lat, suggestion.lon)
+        score += max(0, 35 - min(distance / 125, 35))
+
+    return round(score, 3)
 
 
 def _local_location_suggestions(query: str) -> list[LocationSuggestion]:
@@ -1894,9 +2075,10 @@ def _local_location_suggestions(query: str) -> list[LocationSuggestion]:
                 lon=float(item["lon"]),
                 height_m=float(item.get("height_m", 12000)),
                 source="local-gazetteer",
+                score=float(score + 120),
             )
         )
-    return suggestions[:5]
+    return suggestions[:8]
 
 
 @app.get("/")
@@ -1923,17 +2105,24 @@ async def runtime_config() -> RuntimeConfigResponse:
 
 @app.get("/api/models", response_model=ModelsResponse)
 async def list_ollama_models() -> ModelsResponse:
-    global ACTIVE_OLLAMA_BASE_URL
+    global ACTIVE_OLLAMA_BASE_URL, ACTIVE_OLLAMA_MODEL
     errors: list[str] = []
     for base_url in _ollama_base_url_candidates():
         try:
             models = await _fetch_ollama_models_from(base_url)
+            default_model = _select_ollama_default_model(models)
             ACTIVE_OLLAMA_BASE_URL = base_url
+            ACTIVE_OLLAMA_MODEL = default_model
             return ModelsResponse(
-                default_model=OLLAMA_MODEL,
+                default_model=default_model,
                 models=models,
                 online=True,
                 base_url=base_url,
+                detail=(
+                    f"Auto-detected installed Gemma model {default_model}."
+                    if default_model != OLLAMA_MODEL
+                    else None
+                ),
             )
         except httpx.HTTPStatusError as exc:
             body = exc.response.text[:300]
@@ -1955,46 +2144,73 @@ async def list_ollama_models() -> ModelsResponse:
 @app.get("/api/location-search", response_model=LocationSearchResponse)
 async def search_locations(
     q: str = Query(min_length=2, max_length=200),
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lon: float | None = Query(default=None, ge=-180, le=180),
+    west: float | None = Query(default=None, ge=-180, le=180),
+    south: float | None = Query(default=None, ge=-90, le=90),
+    east: float | None = Query(default=None, ge=-180, le=180),
+    north: float | None = Query(default=None, ge=-90, le=90),
 ) -> LocationSearchResponse:
-    query = q.strip()
+    query = _clean_location_query(q)
+    if len(query) < 2:
+        raise HTTPException(status_code=422, detail="Location query is too short.")
+
     suggestions = _local_location_suggestions(query)
     online = False
     detail: str | None = None
 
     try:
+        params: dict[str, object] = {
+            "q": query,
+            "format": "jsonv2",
+            "limit": 10,
+            "addressdetails": 1,
+            "extratags": 1,
+            "namedetails": 1,
+            "dedupe": 1,
+        }
+        if None not in (west, south, east, north):
+            params["viewbox"] = f"{west},{north},{east},{south}"
+
         timeout = httpx.Timeout(LOCATION_SEARCH_TIMEOUT_S, connect=2.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(
                 LOCATION_SEARCH_URL,
-                params={
-                    "q": query,
-                    "format": "jsonv2",
-                    "limit": 6,
-                    "addressdetails": 1,
-                },
+                params=params,
                 headers={
-                    "User-Agent": "TERA Source Planner local web app; optional online geocode"
+                    "Accept-Language": "en",
+                    "User-Agent": "TERA Source Planner local web app; optional online geocode",
                 },
             )
             response.raise_for_status()
         online = True
         for item in response.json():
-            lat = item.get("lat")
-            lon = item.get("lon")
-            if lat is None or lon is None:
+            item_lat = item.get("lat")
+            item_lon = item.get("lon")
+            if item_lat is None or item_lon is None:
                 continue
             display_name = str(item.get("display_name") or item.get("name") or query)
             category = str(item.get("category") or "online geocoder")
             place_type = str(item.get("type") or "place")
+            suggestion = LocationSuggestion(
+                name=display_name.split(",")[0],
+                detail=f"{category}/{place_type} - {display_name}",
+                lat=float(item_lat),
+                lon=float(item_lon),
+                height_m=12000,
+                source="online-geocoder",
+            )
+            suggestion.score = _score_online_location(
+                query,
+                suggestion,
+                center_lat=lat if lat is not None else None,
+                center_lon=lon if lon is not None else None,
+                importance=_safe_float(item.get("importance")),
+                category=category,
+                place_type=place_type,
+            )
             suggestions.append(
-                LocationSuggestion(
-                    name=display_name.split(",")[0],
-                    detail=f"{category}/{place_type} - {display_name}",
-                    lat=float(lat),
-                    lon=float(lon),
-                    height_m=12000,
-                    source="online-geocoder",
-                )
+                suggestion
             )
     except (httpx.HTTPError, ValueError) as exc:
         detail = f"Online location lookup unavailable: {exc}"
@@ -2011,6 +2227,7 @@ async def search_locations(
             continue
         seen.add(key)
         deduped.append(suggestion)
+    deduped.sort(key=lambda suggestion: suggestion.score, reverse=True)
 
     return LocationSearchResponse(
         query=query,

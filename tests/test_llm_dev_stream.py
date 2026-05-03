@@ -226,6 +226,8 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "teraLlmProvider",
         "teraClaudeApiKey",
         "applyProviderSelection",
+        "void loadModels();",
+        "Detected local model:",
         "llm_provider",
         "cloud_model",
         "cloud_api_key",
@@ -238,10 +240,30 @@ def test_model_provider_menu_supports_local_and_claude() -> None:
         "ANTHROPIC_VERSION",
         "CLAUDE_MODEL",
         "claude_default_model",
+        "_select_ollama_default_model",
+        "Auto-detected installed Gemma model",
         "_post_claude_message",
         "_extract_claude_response_text",
     ]:
         assert token in app_source
+
+
+def test_local_model_detection_prefers_installed_gemma_alias() -> None:
+    models = [
+        "hf.co/unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL",
+        "gemma4:e4b",
+        "gemma3:4b",
+    ]
+
+    assert kmh_app._select_ollama_default_model(models) == "gemma4:e4b"
+
+
+def test_location_search_prefers_curated_cascades_match() -> None:
+    suggestions = kmh_app._local_location_suggestions("go to Cascades")
+
+    assert suggestions
+    assert suggestions[0].name == "Cascade Range, WA/OR/BC"
+    assert suggestions[0].score > 0
 
 
 def test_planner_workflow_has_carousel_and_resizable_ao_handles() -> None:
@@ -259,13 +281,20 @@ def test_planner_workflow_has_carousel_and_resizable_ao_handles() -> None:
     assert "finishAreaResize" in js
 
 
-def test_planner_opens_questions_and_uses_compact_source_checklist() -> None:
+def test_planner_keeps_scope_questions_in_agent_response_only() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
     css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
     assert "ensureClarifyingQuestions" in js
     assert "state.workflowStageIndex = 1;" in js
-    assert "Use Questions to scope, then confirm sources." in js
+    assert "Use the advisor response to scope, then confirm sources." in js
+    assert "### Scope Check" in js
+    assert 'data-workflow-slide="questions"' not in html
+    assert 'id="clarifyingQuestions"' not in html
+    assert "Socratic questions" not in html
+    assert "renderClarifyingQuestions" not in js
+    assert "Use Questions to scope, then confirm sources." not in js
     assert "Next questions:" not in js
 
     assert 'article.className = "source-item compact-source-item";' in js
@@ -279,6 +308,24 @@ def test_planner_opens_questions_and_uses_compact_source_checklist() -> None:
     assert "min-height: 76px;" in css
 
 
+def test_prompt_composer_clears_after_submit_is_accepted() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    clear_index = js.index('els.promptInput.value = "";')
+    plan_index = js.index("await planSourcesFromMission(prompt, mapContext);")
+
+    assert clear_index < plan_index
+
+
+def test_data_package_empty_state_does_not_repeat_chat_instruction() -> None:
+    html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
+    css = (kmh_app.STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="workflowEmpty" class="workflow-empty" aria-hidden="true"></div>' in html
+    assert ".workflow-empty:empty" in css
+    assert "Describe the mission in chat to begin source planning." not in html
+
+
 def test_source_planner_degrades_without_false_inference_failure() -> None:
     html = kmh_app.INDEX_FILE.read_text(encoding="utf-8")
     js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
@@ -289,7 +336,7 @@ def test_source_planner_degrades_without_false_inference_failure() -> None:
     assert "Source planner unavailable" in js
     assert "Planning source package" in js
     assert "Local model offline; rules active" in js
-    assert "deterministic source advisor" in js
+    assert "deterministic fallback" in js
     assert "plan the needed package" in html
 
     for stale_label in [
@@ -304,6 +351,24 @@ def test_source_planner_degrades_without_false_inference_failure() -> None:
     ]:
         assert stale_label not in js
         assert stale_label not in html
+
+
+def test_prompt_submission_tries_selected_provider_then_local_then_deterministic() -> None:
+    js = (kmh_app.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "streamAssistantProvider" in js
+    assert "resolveLocalModelForFallback" in js
+    assert "Claude failed; trying local Ollama fallback" in js
+    assert "Claude key missing; trying local Ollama fallback" in js
+    assert "local fallback after Claude failure" in js
+    assert "Model providers unavailable; deterministic advisor response shown" in js
+    assert 'provider === "ollama" && !state.localModelAvailable' not in js
+
+    claude_attempt = js.index('provider: "claude"')
+    local_attempt = js.index('provider: "ollama"')
+    deterministic = js.index("Model providers unavailable; deterministic advisor response shown")
+
+    assert claude_attempt < local_attempt < deterministic
 
 
 def test_esri_queryable_terrain_is_available_for_download_fallbacks() -> None:
@@ -382,13 +447,21 @@ def test_map_location_search_sets_context_and_center_grid() -> None:
     assert 'id="locationSearchSuggestions"' in html
     assert 'id="centerGridValue"' in html
     assert ".map-search-panel" in css
+    assert "width: min(312px, max(240px, calc((100% - 340px) * 0.6)));" in css
     assert ".center-grid-panel" in css
 
     assert "LOCATION_GAZETTEER" in js
+    assert "cleanLocationSearchQuery" in js
+    assert "buildLocationSearchUrl" in js
+    assert "fetchLocationSearchSuggestions" in js
+    assert "renderLocationSearchLoading" in js
     assert "Joshua Tree National Park" in js
+    assert "Cascade Range" in js
     assert "parseCoordinateQuery" in js
     assert "refreshOnlineLocationSuggestions" in js
     assert "/api/location-search" in js
+    assert "score: Number.isFinite(serverScore)" in js
+    assert "location-suggestion-status" in css
     assert "flyToLocationSuggestion" in js
     assert "latLonToUtm" in js
     assert "latLonToMgrs" in js
@@ -403,6 +476,8 @@ def test_map_location_search_sets_context_and_center_grid() -> None:
     assert "location_confirmed: bool = False" in app_source
     assert '@app.get("/api/location-search"' in app_source
     assert "LOCATION_SEARCH_URL" in app_source
+    assert "LOCATION_INTENT_PREFIX_RE" in app_source
+    assert "_score_online_location" in app_source
     assert "Planner-confirmed mission map focus" in app_source
     assert "Move the map to the mission AO" in app_source
     assert "use the map location search" in prompt

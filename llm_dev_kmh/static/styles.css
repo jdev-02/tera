@@ -238,8 +238,8 @@ textarea {
 }
 
 .map-search-panel {
-  width: min(520px, calc(100% - 340px));
-  min-width: 320px;
+  width: min(312px, max(240px, calc((100% - 340px) * 0.6)));
+  min-width: 240px;
 }
 
 .location-search-form {
@@ -299,6 +299,12 @@ textarea {
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
   white-space: normal;
+}
+
+.location-suggestion-status {
+  padding: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
 }
 
 .center-grid-panel {
@@ -643,6 +649,10 @@ textarea {
   margin-top: var(--space-2);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
+}
+
+.workflow-empty:empty {
+  display: none;
 }
 
 .workflow-carousel {
