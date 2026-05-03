@@ -259,6 +259,12 @@ def _sign_response(
         )
         signed = sign_cot(route)
         payload_json = json.dumps(signed["payload"], sort_keys=True, separators=(",", ":"))
+        # Auto-bootstrap the device's signing key into the trust list on first
+        # sign. Without this, /plan -> sign -> /plan/verify would reject its
+        # own freshly-minted key (PRD line 294 trust list), so the hero demo
+        # would need a manual `make trust-bootstrap` step. Idempotent: the
+        # helper merges into the existing file.
+        _bootstrap_device_trust(signed["key_id"])
         return Signature(
             scheme=signed["algorithm"],
             key_id=signed["key_id"],
@@ -274,6 +280,31 @@ def _sign_response(
     except Exception as e:  # noqa: BLE001 -- never fail /plan because of signer
         log.exception("signer_failed", error=str(e))
         return None
+
+
+_BOOTSTRAPPED_KEY_IDS: set[str] = set()
+
+
+def _bootstrap_device_trust(key_id: str) -> None:
+    """Ensure the device's own public key is in the trust list.
+
+    Runs once per process per key_id. Idempotent on disk --
+    `export_public_key_to_trust_list` merges into whatever already exists,
+    so calling it twice is safe. Failures are swallowed: the trust list
+    being un-writable (e.g. read-only rootfs in a locked-down build) must
+    not fail /plan; the verify gate will just reject that key_id, which is
+    the correct failure mode.
+    """
+    if key_id in _BOOTSTRAPPED_KEY_IDS:
+        return
+    try:
+        from crypto.cot_signer import export_public_key_to_trust_list
+        from crypto.ml_dsa_signer import create_signer
+
+        export_public_key_to_trust_list(signer_instance=create_signer(key_id))
+        _BOOTSTRAPPED_KEY_IDS.add(key_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("trust_list_bootstrap_failed", key_id=key_id, error=str(e))
 
 
 def _destination_for_response(response: PlanResponse) -> tuple[float, float]:
@@ -380,6 +411,33 @@ def verify_plan_response(response: PlanResponse) -> PlanVerifyResponse:
             reason=f"{reason} - REJECTED",
         )
 
+    # PRD line 293-294: "Verify on ingest -- ATAK Bridge verifier checks
+    # signature against trust list before forwarding to ATAK" / "Trust list --
+    # static list of allowed key IDs for the demo". Enforce that here BEFORE
+    # any crypto math: an adversary who publishes their own key + valid sig
+    # must not pass the render gate.
+    try:
+        from crypto.cot_signer import load_trust_list
+    except ImportError as e:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason=f"Trust list unavailable - REJECTED: {e}",
+        )
+
+    trust_list = load_trust_list()
+    trusted_pub_key = trust_list.get(signature.key_id)
+    if trusted_pub_key is None:
+        return PlanVerifyResponse(
+            valid=False,
+            key_id=signature.key_id,
+            scheme=signature.scheme,
+            route_hash=route_hash,
+            reason="Untrusted key_id - REJECTED",
+        )
+
     try:
         from crypto.ml_dsa_signer import SignedPayload, create_signer
 
@@ -391,7 +449,12 @@ def verify_plan_response(response: PlanResponse) -> PlanVerifyResponse:
             timestamp=0.0,
             payload_hash=signature.payload_hash,
         )
-        ok = create_signer(signature.key_id).verify(signed)
+        # Pass the trusted public key bytes explicitly so we never silently
+        # fall back to a freshly generated local keypair that happens to share
+        # the same key_id string. Both MLDSASigner.verify and
+        # FallbackSigner.verify take the trusted public key as their second
+        # positional argument.
+        ok = create_signer(signature.key_id).verify(signed, trusted_pub_key)
     except Exception as e:  # noqa: BLE001 -- fail closed for render gate
         return PlanVerifyResponse(
             valid=False,
