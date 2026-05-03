@@ -190,8 +190,10 @@ public class TERAPlugin implements IPlugin {
                             mainHandler.post(() -> {
                                 sendMessage.setEnabled(true);
                                 connectionStatus.setText(ok
-                                        ? R.string.connection_online
-                                        : R.string.connection_error);
+                                        ? pluginContext.getString(R.string.connection_online)
+                                        : (message.startsWith("Route signature invalid")
+                                                ? "Route signature invalid - REJECTED"
+                                                : pluginContext.getString(R.string.connection_error)));
                                 appendChatLine(chatHistory, ok ? "Agent" : "Error", message);
                                 transcript.setText(chatHistory.toString());
                                 scrollChatToBottom(chatScroll);

@@ -9,8 +9,8 @@ pre-commit:
         else
           ruff=.venv/bin/ruff
         fi
-        "$ruff" format --check {staged_files} || {
-          "$ruff" format {staged_files}
+        "$ruff" format --force-exclude --check {staged_files} || {
+          "$ruff" format --force-exclude {staged_files}
           echo 'Files reformatted; please re-stage and re-commit.'
           exit 1
         }
@@ -22,7 +22,7 @@ pre-commit:
         else
           ruff=.venv/bin/ruff
         fi
-        "$ruff" check {staged_files}
+        "$ruff" check --force-exclude {staged_files}
     gitleaks:
       run: which gitleaks > /dev/null && gitleaks protect --staged --redact --no-banner || true
 
