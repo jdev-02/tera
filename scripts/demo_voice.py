@@ -141,6 +141,7 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
 _SEVERITY_DEMO_PHRASES: list[dict[str, str]] = [
     {
         "tag": "routine",
+        "scenario_short": 'Sgt. Vega · dismounted recon · "route to nearest freshwater"',
         "text": "Routed to Lobos Creek. Distance 2.1 kilometers. ETA 38 minutes.",
         "operator": (
             "P-1 Sgt. Vega — dismounted recon, hands on rifle + TAK device. "
@@ -154,6 +155,7 @@ _SEVERITY_DEMO_PHRASES: list[dict[str, str]] = [
     },
     {
         "tag": "urgent",
+        "scenario_short": "Mid-mission · waypoint blocked · re-routing through alternate",
         "text": "Be advised, route blocked at waypoint 3. Rerouting through alternate.",
         "operator": (
             "Mid-mission. Orchestrator detected a blocked waypoint (terrain "
@@ -168,6 +170,7 @@ _SEVERITY_DEMO_PHRASES: list[dict[str, str]] = [
     },
     {
         "tag": "critical",
+        "scenario_short": "SAR · mirror flash from person in distress · golden hour",
         "text": "CASEVAC inbound. Routing to open field at grid 11SMS1234 5678. Suitable HLZ.",
         "operator": (
             "P-3 Sam (SAR variant) — operator hears mirror flash from a "
@@ -281,19 +284,29 @@ def _wrap(text: str, width: int) -> list[str]:
     return out
 
 
-def _run_severity_demo(operator_mode: str | None) -> int:
-    """Self-narrating pitch demo of severity-routed voice profiles.
+def _run_severity_demo(
+    operator_mode: str | None,
+    pause_secs: float = 3.0,
+    verbose: bool = False,
+) -> int:
+    """Pitch-mode demo of severity-routed voice profiles.
 
-    For each of three phrases (routine / urgent / critical), the script
-    prints a structured pitch block with: operator persona, PRD section,
-    architecture path through the full stack, the cadence transform, and
-    the voice profile chosen. Then plays the audio. Designed for screen-
-    record-once judge demos: judges read the context, then HEAR the result.
+    DEFAULT (sparse, for live pitch): a 6-line scenario card per phrase.
+    Audio is the protagonist; Presenter A narrates over the silent pauses
+    between phrases. Matches PRD §12 pitch discipline (no feature dump,
+    hold beats in silence).
 
-    Phrase 1 (routine, no cues) -> stays at the operator\'s base mode.
-    Phrase 2 (BE ADVISED cue)   -> bumps one level toward critical.
-    Phrase 3 (CASEVAC cue)      -> bumps two levels (caps at critical).
+    --verbose: also print operator persona, PRD section cite, the full
+    architecture path through the stack, and the cadence transform per
+    phrase. Engineering-walkthrough mode; off by default for the pitch.
+
+    Three phrases:
+      1. ROUTINE  (no cues)             stays at operator's base mode
+      2. URGENT   (BE ADVISED cue)      auto-elevates one level
+      3. CRITICAL (CASEVAC cue)         auto-elevates to critical (capped)
     """
+    import time
+
     from voice.profiles import OperatorMode, detect_severity_bump, select_profile
     from voice.tts import synthesize_rationale_b64
 
@@ -304,40 +317,49 @@ def _run_severity_demo(operator_mode: str | None) -> int:
     for old_wav in out_dir.glob("*.wav"):
         old_wav.unlink()
 
-    # Banner up front so the judge sees the framing before phrase 1.
-    sep = "=" * 76
-    print(sep)
-    print("  TERA — Severity-Routed Voice Demo (PS4: Cybersecurity / PRD §6.2)")
-    print(sep)
+    sep = "═" * 64
+
+    # Sparse opening title -- one card, scannable in under a second.
     print()
-    print(f"  Operator base mode      : {base_mode}")
-    print(f"  Phrases queued          : {len(_SEVERITY_DEMO_PHRASES)}")
-    print("  Auto-elevation rule     : calm < comms < critical (one-way)")
-    print(f"  Demo audio output dir   : {out_dir}/")
-    print()
-    print("  Severity cues that auto-elevate the operator's chosen mode:")
-    print("    URGENT (+1)  : BE ADVISED, BREAK, CONTACT FRONT/REAR/LEFT/RIGHT")
-    print("    CRITICAL (+2): CASEVAC, MEDEVAC, DANGER CLOSE, MASS CASUALTY,")
-    print("                   TROOPS IN CONTACT")
+    print(sep)
+    print("  TERA  ·  severity-routed voice  ·  PRD §6.2")
+    print(sep)
+    print(f"  operator base: {base_mode.upper():<8s}     pause between phrases: {pause_secs:.0f}s")
     print()
 
     for i, phrase in enumerate(_SEVERITY_DEMO_PHRASES, start=1):
         bump = detect_severity_bump(phrase["text"])
         profile = select_profile(phrase["text"], operator_mode=base_mode)
-        cadence = to_operator_cadence(phrase["text"])
 
-        _print_pitch_block(
-            idx=i,
-            total=len(_SEVERITY_DEMO_PHRASES),
-            phrase=phrase,
-            cadence=cadence,
-            profile_name=profile.name,
-            voice=profile.voice,
-            fx=profile.fx,
-            length_scale=profile.length_scale,
-            bump=bump,
-            base_mode=base_mode,
-        )
+        if verbose:
+            cadence = to_operator_cadence(phrase["text"])
+            _print_pitch_block(
+                idx=i,
+                total=len(_SEVERITY_DEMO_PHRASES),
+                phrase=phrase,
+                cadence=cadence,
+                profile_name=profile.name,
+                voice=profile.voice,
+                fx=profile.fx,
+                length_scale=profile.length_scale,
+                bump=bump,
+                base_mode=base_mode,
+            )
+        else:
+            # Sparse pitch-mode card: tag + scenario one-liner + voice line.
+            tag = phrase["tag"].upper()
+            elevation = ""
+            if bump == 1:
+                elevation = '   ↑ auto-elevated by "BE ADVISED"'
+            elif bump == 2:
+                elevation = '   ↑↑ auto-elevated by "CASEVAC"'
+            scenario = phrase.get("scenario_short", phrase["tag"])
+            print(sep)
+            print(f"  {i} / {len(_SEVERITY_DEMO_PHRASES)}  ·  {tag}{elevation}")
+            print(sep)
+            print(f"  {scenario}")
+            print(f"  voice: {profile.name.upper()}  ({profile.voice} · {profile.fx} FX)")
+            print()
 
         audio = synthesize_rationale_b64(phrase["text"], operator_mode=base_mode)
         if audio is None:
@@ -347,18 +369,27 @@ def _run_severity_demo(operator_mode: str | None) -> int:
         out_path.write_bytes(base64.b64decode(audio))
         _play(out_path)
 
+        # Silent breath between phrases. Narrator talks here; the screen
+        # stays still so the audience focuses on the voice, not the text.
+        if i < len(_SEVERITY_DEMO_PHRASES):
+            time.sleep(pause_secs)
+
     print()
     print(sep)
-    print("  END OF DEMO  — three phrases, three voice profiles, one stack.")
-    print(sep)
-    print(f"  All WAVs saved at {out_dir}/")
-    print("  Voice path on main:")
-    print("    voice/profiles.py     severity-routed VoiceProfile registry (#54)")
-    print("    voice/rationale.py    operator cadence transform (#26)")
-    print("    voice/piper_client.py Piper TTS wrapper (#26)")
-    print("    voice/audio_fx.py     pure-numpy band-pass + compressor (#54)")
-    print("    voice/glossary.py     deterministic acronym explain (#54)")
+    if verbose:
+        print("  END OF DEMO  — three phrases, three voice profiles, one stack.")
+        print(sep)
+        print(f"  All WAVs saved at {out_dir}/")
+        print("  Voice path on main:")
+        print("    voice/profiles.py     severity-routed VoiceProfile registry (#54)")
+        print("    voice/rationale.py    operator cadence transform (#26)")
+        print("    voice/piper_client.py Piper TTS wrapper (#26)")
+        print("    voice/audio_fx.py     pure-numpy band-pass + compressor (#54)")
+        print("    voice/glossary.py     deterministic acronym explain (#54)")
+    else:
+        print(f"  end · WAVs in {out_dir}/")
     print()
+
     return 0
 
 
@@ -611,9 +642,22 @@ def main() -> int:
     p.add_argument(
         "--severity-demo",
         action="store_true",
-        help="render 3 phrases (calm, urgent cue, critical cue) and play them "
-        "back-to-back so you can hear the auto-elevation. Combine with "
-        "--profile to set the base mode.",
+        help="pitch-mode demo: 3 phrases (routine, urgent cue, critical cue) "
+        "with sparse on-screen cards so a presenter can narrate over the "
+        "audio. Combine with --profile to set the operator base mode.",
+    )
+    p.add_argument(
+        "--pause-secs",
+        type=float,
+        default=3.0,
+        help="silent pause between severity-demo phrases (default 3.0). "
+        "Tune to your speaking pace.",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="severity-demo: include the full architecture path + PRD cite "
+        "+ cadence transform per phrase. Engineering-walkthrough mode.",
     )
     args = p.parse_args()
 
@@ -651,7 +695,11 @@ def main() -> int:
         return _run_bakeoff()
 
     if args.severity_demo:
-        return _run_severity_demo(args.profile)
+        return _run_severity_demo(
+            args.profile,
+            pause_secs=args.pause_secs,
+            verbose=args.verbose,
+        )
 
     # Set TERA_VOICE_PROFILE so the synth path (tts.py) auto-routes by
     # profile. --voice and --fx are still honored as overrides for the
