@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import shutil
 import subprocess
 import sys
@@ -129,6 +130,60 @@ def _show_phrase(phrase: tuple[str, str, str, str]) -> None:
     print(f"  text:    {text}")
     print(f"  cadence: {to_operator_cadence(text)}")
     print(f"  listen:  {listen_for}")
+
+
+def _run_severity_demo(operator_mode: str | None) -> int:
+    """Render three phrases that exercise the auto-elevation rule.
+
+    Phrase A: routine briefing -- no cues, stays at the operator's base mode.
+    Phrase B: contains 'BE ADVISED' -- bumps one level (calm->comms or
+              comms->critical).
+    Phrase C: contains 'CASEVAC' -- bumps two levels to critical.
+
+    Plays them back-to-back so the listener hears the voice change.
+    """
+    from voice.profiles import OperatorMode, detect_severity_bump, select_profile
+    from voice.tts import synthesize_rationale_b64
+
+    base_mode: OperatorMode = operator_mode or "comms"  # type: ignore[assignment]
+
+    phrases: list[tuple[str, str]] = [
+        ("routine", "Routed to Lobos Creek. Distance 2.1 kilometers. ETA 38 minutes."),
+        (
+            "urgent",
+            "Be advised, route blocked at waypoint 3. Rerouting through alternate.",
+        ),
+        (
+            "critical",
+            "CASEVAC inbound. Routing to open field at grid 11SMS1234 5678. Suitable HLZ.",
+        ),
+    ]
+    out_dir = Path(tempfile.gettempdir()) / "tera_severity_demo"
+    out_dir.mkdir(exist_ok=True)
+    for old in out_dir.glob("*.wav"):
+        old.unlink()
+
+    print(f"base operator mode: {base_mode}")
+    print(f"phrases: {len(phrases)} -- routine, urgent (BE ADVISED), critical (CASEVAC)\n")
+
+    for tag, text in phrases:
+        bump = detect_severity_bump(text)
+        profile = select_profile(text, operator_mode=base_mode)
+        print(
+            f"  [{tag}] cue_bump={bump}  profile={profile.name}  "
+            f"voice={profile.voice}  fx={profile.fx}"
+        )
+        audio = synthesize_rationale_b64(text, operator_mode=base_mode)
+        if audio is None:
+            print(f"    ! synth returned None for {tag}")
+            continue
+        out_path = out_dir / f"{tag}_{profile.name}.wav"
+        out_path.write_bytes(base64.b64decode(audio))
+        print(f"    -> {out_path}")
+        _play(out_path)
+
+    print(f"\nAll renders in {out_dir}/")
+    return 0
 
 
 def _run_bakeoff() -> int:
@@ -371,6 +426,19 @@ def main() -> int:
         help="render the canonical PRD scenario A across every downloaded "
         "voice and FX intensity for A/B listening (no interactive prompts)",
     )
+    p.add_argument(
+        "--profile",
+        choices=["calm", "comms", "critical"],
+        help="operator voice profile (overrides TERA_VOICE_PROFILE env var). "
+        "comms = demo default; critical = degraded comms for CASEVAC etc.",
+    )
+    p.add_argument(
+        "--severity-demo",
+        action="store_true",
+        help="render 3 phrases (calm, urgent cue, critical cue) and play them "
+        "back-to-back so you can hear the auto-elevation. Combine with "
+        "--profile to set the base mode.",
+    )
     args = p.parse_args()
 
     if args.list:
@@ -406,11 +474,14 @@ def main() -> int:
     if args.bakeoff:
         return _run_bakeoff()
 
-    # Set the global length_scale + voice for this session.
-    reset_piper()
-    from voice import piper_client
+    if args.severity_demo:
+        return _run_severity_demo(args.profile)
 
-    voice_kwargs: dict[str, object] = {"length_scale": args.rate}
+    # Set TERA_VOICE_PROFILE so the synth path (tts.py) auto-routes by
+    # profile. --voice and --fx are still honored as overrides for the
+    # corpus walk in case the user wants to bypass profile selection.
+    if args.profile:
+        os.environ["TERA_VOICE_PROFILE"] = args.profile
     if args.voice:
         models_dir = Path(__file__).resolve().parent.parent / "models" / "piper"
         model_path = models_dir / f"{args.voice}.onnx"
@@ -418,8 +489,15 @@ def main() -> int:
             print(f"voice model not found: {model_path}")
             print("Download it from https://huggingface.co/rhasspy/piper-voices first.")
             return 1
-        voice_kwargs["model_path"] = model_path
-    piper_client._client = piper_client.PiperClient(**voice_kwargs)  # type: ignore[arg-type]
+        # Direct voice override -- bypass profile selection by pinning the
+        # singleton client to this voice.
+        reset_piper()
+        from voice import piper_client
+
+        piper_client._client = piper_client.PiperClient(
+            model_path=model_path,
+            length_scale=args.rate,
+        )
 
     if args.text:
         phrases = [("custom", "custom", args.text, "your phrase")]
