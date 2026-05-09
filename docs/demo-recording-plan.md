@@ -32,12 +32,22 @@ All five live at `docs/demo-clips/` (gitignored). Anyone with the repo checked o
 | S3 | Sat 23:00 | Sign Benchmark — 1000 ML-DSA-65 round-trips, 0.128 ms avg (39× under PRD §11.2 target) | 354 KB | `docs/demo-clips/2300-crypto-sign-bench.mp4` | `crypto/sign_bench.py` ・ `make sign-bench` |
 | S4 | Sat 23:02 | Security Scan — Bandit + pip-audit clean across all lanes | 1.7 MB | `docs/demo-clips/2302-security-bandit-pip-audit.mp4` | `make security` |
 | S5 | Sat 23:04 | Structured Query Validator — live blocking of 3 attack types (injection / privesc / exfil) | 751 KB | `docs/demo-clips/2304-security-structured-query-validator.mp4` | `security/structured_query_validator.py` |
+| S7 | **TBD recording, owner P2** | **Security pipeline 4-cut reel — happy + injection + tamper + untrusted key.** ~60s target. Four PowerShell / curl commands in sequence: (1) happy `/plan` (Step 1, `docs/presentation/security-briefing-satriyo.md:31-35`); (2) prompt-injection blocked at `prompt_guard` / CWE-77 (Step 2, `:41-45`); (3) byte-tampered signature → `Signature invalid - route REJECTED` via `/plan/verify`; (4) untrusted-key reject → `Untrusted key_id - REJECTED` via `/plan/verify`. macOS/Linux equivalent at `docs/presentation/security-briefing-satriyo.md:58-62`. YouTube URL TBD (post-1300 cutover). | TBD | `docs/demo-clips/<HHMM>-security-pipeline-4cut.mov` | Briefing `docs/presentation/security-briefing-satriyo.md:51-79` ・ verify harness `docs/demo-readiness-2026-05-03.md:233-279` |
 
 ### ATAK lane (P4 — Ben)
 
 | # | Recorded | Title | Size | Path in repo | Script / scenario |
 |---|----------|-------|------|--------------|-------------------|
 | B1 | Sat 22:30 | ATAK plugin MVP — no-model hookup demo | 84 MB | `docs/demo-clips/2230-atak-plugin-mvp-demo.mov` | Manual ATAK plugin walkthrough |
+| B2 | **Inbound from Ben — confirm filename when received** (not present in `docs/demo-clips/` as of 10:50 PDT) | ATAK ↔ Jetson connection walkthrough — operator pairs the EUD plugin to the Jetson, confirms `/plan` round-trip works against the device. Pitch role: Q&A backup if a judge asks "how does the EUD actually find the Jetson?" | TBD | `docs/demo-clips/<HHMM>-atak-connect-jetson.mov` (Ben's working name: `connect_to_jetson.mov`) | Manual ATAK plugin walkthrough on Samsung EUD against Jetson IP `10.1.63.96` |
+
+### Live Demo lane (P1 — Jon)
+
+This lane backs the centerpiece beat in `docs/presentation/deck-outline.md` slide 3 (1:00–2:00 — "Live: SAR Divert at MWTC"). The clip is **insurance for the live demo**, not the demo itself, per the "Pitch-day fallback rules" below.
+
+| # | Recorded | Title | Size | Path in repo | Script that produced it |
+|---|----------|-------|------|--------------|--------------------------|
+| LD1 | **TBD recording**, target capture window **1100–1200 PDT** | **Live demo — SAR Divert at MWTC** (~45–60s). Operator at MGRS **11S KC 72300 54100** receives a mirror-flash signal report at **11S KC 75200 53800** (Kyle's 10:01 PDT scenario brief). On camera: operator says the prompt aloud → plugin POSTs `/plan` → side terminal shows signed `PlanResponse` (route + waypoints + rationale + ML-DSA-65 signature) → plugin POSTs `/plan/verify` → ATAK draws the **blue polyline** (ARGB(220, 0, 100, 255), strokeWeight 4.0) on the EUD over NAIP imagery. Hold the blue-line moment for 2s in silence (PRD §12). YouTube URL: TBD (post-1300 cutover per existing convention). | TBD | `docs/demo-clips/<HHMM>-livedemo-sar-divert.mov` | EUD plugin against Jetson `agent.app:/plan` (`agent/orchestrator.py`); rendering path `atak/plugin/.../TERAPlugin.java:487-545`; AOI bbox SW 38.160,-119.720 / NE 38.460,-119.360 |
 
 ### Voice / agent lane (P1 — Jon)
 
@@ -48,9 +58,18 @@ All five live at `docs/demo-clips/` (gitignored). Anyone with the repo checked o
 
 ### Hardware / Jetson lane (P3 — Kyle)
 
-| # | Title | Status |
-|---|-------|--------|
-| K1 | Jetson + Gemma 3 4B + Cesium UI walkthrough | Not yet recorded. Plan: capture Sun 0700-0900 alongside the integration smoke-test (issue #82). |
+| # | Recorded | Title | Status / Path | Script / scenario |
+|---|----------|-------|----------------|-------------------|
+| K1 | TBD | Jetson + Gemma 3 4B + Cesium UI walkthrough | Not yet recorded. Plan: capture Sun 0700-0900 alongside the integration smoke-test (issue #82). | n/a |
+| K2 | **Inbound from Ben — confirm filename when received** (not present in `docs/demo-clips/` as of 10:50 PDT) | TERA Jetson startup / boot sequence — power-on, services come up, `/plan` answers, ready-state visible. Pitch role: cold open candidate if Slide 1 wants a hardware shot, or Q&A backup for "what does this look like on the device?" | TBD; `docs/demo-clips/<HHMM>-jetson-tera-startup.mov` (Ben's working name: `tera_startup.mov`) | Manual capture against Jetson Orin Nano on battery, WiFi off |
+
+### Pending / unindexed (drops awaiting Jon's labels)
+
+These exist in `docs/demo-clips/` but haven't been mapped to a lane / pitch beat yet. Rename per `HHMM-<lane>-<short-desc>.<ext>` once labelled.
+
+| # | Title | Path in repo | Note |
+|---|-------|--------------|------|
+| pending | `<TBD — Jon to label>` | `docs/demo-clips/signal-2026-05-03-101544.mp4` (13 MB, dropped today at 10:16) | Awaiting Jon's confirmation; rename per `HHMM-<lane>-<desc>.mp4` convention. |
 
 ## Pitch-day fallback rules
 
@@ -60,9 +79,10 @@ The 5-minute pitch (PRD §12) is the live show. **Recordings are insurance, not 
 |----------------------|--------------|---------------------|-------------------|
 | 0:00–0:30 hook | None — read §2 verbatim | n/a | Hook is text; no fallback needed. |
 | 0:30–1:30 problem + persona | None | n/a | Same. |
+| 1:00–2:00 SAR-divert live demo (deck slide 3) | Live `/plan` from ATAK plugin → blue line on EUD | **LD1** (target capture 1100–1200), then **B1** | If plugin chat doesn't show a response within 30s OR `/plan/verify` returns invalid → switch to LD1 (preferred — same scenario), then B1 (older capture) as second fallback. |
 | 1:30–2:15 SF live demo | Live `/plan` from ATAK plugin (#79 + #80) → blue line | **B1** if plugin chat doesn't show a response within 30s | Presenter B watches the chat scroll. No agent response by 0:30 elapsed → switch to B1, narrator says "the plugin is mid-build, here's the same demo from earlier tonight." |
 | 2:15–3:00 austere AO flip | Same plugin, different AOI | **B1** | Same rule. |
-| 3:00–3:30 PS4 wow moment | `make inject-demo` live | **S1** | If terminal hangs > 5s, presenter B Cmd-Tabs to S1 (already loaded in a media player). One-second cut, no apology. |
+| 3:00–3:30 PS4 wow moment | `make inject-demo` live | **S1** then **S7** if S7 captured by 1300 | If terminal hangs > 5s, presenter B Cmd-Tabs to S1 (already loaded in a media player). One-second cut, no apology. |
 | 3:30–4:00 wow + offline proof | `tcpdump` window + airplane-mode toggle visible | **S3** + **S4** for evidence sound bites | If the `tcpdump` capture stalls, S3 + S4 cover the "we measured this and it's clean" beat. |
 | 4:00–4:30 novelty + competitive table | Single slide | **S2** for live evidence of the "5 attack vectors blocked" claim if asked | Q&A driven; not a switch, just have it loaded. |
 | 4:30–4:50 business model | Single slide | n/a | |
@@ -78,8 +98,8 @@ The 5-minute pitch (PRD §12) is the live show. **Recordings are insurance, not 
 The hackathon submission **does** require a **1-minute YouTube unlisted video** — separate from team-internal sharing, this one is a hard rule. It's a *cut* of existing footage, not a new recording:
 
 1. Pick the 60 seconds of source material with the highest information density. Current best candidates:
-   - 0:00–0:15 — operator's voice prompt + ATAK draws blue line (B1 once it has `/plan` integration)
-   - 0:15–0:30 — `make inject-demo` rejecting unsigned, accepting signed (S1)
+   - 0:00–0:15 — operator's voice prompt + ATAK draws blue line (B1 once it has `/plan` integration; LD1 once recorded)
+   - 0:15–0:30 — `make inject-demo` rejecting unsigned, accepting signed (S1) or 4-cut reel (S7)
    - 0:30–0:45 — `tcpdump` window + airplane-mode toggle (live capture or S4)
    - 0:45–1:00 — closing line + URL to public repo
 2. Cut in iMovie / DaVinci / `ffmpeg`. No effects.
@@ -97,5 +117,7 @@ The recordings stay in `docs/demo-clips/` on each contributor's local checkout. 
 - PRD §12 (live pitch flow) — primary source for which beats need fallbacks.
 - PRD §11.2 (success metrics) — S3 + S4 are the on-stage evidence for these.
 - `docs/cyber_demo_script.md` (Satriyo's pitch script) — text version of S1, S2, S5.
+- `docs/presentation/deck-outline.md` — Slide 3 (SAR-divert) is the LD1 beat.
+- `docs/presentation/security-briefing-satriyo.md` — source of S7's 4 commands.
 - `.gitignore` line 91+ — the rule that keeps binaries out of the repo.
 - Issue #28 — 1-minute submission video tracking.
