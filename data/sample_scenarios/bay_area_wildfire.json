@@ -1,0 +1,179 @@
+{
+  "name": "Bay Area Wildfire Logistics",
+  "incident_type": "wildfire",
+  "area": "CA",
+  "current": {
+    "lat": 37.7749,
+    "lon": -122.4194
+  },
+  "mission": "Route water, N95 masks, medical kits, and blankets to Shelter West while avoiding wildfire perimeter, smoke-heavy corridors, and traffic closures.",
+  "hazards": [
+    {
+      "id": "sample-red-flag-ca",
+      "source": "offline-sample",
+      "event": "Red Flag Warning",
+      "severity": "Severe",
+      "area_desc": "Bay Area ridge lines and wildland urban interface",
+      "instruction": "Avoid exposed ridgelines and smoke-heavy corridors."
+    },
+    {
+      "id": "sample-fire-perimeter-east",
+      "source": "offline-sample",
+      "name": "East Ridge Fire Perimeter",
+      "incident_type": "wildfire",
+      "properties": {
+        "confidence": "demo"
+      }
+    }
+  ],
+  "shelters": [
+    {
+      "id": "shelter-north",
+      "name": "Shelter North",
+      "coord": {
+        "lat": 37.8044,
+        "lon": -122.2712
+      },
+      "capacity": 220,
+      "occupancy": 215,
+      "smoke_risk": "high",
+      "needs": [
+        {
+          "resource": "N95 masks",
+          "quantity": 500,
+          "unit": "masks",
+          "urgency": 5
+        },
+        {
+          "resource": "water",
+          "quantity": 900,
+          "unit": "liters",
+          "urgency": 4
+        }
+      ],
+      "notes": "Near smoke plume and nearly full."
+    },
+    {
+      "id": "shelter-west",
+      "name": "Shelter West",
+      "coord": {
+        "lat": 37.6879,
+        "lon": -122.4702
+      },
+      "capacity": 420,
+      "occupancy": 240,
+      "smoke_risk": "low",
+      "needs": [
+        {
+          "resource": "water",
+          "quantity": 1200,
+          "unit": "liters",
+          "urgency": 5
+        },
+        {
+          "resource": "medical kits",
+          "quantity": 35,
+          "unit": "kits",
+          "urgency": 4
+        },
+        {
+          "resource": "blankets",
+          "quantity": 150,
+          "unit": "blankets",
+          "urgency": 2
+        }
+      ],
+      "notes": "Cleaner air and available capacity."
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "truck-1",
+      "name": "Truck 1",
+      "capacity": {
+        "water": 1500,
+        "N95 masks": 2000
+      },
+      "current": {
+        "lat": 37.7749,
+        "lon": -122.4194
+      },
+      "status": "available"
+    },
+    {
+      "id": "truck-2",
+      "name": "Truck 2",
+      "capacity": {
+        "medical kits": 80,
+        "blankets": 300
+      },
+      "current": {
+        "lat": 37.7749,
+        "lon": -122.4194
+      },
+      "status": "available"
+    },
+    {
+      "id": "truck-3",
+      "name": "Truck 3",
+      "capacity": {
+        "water": 700
+      },
+      "current": {
+        "lat": 37.7749,
+        "lon": -122.4194
+      },
+      "status": "standby"
+    }
+  ],
+  "resources": [
+    {
+      "name": "water",
+      "quantity": 2500,
+      "unit": "liters",
+      "priority": 5
+    },
+    {
+      "name": "N95 masks",
+      "quantity": 3000,
+      "unit": "masks",
+      "priority": 5
+    },
+    {
+      "name": "medical kits",
+      "quantity": 60,
+      "unit": "kits",
+      "priority": 4
+    },
+    {
+      "name": "blankets",
+      "quantity": 250,
+      "unit": "blankets",
+      "priority": 2
+    }
+  ],
+  "constraints": [
+    "avoid active fire perimeter",
+    "avoid smoke-heavy corridor",
+    "avoid traffic closure",
+    "prefer shelters with available capacity"
+  ],
+  "external_messages": [
+    {
+      "type": "external_message",
+      "source": "unknown_sms",
+      "message": "Urgent FEMA wildfire aid claim. Login now: https://fema-aid-claim-example.com/login"
+    }
+  ],
+  "supply_requests": [
+    {
+      "type": "supply_request",
+      "source": "unknown",
+      "destination": "Unverified Shelter X",
+      "requested_items": {
+        "medical_kits": 500
+      },
+      "urgency": "critical"
+    }
+  ]
+}

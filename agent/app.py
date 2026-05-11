@@ -21,6 +21,13 @@ from typing import Any, Literal
 import structlog
 from fastapi import FastAPI, HTTPException
 
+from agent.mission_orchestrator import (
+    demo_bay_area_wildfire,
+    mission_api_status,
+    mission_health,
+    plan_mission,
+)
+from agent.mission_schemas import MissionPlanRequest, MissionPlanResponse
 from agent.orchestrator import PlanBlockedError, approve_plan, verify_plan_response
 from agent.orchestrator import plan as orchestrate_plan
 from agent.schemas import (
@@ -30,6 +37,18 @@ from agent.schemas import (
     PlanRequest,
     PlanResponse,
     PlanVerifyResponse,
+)
+from agent.tools.trust import (
+    assess_message_trust,
+    assess_supply_request_trust,
+    assess_url,
+    trust_api_status,
+)
+from agent.trust_schemas import (
+    MessageTrustRequest,
+    SupplyRequestTrustRequest,
+    TrustAssessment,
+    UrlCheckRequest,
 )
 
 log = structlog.get_logger(__name__)
@@ -65,7 +84,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="TERA Agent",
     version="0.1.0",
-    description="Tactical Edge Route Agent. PRD: docs/PRD.md. By Team TruePoint.",
+    description=(
+        "TERA emergency logistics coordinator with legacy tactical route mode. "
+        "PRD: docs/PRD.md. By Team TruePoint."
+    ),
     lifespan=_lifespan,
 )
 
@@ -78,6 +100,11 @@ def health() -> dict[str, Any]:
         "profile": PROFILE,
         "version": "0.1.0",
     }
+
+
+@app.get("/mission/health")
+def mission_health_endpoint() -> dict[str, Any]:
+    return mission_health()
 
 
 @app.post("/plan", response_model=PlanResponse, responses={403: {"model": PlanBlocked}})
@@ -132,6 +159,47 @@ async def plan_endpoint(
         # LLM provider failed, security module failed to import, etc.
         log.exception("plan_failed", error=str(e))
         raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.post("/mission/plan", response_model=MissionPlanResponse)
+async def mission_plan_endpoint(req: MissionPlanRequest) -> MissionPlanResponse:
+    try:
+        return plan_mission(req)
+    except RuntimeError as e:
+        log.exception("mission_plan_failed", error=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.get("/mission/api-status")
+def mission_api_status_endpoint() -> dict[str, bool]:
+    return mission_api_status()
+
+
+@app.get("/mission/demo/bay-area-wildfire", response_model=MissionPlanResponse)
+def mission_demo_bay_area_wildfire_endpoint() -> MissionPlanResponse:
+    return demo_bay_area_wildfire()
+
+
+@app.post("/trust/check-url", response_model=TrustAssessment)
+async def trust_check_url_endpoint(req: UrlCheckRequest) -> TrustAssessment:
+    return assess_url(req.url, req.context)
+
+
+@app.post("/trust/check-message", response_model=TrustAssessment)
+async def trust_check_message_endpoint(req: MessageTrustRequest) -> TrustAssessment:
+    return assess_message_trust(req.message, req.source)
+
+
+@app.post("/trust/check-supply-request", response_model=TrustAssessment)
+async def trust_check_supply_request_endpoint(
+    req: SupplyRequestTrustRequest,
+) -> TrustAssessment:
+    return assess_supply_request_trust(req.request)
+
+
+@app.get("/trust/api-status")
+def trust_api_status_endpoint() -> dict[str, bool]:
+    return trust_api_status()
 
 
 @app.post("/plan/approve", response_model=PlanApprovalResponse)
