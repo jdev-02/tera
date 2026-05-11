@@ -1,0 +1,66 @@
+{
+  "name": "Flood Response Logistics",
+  "incident_type": "flood",
+  "area": "CA",
+  "current": {
+    "lat": 38.5816,
+    "lon": -121.4944
+  },
+  "mission": "Move water, blankets, and medical kits to a dry shelter while avoiding low bridges and flooded roads.",
+  "shelters": [
+    {
+      "id": "shelter-dry",
+      "name": "Dry Creek High School Shelter",
+      "coord": {
+        "lat": 38.625,
+        "lon": -121.41
+      },
+      "capacity": 300,
+      "occupancy": 170,
+      "smoke_risk": "unknown",
+      "needs": [
+        {
+          "resource": "blankets",
+          "quantity": 120,
+          "unit": "blankets",
+          "urgency": 4
+        },
+        {
+          "resource": "medical kits",
+          "quantity": 20,
+          "unit": "kits",
+          "urgency": 3
+        }
+      ]
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "truck-flood-1",
+      "name": "High-clearance Truck",
+      "capacity": {
+        "blankets": 300,
+        "medical kits": 50
+      },
+      "status": "available"
+    }
+  ],
+  "resources": [
+    {
+      "name": "blankets",
+      "quantity": 200,
+      "unit": "blankets",
+      "priority": 4
+    },
+    {
+      "name": "medical kits",
+      "quantity": 25,
+      "unit": "kits",
+      "priority": 4
+    }
+  ],
+  "constraints": [
+    "avoid flooded roads",
+    "avoid weak bridges for heavy truck"
+  ]
+}

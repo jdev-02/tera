@@ -54,13 +54,13 @@ voice = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "routing*", "atak*", "voice*", "crypto*", "security*", "eval*", "ontology*"]
+include = ["agent*", "routing*", "atak*", "voice*", "crypto*", "security*", "eval*", "ontology*", "integrations*"]
 exclude = ["tests*", "scripts*", "docs*", "figma*", "hardware*", "deploy*", "models*", "mesh*", "data*", "infra*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology", "tests"]
+src = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology", "integrations", "tests"]
 # Kyle's local LLM dev sandbox + tests of the same. Has its own deps + its own
 # style; not subject to repo-wide ruff config. Track in GH issue if/when we
 # merge it into the main app.
@@ -95,7 +95,7 @@ ignore = [
 "scripts/*" = ["T201"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology"]
+known-first-party = ["agent", "routing", "atak", "voice", "crypto", "security", "eval", "ontology", "integrations"]
 
 [tool.mypy]
 python_version = "3.11"
