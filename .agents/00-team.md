@@ -28,6 +28,7 @@
 
 ```python
 import structlog
+
 log = structlog.get_logger(__name__)
 
 log.info("plan_request_received", request_id=req_id, prompt_len=len(prompt))
