@@ -1,0 +1,67 @@
+{
+  "name": "Earthquake Response Logistics",
+  "incident_type": "earthquake",
+  "area": "CA",
+  "current": {
+    "lat": 34.0522,
+    "lon": -118.2437
+  },
+  "mission": "Prioritize hospitals and shelters after a significant earthquake, then route medical kits and water around bridge-risk corridors.",
+  "shelters": [
+    {
+      "id": "shelter-quake-a",
+      "name": "Civic Center Emergency Shelter",
+      "coord": {
+        "lat": 34.05,
+        "lon": -118.25
+      },
+      "capacity": 500,
+      "occupancy": 430,
+      "smoke_risk": "unknown",
+      "needs": [
+        {
+          "resource": "medical kits",
+          "quantity": 75,
+          "unit": "kits",
+          "urgency": 5
+        },
+        {
+          "resource": "water",
+          "quantity": 1800,
+          "unit": "liters",
+          "urgency": 5
+        }
+      ]
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "truck-quake-1",
+      "name": "Medical Supply Truck",
+      "capacity": {
+        "medical kits": 100,
+        "water": 1000
+      },
+      "status": "available"
+    }
+  ],
+  "resources": [
+    {
+      "name": "medical kits",
+      "quantity": 100,
+      "unit": "kits",
+      "priority": 5
+    },
+    {
+      "name": "water",
+      "quantity": 1200,
+      "unit": "liters",
+      "priority": 5
+    }
+  ],
+  "constraints": [
+    "prioritize hospital access",
+    "avoid bridge damage risk",
+    "explain route confidence"
+  ]
+}
