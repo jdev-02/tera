@@ -67,7 +67,7 @@ case "$NAME" in
         FULL="Jon"; ROLE="P1"
         LANE="agent / ontology / voice / eval"
         DIRS="agent ontology voice eval"
-        BACKGROUND="Navy Cyber Warfare Officer; CS + AI (ontology); UI/UX"
+        BACKGROUND="CS + AI (ontology); UI/UX"
         LABELS="lane:agent,lane:ontology,lane:voice,lane:eval"
         PAIR="Ben (on agent <-> routing contract)"
         ;;

@@ -1,4 +1,4 @@
-# 21 — Agent / Ontology / Voice / Eval / Figma Lane (P1 — Jon, Navy CWO, AI/ontology + UI/UX)
+# 21 — Agent / Ontology / Voice / Eval / Figma Lane (P1 — Jon, AI/ontology + UI/UX)
 
 > Owns: `/agent/`, `/ontology/`, `/voice/`, `/eval/`, `/figma/`. Pairs with Ben (P4) on the agent ↔ routing contract.
 

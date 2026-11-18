@@ -2,7 +2,7 @@
 # See PRD §13 for the lane split.
 
 # Handles locked pre-kickoff (2026-05-02). Source of truth: team.yml
-#   @jdev-02                    = Jon     (P1 - Navy CWO, AI/ontology, UI/UX)
+#   @jdev-02                    = Jon     (P1 - AI/ontology, UI/UX)
 #   @aleens-labs                = Satriyo (P2 - Indonesian Navy, cybersecurity)
 #   @khicks1724 + @kylemhicks   = Kyle    (P3 - USMC SIGINT; commits from BOTH his laptop/Codex
 #                                 and the Jetson, so both handles are listed for his lanes)

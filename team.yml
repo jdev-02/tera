@@ -22,7 +22,7 @@ team:
     role: P1
     lane: agent / ontology / voice (in+out) / eval / figma
     background: >
-      Navy Cyber Warfare Officer; CS + AI focus, specifically ontology.
+      CS + AI focus, specifically ontology.
       Owns UI/UX end-to-end (Figma reassigned to him at kickoff review 2026-05-02).
       Wrote the parsing-verification paper (see /docs/papers/).
     directories: [agent, ontology, voice, eval, figma]

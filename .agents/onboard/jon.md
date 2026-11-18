@@ -133,7 +133,7 @@ After code lands, run `make ci` (you must run this; do not assume it passes). If
 
 ## HUMAN NOTES (Jon — secondary; the section above is the agent's contract)
 
-You're Jon (P1 — Navy CWO, AI/ontology, UI/UX). Your background paper on intrinsic parsing-verification went to Satriyo before kickoff (§13.0).
+You're Jon (P1 — AI/ontology, UI/UX). Your background paper on intrinsic parsing-verification went to Satriyo before kickoff (§13.0).
 
 You own: agent orchestrator, ontology, voice in/out (Whisper + Piper), eval, Figma mockups (Ben writes scenario scripts; you mock them up).
 

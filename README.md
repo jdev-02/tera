@@ -83,7 +83,7 @@ docs/         # shared — PRD, contracts, ADRs
 
 | Member | Lane | Background | Pitch role |
 |---|---|---|---|
-| **P1 — Jon** (`@jdev-02`) | agent · ontology · voice (in+out) · eval · figma | Navy CWO, CS + AI (ontology), UI/UX | Floor support (AI questions) |
+| **P1 — Jon** (`@jdev-02`) | agent · ontology · voice (in+out) · eval · figma | CS + AI (ontology), UI/UX | Floor support (AI questions) |
 | **P2 — Satriyo** (`@aleens-labs`) | security · crypto · infra · CI | Indonesian Navy, cybersecurity | Floor support (security/PQC) |
 | **P3 — Kyle** (`@khicks1724` / `@kylemhicks`) | hardware · deploy · models · mesh | USMC SIGINT, robotics. Brought the Jetson. Provided Cesium Ion token. | Presenter B (drives the demo) |
 | **P4 — Ben** (`@benschwierking`) | atak · routing · data | USMC Combat Engineer, Mountain Warfare School | Presenter A (lead narrator) |
